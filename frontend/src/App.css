@@ -1,0 +1,157 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #020611;
+}
+
+:root {
+  color-scheme: light;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: #eff4fb;
+}
+
+.app-shell {
+  margin: 0 auto;
+  max-width: 1080px;
+  padding: 32px;
+  color: #10203a;
+  background: linear-gradient(180deg, #fdfdff 0%, #eff4fb 100%);
+  min-height: 100vh;
+}
+
+.app-header {
+  margin-bottom: 28px;
+  padding: 30px;
+  border-radius: 28px;
+  background: #ffffff;
+  border: 1px solid rgba(16, 32, 58, 0.08);
+  box-shadow: 0 22px 60px rgba(16, 32, 58, 0.08);
+}
+
+.app-branding {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: #f5f9ff;
+  padding: 18px 22px;
+  border-radius: 24px;
+  border: 1px solid rgba(16, 32, 58, 0.08);
+}
+
+.app-logo {
+  width: 100px;
+  height: 100px;
+  object-fit: contain;
+  border-radius: 24px;
+  border: 2px solid #ffcc54;
+  background: #ffffff;
+  padding: 14px;
+  box-shadow: 0 20px 36px rgba(16, 32, 58, 0.1);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: clamp(2.2rem, 3vw, 3rem);
+  letter-spacing: -0.04em;
+  color: #0f2147;
+}
+
+.app-header p {
+  color: #55627b;
+  margin: 12px 0 0;
+  line-height: 1.75;
+  max-width: 680px;
+}
+
+.app-error {
+  color: #b33a3a;
+  margin-bottom: 18px;
+}
+
+.dashboard-card {
+  padding: 30px;
+  border-radius: 28px;
+  background: #ffffff;
+  border: 1px solid rgba(16, 32, 58, 0.08);
+  box-shadow: 0 22px 50px rgba(16, 32, 58, 0.08);
+}
+
+.dashboard-card h2 {
+  margin: 0;
+  font-size: 1.95rem;
+  color: #0f2147;
+  letter-spacing: -0.02em;
+}
+
+.signal-list {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+}
+
+.signal-item {
+  padding: 22px;
+  border-radius: 22px;
+  border: 1px solid rgba(16, 32, 58, 0.08);
+  background: #f8fbff;
+  box-shadow: 0 18px 36px rgba(16, 32, 58, 0.05);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.signal-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 24px 50px rgba(16, 32, 58, 0.1);
+}
+
+.signal-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.signal-row,
+.signal-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 0.95rem;
+}
+
+.signal-row span,
+.signal-footer span,
+.signal-footer small {
+  color: #5f6e86;
+}
+
+.signal-row span {
+  min-width: 150px;
+}
+
+.signal-header span {
+  color: #1e3356;
+}
+
+.signal-item strong {
+  color: #d4af37;
+}
+
+.signal-footer {
+  margin-top: 14px;
+  color: #47536f;
+}
+
+.signal-empty {
+  color: #8b97ac;
+}
