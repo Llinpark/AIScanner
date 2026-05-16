@@ -10,6 +10,19 @@ const SignalSchema = new mongoose.Schema({
   take_profit_3: { type: Number, required: true },
   confidence: { type: Number, default: 0 },
   notes: { type: String },
+  alertType: {
+    type: String,
+    enum: ['entry', 'stop_loss', 'take_profit_1', 'take_profit_2', 'take_profit_3', 'signal'],
+    default: 'signal'
+  },
+  tradingviewUsername: { type: String, index: true },
+  appUsername: { type: String, index: true },
+  isBroadcast: { type: Boolean, default: false },
+  source: { type: String, default: 'scanner' },
+  pattern: { type: String },
+  patternLabel: { type: String },
+  gapTop: { type: Number },
+  gapBottom: { type: Number },
   createdAt: { type: Date, default: Date.now }
 });
 

@@ -2,12 +2,14 @@
   "secret": "your_tradingview_webhook_secret_here",
   "symbol": "EURUSD",
   "direction": "long",
+  "alertType": "entry",
   "entry": 1.09250,
   "stop_loss": 1.08800,
   "take_profit_1": 1.09750,
   "take_profit_2": 1.10200,
   "take_profit_3": 1.10800,
   "confidence": 0.85,
-  "message": "Breakaway gap + Perfect FVG signal generated.",
-  "tradingviewUsername": "trader123"
+  "message": "KachingFx entry alert",
+  "tradingviewUsername": "trader123",
+  "broadcast": false
 }
