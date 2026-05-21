@@ -1,0 +1,130 @@
+//@version=5
+indicator("KachingFx Structural Scanner", overlay=true, max_labels_count=50)
+
+// ===== CONFIGURATION =====
+WEBHOOK_URL = input.string("http://localhost:4000/api/webhook/tradingview", "Webhook URL", group="KachingFx")
+WEBHOOK_SECRET = input.string("your_webhook_secret", "Webhook Secret", group="KachingFx")
+TV_USERNAME = input.string("your_tradingview_username", "TradingView Username", group="KachingFx")
+BROADCAST = input.bool(true, "Broadcast to all subscribers", group="KachingFx")
+SEND_CANDLE_FEED = input.bool(true, "Send each bar to server scanner", group="KachingFx")
+
+minBodyRatio = input.float(0.62, "Perfect FVG: min C2 body/range", minval=0.4, maxval=0.95, group="Pattern A — FVG")
+maxWickRatio = input.float(0.28, "Perfect FVG: max C2 wick/range", minval=0.05, maxval=0.5, group="Pattern A — FVG")
+volMult = input.float(1.15, "Perfect FVG: volume multiplier", minval=1.0, maxval=3.0, group="Pattern A — FVG")
+
+c1DispBody = input.float(0.55, "Breakaway: C1 min body/range", minval=0.35, maxval=0.95, group="Pattern B — Breakaway")
+minGapRatio = input.float(0.08, "Breakaway: min gap / C1 range", minval=0.02, maxval=0.5, group="Pattern B — Breakaway")
+
+slBufferPct = input.float(0.08, "SL buffer (%)", step=0.01, group="Risk") / 100
+tp1R = input.float(1.0, "TP1 (R)", group="Risk")
+tp2R = input.float(2.0, "TP2 (R)", group="Risk")
+tp3R = input.float(3.0, "TP3 (R)", group="Risk")
+
+// ===== HELPERS =====
+bodyRatio(c) =>
+    math.abs(c.close - c.open) / math.max(c.high - c.low, syminfo.mintick)
+
+wickRatio(c) =>
+    (c.high - math.max(c.open, c.close) + math.min(c.open, c.close) - c.low) / math.max(c.high - c.low, syminfo.mintick)
+
+avgVol = ta.sma(volume, 20)
+
+buildPayload(string alertType, string pattern, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
+    tvUser = BROADCAST ? "" : TV_USERNAME
+    bc = BROADCAST ? "true" : "false"
+    '{"symbol":"' + syminfo.tickerid + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"KachingFx ' + pattern + ' ' + alertType + '","tradingviewUsername":"' + tvUser + '","broadcast":' + bc + ',"secret":"' + WEBHOOK_SECRET + '"}'
+
+calcLevels(string direction, float entry, float gapTop, float gapBot) =>
+    buffer = entry * slBufferPct
+    sl = direction == "long" ? gapBot - buffer : gapTop + buffer
+    risk = math.abs(entry - sl)
+    tp1 = direction == "long" ? entry + risk * tp1R : entry - risk * tp1R
+    tp2 = direction == "long" ? entry + risk * tp2R : entry - risk * tp2R
+    tp3 = direction == "long" ? entry + risk * tp3R : entry - risk * tp3R
+    [entry, sl, tp1, tp2, tp3, risk]
+
+// ===== PATTERN A: PERFECT FVG (C1,C2,C3) =====
+c1 = request.security(syminfo.tickerid, timeframe.period, [open[2], high[2], low[2], close[2], volume[2]])
+c2 = request.security(syminfo.tickerid, timeframe.period, [open[1], high[1], low[1], close[1], volume[1]])
+c3 = request.security(syminfo.tickerid, timeframe.period, [open[0], high[0], low[0], close[0], volume[0]])
+
+c1h = c1[1]
+c1l = c1[2]
+c2o = c2[0]
+c2h = c2[1]
+c2l = c2[2]
+c2c = c2[3]
+c2v = c2[4]
+c3l = c3[2]
+c3h = c3[1]
+c3c = c3[3]
+
+bullFVG = c1h < c3l
+bearFVG = c1l > c3h
+
+c2Body = math.abs(c2c - c2o) / math.max(c2h - c2l, syminfo.mintick)
+c2Wick = (c2h - math.max(c2o, c2c) + math.min(c2o, c2c) - c2l) / math.max(c2h - c2l, syminfo.mintick)
+c2VolOk = c2v >= avgVol[1] * volMult
+c2Bull = c2c >= c2o
+
+perfectBullFVG = bullFVG and c2Body >= minBodyRatio and c2Wick <= maxWickRatio and c2VolOk and c2Bull
+perfectBearFVG = bearFVG and c2Body >= minBodyRatio and c2Wick <= maxWickRatio and c2VolOk and not c2Bull
+
+gapTopBull = c3l
+gapBotBull = c1h
+gapTopBear = c1l
+gapBotBear = c3h
+
+// ===== PATTERN B: BREAKAWAY GAP =====
+c1o = c1[0]
+c1c = c1[3]
+c1Body = math.abs(c1c - c1o) / math.max(c1h - c1l, syminfo.mintick)
+c1Range = c1h - c1l
+
+c2Open = c2o
+bullBreakSetup = c1Body >= c1DispBody and c2Open > c1h and c2l > c1h
+bearBreakSetup = c1Body >= c1DispBody and c2Open < c1l and c2h < c1l
+
+bullGapSize = c2l - c1h
+bearGapSize = c1l - c2h
+bullBreakSetup := bullBreakSetup and bullGapSize / c1Range >= minGapRatio
+bearBreakSetup := bearBreakSetup and bearGapSize / c1Range >= minGapRatio
+
+bullBreakConfirm = bullBreakSetup and c3c > c2Open and c3c > c1h and c3c >= open
+bearBreakConfirm = bearBreakSetup and c3c < c2Open and c3c < c1l and c3c <= open
+
+// ===== FIRE ENTRY ALERTS =====
+if perfectBullFVG
+    [e, sl, t1, t2, t3, _] = calcLevels("long", close, gapTopBull, gapBotBull)
+    msg = buildPayload("entry", "perfect_fvg", "long", e, sl, t1, t2, t3, gapTopBull, gapBotBull, 0.88)
+    alert(msg, alert.freq_once_per_bar)
+    label.new(bar_index, low, "FVG LONG\nE:" + str.tostring(e) + "\nSL:" + str.tostring(sl), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
+
+if perfectBearFVG
+    [e, sl, t1, t2, t3, _] = calcLevels("short", close, gapTopBear, gapBotBear)
+    msg = buildPayload("entry", "perfect_fvg", "short", e, sl, t1, t2, t3, gapTopBear, gapBotBear, 0.88)
+    alert(msg, alert.freq_once_per_bar)
+    label.new(bar_index, high, "FVG SHORT\nE:" + str.tostring(e) + "\nSL:" + str.tostring(sl), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+
+if bullBreakConfirm
+    [e, sl, t1, t2, t3, _] = calcLevels("long", close, math.max(c2Open, c3h), c1h)
+    msg = buildPayload("entry", "breakaway_gap", "long", e, sl, t1, t2, t3, math.max(c2Open, c3h), c1h, 0.82)
+    alert(msg, alert.freq_once_per_bar)
+    label.new(bar_index, low, "BREAK LONG", style=label.style_label_up, color=color.new(color.blue, 0), textcolor=color.white)
+
+if bearBreakConfirm
+    [e, sl, t1, t2, t3, _] = calcLevels("short", close, c1l, math.min(c2Open, c3l))
+    msg = buildPayload("entry", "breakaway_gap", "short", e, sl, t1, t2, t3, c1l, math.min(c2Open, c3l), 0.82)
+    alert(msg, alert.freq_once_per_bar)
+    label.new(bar_index, high, "BREAK SHORT", style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white)
+
+// Feed each closed bar to backend scanner
+if SEND_CANDLE_FEED and barstate.isconfirmed
+    feedMsg = '{"symbol":"' + syminfo.tickerid + '","alertType":"candle","pattern":"feed","open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"secret":"' + WEBHOOK_SECRET + '"}'
+    alert(feedMsg, alert.freq_once_per_bar)
+
+// Visual gap zones
+bgcolor(perfectBullFVG ? color.new(color.green, 88) : na)
+bgcolor(perfectBearFVG ? color.new(color.red, 88) : na)
+bgcolor(bullBreakConfirm ? color.new(color.blue, 90) : na)
+bgcolor(bearBreakConfirm ? color.new(color.orange, 90) : na)

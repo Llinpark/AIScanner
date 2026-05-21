@@ -1,0 +1,28 @@
+//@version=5
+strategy("KachingScanner Alert Bridge", overlay=true)
+
+// Example input fields for alerts
+symbolName = syminfo.tickerid
+alertMessage = input.string("KachingScanner signal", title="Alert message")
+stopLoss = input.float(0.0, title="Stop loss")
+takeProfit = input.float(0.0, title="Take profit")
+entryPrice = input.float(0.0, title="Entry price")
+
+// Example condition for a simple breakout alert
+longCondition = ta.crossover(ta.sma(close, 9), ta.sma(close, 21))
+shortCondition = ta.crossunder(ta.sma(close, 9), ta.sma(close, 21))
+
+if (longCondition)
+    strategy.entry("Long", strategy.long, comment="KachingScanner long")
+
+if (shortCondition)
+    strategy.entry("Short", strategy.short, comment="KachingScanner short")
+
+// Use alertmessage JSON payload to send to webhook
+alert_payload = '{"secret":"your_tradingview_webhook_secret_here", "symbol":"' + symbolName + '", "direction":"' + (longCondition ? "long" : shortCondition ? "short" : "neutral") + '", "entry":' + str.tostring(close, format.mintick) + ', "stop_loss":' + str.tostring(stopLoss, format.mintick) + ', "take_profit_1":' + str.tostring(takeProfit, format.mintick) + ', "confidence":0.75, "message":"' + alertMessage + '" }'
+
+alertcondition(longCondition or shortCondition, title="KachingScanner Signal", message=alert_payload)
+
+// Plot the signal marker
+plotshape(longCondition, title="Long Signal", location=location.belowbar, color=color.green, style=shape.labelup, text="BUY")
+plotshape(shortCondition, title="Short Signal", location=location.abovebar, color=color.red, style=shape.labeldown, text="SELL")
