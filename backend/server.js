@@ -17,6 +17,7 @@ const TradingViewAlertService = require('./services/TradingViewAlertService');
 const MarketScannerService = require('./services/MarketScannerService');
 const requireTradingViewAccess = require('./middleware/requireTradingViewAccess');
 const { canAccessTradingViewAlerts } = require('./utils/subscriptionAccess');
+<<<<<<< HEAD
 const devUserStore = require('./utils/devUserStore');
 
 function isDbReady() {
@@ -33,6 +34,8 @@ async function resolveUser(username) {
     return devUserStore.findByUsername(username);
   }
 }
+=======
+>>>>>>> 2e905453a44bc6c7244c4118a1ccb223eb8d5058
 
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
 const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
@@ -371,7 +374,11 @@ app.post('/api/subscribe', async (req, res) => {
 app.get('/api/subscription/:username', async (req, res) => {
   try {
     const { username } = req.params;
+<<<<<<< HEAD
     const user = await resolveUser(username);
+=======
+    const user = await UserConfig.findOne({ username });
+>>>>>>> 2e905453a44bc6c7244c4118a1ccb223eb8d5058
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -602,7 +609,11 @@ app.post('/api/tradingview/link', requireTradingViewAccess, async (req, res) => 
 app.get('/api/tradingview/accounts/:username', async (req, res) => {
   try {
     const { username } = req.params;
+<<<<<<< HEAD
     const user = await resolveUser(username);
+=======
+    const user = await UserConfig.findOne({ username });
+>>>>>>> 2e905453a44bc6c7244c4118a1ccb223eb8d5058
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -841,7 +852,11 @@ io.on('connection', socket => {
         return;
       }
 
+<<<<<<< HEAD
       const user = await resolveUser(appUsername);
+=======
+      const user = await UserConfig.findOne({ username: appUsername });
+>>>>>>> 2e905453a44bc6c7244c4118a1ccb223eb8d5058
       const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
       const linkedTv = TradingViewAlertService.normalizeTradingViewUsername(user?.tradingviewUsername);
 
