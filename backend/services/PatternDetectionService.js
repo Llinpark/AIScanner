@@ -183,8 +183,12 @@ function confirmBreakawayGap(pending, c3, config = PATTERN_SCANNER_CONFIG) {
   };
 }
 
+function getPipSize(symbol = '') {
+  return String(symbol).toUpperCase().includes('JPY') ? 0.01 : 0.0001;
+}
+
 function buildTradeInstructions(detection, config = PATTERN_SCANNER_CONFIG) {
-  const { direction, gapTop, gapBottom, candles } = detection;
+  const { direction, gapTop, gapBottom, candles, symbol } = detection;
   const c3 = candles?.c3;
   const riskCfg = config.risk;
 
@@ -193,24 +197,32 @@ function buildTradeInstructions(detection, config = PATTERN_SCANNER_CONFIG) {
       ? (gapTop + gapBottom) / 2
       : c3?.close ?? (gapTop + gapBottom) / 2;
 
-  const buffer = entry * riskCfg.slBufferPct;
-  const stop_loss =
-    direction === 'long' ? gapBottom - buffer : gapTop + buffer;
+  const pip = getPipSize(symbol);
+  const [sl1Pips, sl2Pips, sl3Pips] = riskCfg.slPips || [30, 80, 100];
+  const slSign = direction === 'long' ? -1 : 1;
+
+  const stop_loss_1 = entry + slSign * sl1Pips * pip;
+  const stop_loss_2 = entry + slSign * sl2Pips * pip;
+  const stop_loss_3 = entry + slSign * sl3Pips * pip;
+  const stop_loss = stop_loss_1;
 
   const risk = Math.abs(entry - stop_loss);
   if (risk <= 0) {
     return null;
   }
 
-  const sign = direction === 'long' ? 1 : -1;
+  const tpSign = direction === 'long' ? 1 : -1;
   const [r1, r2, r3] = riskCfg.tpRatios;
 
   return {
     entry: roundPrice(entry),
     stop_loss: roundPrice(stop_loss),
-    take_profit_1: roundPrice(entry + sign * risk * r1),
-    take_profit_2: roundPrice(entry + sign * risk * r2),
-    take_profit_3: roundPrice(entry + sign * risk * r3),
+    stop_loss_1: roundPrice(stop_loss_1),
+    stop_loss_2: roundPrice(stop_loss_2),
+    stop_loss_3: roundPrice(stop_loss_3),
+    take_profit_1: roundPrice(entry + tpSign * risk * r1),
+    take_profit_2: roundPrice(entry + tpSign * risk * r2),
+    take_profit_3: roundPrice(entry + tpSign * risk * r3),
     riskReward: { r1, r2, r3 }
   };
 }
@@ -225,13 +237,13 @@ function buildActionableNotes(detection, levels) {
   return [
     `${detection.patternLabel}`,
     `${side} ENTRY @ ${levels.entry}`,
-    `STOP LOSS @ ${levels.stop_loss}`,
+    `SL1 ${levels.stop_loss_1} | SL2 ${levels.stop_loss_2} | SL3 ${levels.stop_loss_3}`,
     `TP1 ${levels.take_profit_1} | TP2 ${levels.take_profit_2} | TP3 ${levels.take_profit_3}`,
     `Gap zone: ${detection.gapBottom} – ${detection.gapTop}`
   ].join(' | ');
 }
 
-function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG) {
+function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '') {
   if (candles.length < 3) {
     return { entry: null, pending: null };
   }
@@ -243,7 +255,7 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG) {
 
   const fvg = detectPerfectFVG(c1, c2, c3, candles, config);
   if (fvg) {
-    const levels = buildTradeInstructions(fvg, config);
+    const levels = buildTradeInstructions({ ...fvg, symbol }, config);
     if (levels) {
       return {
         entry: {
@@ -264,7 +276,7 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG) {
       config
     );
     if (confirmed) {
-      const levels = buildTradeInstructions(confirmed, config);
+      const levels = buildTradeInstructions({ ...confirmed, symbol }, config);
       if (levels) {
         return {
           entry: {

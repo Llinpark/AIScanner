@@ -69,7 +69,9 @@ function formatLiveAlertMessage(signal) {
     signal: 'SIGNAL'
   }[signal.alertType] || 'SIGNAL';
 
-  return `${typeLabel} ${signal.direction.toUpperCase()} ${signal.symbol} | Entry ${signal.entry} | SL ${signal.stop_loss} | TP1 ${signal.take_profit_1} | TP2 ${signal.take_profit_2} | TP3 ${signal.take_profit_3}`;
+  const sl2 = signal.stop_loss_2 ?? signal.stop_loss;
+  const sl3 = signal.stop_loss_3 ?? signal.stop_loss;
+  return `${typeLabel} ${signal.direction.toUpperCase()} ${signal.symbol} | Entry ${signal.entry} | SL1 ${signal.stop_loss_1 ?? signal.stop_loss} | SL2 ${sl2} | SL3 ${sl3} | TP1 ${signal.take_profit_1} | TP2 ${signal.take_profit_2} | TP3 ${signal.take_profit_3}`;
 }
 
 function toLiveAlertPayload(signalDoc) {
@@ -81,6 +83,9 @@ function toLiveAlertPayload(signalDoc) {
     direction: signal.direction,
     entry: signal.entry,
     stop_loss: signal.stop_loss,
+    stop_loss_1: signal.stop_loss_1 ?? signal.stop_loss,
+    stop_loss_2: signal.stop_loss_2,
+    stop_loss_3: signal.stop_loss_3,
     take_profit_1: signal.take_profit_1,
     take_profit_2: signal.take_profit_2,
     take_profit_3: signal.take_profit_3,
@@ -226,7 +231,10 @@ async function processIncomingWebhook(io, rawBody) {
 
   const direction = String(body.direction || body.action || 'neutral').toLowerCase();
   const entry = parseFloat(body.entry || body.price || 0) || 0;
-  const stop_loss = parseFloat(body.stop_loss || body.sl || 0) || 0;
+  const stop_loss = parseFloat(body.stop_loss || body.stop_loss_1 || body.sl || 0) || 0;
+  const stop_loss_1 = parseFloat(body.stop_loss_1 || body.stop_loss || body.sl || 0) || 0;
+  const stop_loss_2 = parseFloat(body.stop_loss_2 || 0) || 0;
+  const stop_loss_3 = parseFloat(body.stop_loss_3 || 0) || 0;
   const take_profit_1 = parseFloat(body.take_profit_1 || body.tp1 || 0) || 0;
   const take_profit_2 = parseFloat(body.take_profit_2 || body.tp2 || 0) || 0;
   const take_profit_3 = parseFloat(body.take_profit_3 || body.tp3 || 0) || 0;
@@ -242,6 +250,9 @@ async function processIncomingWebhook(io, rawBody) {
     direction,
     entry: safeEntry,
     stop_loss: safeStop,
+    stop_loss_1: stop_loss_1 || safeStop,
+    stop_loss_2: stop_loss_2 || undefined,
+    stop_loss_3: stop_loss_3 || undefined,
     take_profit_1: safeTp1,
     take_profit_2: safeTp2,
     take_profit_3: safeTp3,

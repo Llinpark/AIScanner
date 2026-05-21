@@ -55,6 +55,9 @@ async function publishEntrySignal(io, symbol, detection) {
     direction: detection.direction,
     entry: detection.entry,
     stop_loss: detection.stop_loss,
+    stop_loss_1: detection.stop_loss_1 ?? detection.stop_loss,
+    stop_loss_2: detection.stop_loss_2,
+    stop_loss_3: detection.stop_loss_3,
     take_profit_1: detection.take_profit_1,
     take_profit_2: detection.take_profit_2,
     take_profit_3: detection.take_profit_3,
@@ -92,7 +95,7 @@ function processCandles(symbol, candles, io) {
   }
 
   const c3 = candles[candles.length - 1];
-  const result = PatternDetectionService.scanLastCandles(candles);
+  const result = PatternDetectionService.scanLastCandles(candles, undefined, symbol);
 
   if (result.entry && shouldEmit(symbol, c3.time)) {
     publishEntrySignal(io, symbol, result.entry);

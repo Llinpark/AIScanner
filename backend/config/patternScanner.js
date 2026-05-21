@@ -21,7 +21,7 @@ const PATTERN_SCANNER_CONFIG = {
 
   // Risk / reward for actionable instructions
   risk: {
-    slBufferPct: 0.0008,
+    slPips: [30, 80, 100],
     tpRatios: [1.0, 2.0, 3.0],
     entryMode: 'close' // 'close' | 'gap_mid'
   },

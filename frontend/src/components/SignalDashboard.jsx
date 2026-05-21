@@ -91,7 +91,9 @@ export default function SignalDashboard({ initialSignals, username, subscription
               </div>
               <div className="signal-row">
                 <span>Entry: {signal.entry.toFixed(5)}</span>
-                <span>SL: {signal.stop_loss.toFixed(5)}</span>
+                <span>SL1: {(signal.stop_loss_1 ?? signal.stop_loss).toFixed(5)}</span>
+                <span>SL2: {(signal.stop_loss_2 ?? signal.stop_loss).toFixed(5)}</span>
+                <span>SL3: {(signal.stop_loss_3 ?? signal.stop_loss).toFixed(5)}</span>
               </div>
               <div className="signal-row">
                 <span>TP1: {signal.take_profit_1.toFixed(5)}</span>

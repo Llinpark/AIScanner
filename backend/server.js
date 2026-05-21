@@ -51,7 +51,10 @@ function parseTradingViewPayload(body) {
   const symbol = parsed.symbol || parsed.ticker || parsed.instrument || parsed.market || parsed.data?.symbol || 'UNKNOWN';
   const direction = (parsed.direction || parsed.action || parsed.signal || parsed.trade || 'neutral').toString().toLowerCase();
   const entry = parseFloat(parsed.entry || parsed.price || parsed.data?.entry || parsed.data?.price || 0) || 0;
-  const stop_loss = parseFloat(parsed.stop_loss || parsed.sl || parsed.stoploss || parsed.data?.stop_loss || 0) || 0;
+  const stop_loss = parseFloat(parsed.stop_loss || parsed.stop_loss_1 || parsed.sl || parsed.stoploss || parsed.data?.stop_loss || 0) || 0;
+  const stop_loss_1 = parseFloat(parsed.stop_loss_1 || parsed.stop_loss || parsed.sl || 0) || 0;
+  const stop_loss_2 = parseFloat(parsed.stop_loss_2 || 0) || 0;
+  const stop_loss_3 = parseFloat(parsed.stop_loss_3 || 0) || 0;
   const take_profit_1 = parseFloat(parsed.take_profit_1 || parsed.tp1 || parsed.tp_1 || parsed.data?.take_profit_1 || 0) || 0;
   const take_profit_2 = parseFloat(parsed.take_profit_2 || parsed.tp2 || parsed.tp_2 || parsed.data?.take_profit_2 || 0) || 0;
   const take_profit_3 = parseFloat(parsed.take_profit_3 || parsed.tp3 || parsed.tp_3 || parsed.data?.take_profit_3 || 0) || 0;
@@ -72,6 +75,9 @@ function parseTradingViewPayload(body) {
     direction,
     entry: safeEntry,
     stop_loss: safeStop,
+    stop_loss_1: stop_loss_1 || safeStop,
+    stop_loss_2: stop_loss_2 || undefined,
+    stop_loss_3: stop_loss_3 || undefined,
     take_profit_1: safeTp1,
     take_profit_2: safeTp2,
     take_profit_3: safeTp3,

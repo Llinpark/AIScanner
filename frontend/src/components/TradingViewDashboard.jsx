@@ -35,7 +35,10 @@ function AlertCard({ alert }) {
       <div className="alert-details">
         <DetailRow label="Symbol" value={alert.symbol} />
         <DetailRow label="Entry" value={Number(alert.entry).toFixed(5)} />
-        <DetailRow label="Stop Loss" value={Number(alert.stop_loss).toFixed(5)} />
+        <DetailRow
+          label="Stop Losses"
+          value={`${Number(alert.stop_loss_1 ?? alert.stop_loss).toFixed(5)} / ${Number(alert.stop_loss_2 ?? alert.stop_loss).toFixed(5)} / ${Number(alert.stop_loss_3 ?? alert.stop_loss).toFixed(5)}`}
+        />
         <DetailRow
           label="Take Profits"
           value={`${Number(alert.take_profit_1).toFixed(5)} / ${Number(alert.take_profit_2).toFixed(5)} / ${Number(alert.take_profit_3).toFixed(5)}`}
