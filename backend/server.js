@@ -11,6 +11,7 @@ dotenv.config();
 
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
+
 const { TIERS, TRIAL_DAYS } = require('./config/subscriptions');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
@@ -27,14 +28,80 @@ const { resolveUserById } = require('./middleware/requireAuth');
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
 const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
 
+const { TIERS, TRIAL_DAYS, PAYMENT_CONFIG } = require('./config/subscriptions');
+const TradingViewService = require('./services/TradingViewService');
+const TradingViewAlertService = require('./services/TradingViewAlertService');
+const MarketScannerService = require('./services/MarketScannerService');
+const requireTradingViewAccess = require('./middleware/requireTradingViewAccess');
+const { canAccessTradingViewAlerts } = require('./utils/subscriptionAccess');
+
+const devUserStore = require('./utils/devUserStore');
+
+
 function isDbReady() {
   return mongoose.connection.readyState === 1;
 }
+
+async function resolveUser(username) {
+  if (!isDbReady()) {
+    return devUserStore.findByUsername(username);
+  }
+  try {
+    return await UserConfig.findOne({ username });
+  } catch {
+    return devUserStore.findByUsername(username);
+  }
+}
+
+const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
+const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
 
 function verifyTradingViewSecret(req) {
   const headerSecret = req.headers['x-tradingview-secret'];
   const bodySecret = req.body.secret;
   return TRADINGVIEW_WEBHOOK_SECRET && (headerSecret === TRADINGVIEW_WEBHOOK_SECRET || bodySecret === TRADINGVIEW_WEBHOOK_SECRET);
+}
+
+function parseTradingViewPayload(body) {
+  const parsed = TradingViewAlertService.parseWebhookBody(body);
+  const symbol = parsed.symbol || parsed.ticker || parsed.instrument || parsed.market || parsed.data?.symbol || 'UNKNOWN';
+  const direction = (parsed.direction || parsed.action || parsed.signal || parsed.trade || 'neutral').toString().toLowerCase();
+  const entry = parseFloat(parsed.entry || parsed.price || parsed.data?.entry || parsed.data?.price || 0) || 0;
+  const stop_loss = parseFloat(parsed.stop_loss || parsed.stop_loss_1 || parsed.sl || parsed.stoploss || parsed.data?.stop_loss || 0) || 0;
+  const stop_loss_1 = parseFloat(parsed.stop_loss_1 || parsed.stop_loss || parsed.sl || 0) || 0;
+  const stop_loss_2 = parseFloat(parsed.stop_loss_2 || 0) || 0;
+  const stop_loss_3 = parseFloat(parsed.stop_loss_3 || 0) || 0;
+  const take_profit_1 = parseFloat(parsed.take_profit_1 || parsed.tp1 || parsed.tp_1 || parsed.data?.take_profit_1 || 0) || 0;
+  const take_profit_2 = parseFloat(parsed.take_profit_2 || parsed.tp2 || parsed.tp_2 || parsed.data?.take_profit_2 || 0) || 0;
+  const take_profit_3 = parseFloat(parsed.take_profit_3 || parsed.tp3 || parsed.tp_3 || parsed.data?.take_profit_3 || 0) || 0;
+  const confidence = parseFloat(parsed.confidence || parsed.confidence_score || parsed.data?.confidence || 0) || 0;
+  const notes = parsed.message || parsed.note || parsed.notes || JSON.stringify(parsed);
+  const tradingviewUsername = TradingViewAlertService.normalizeTradingViewUsername(
+    parsed.tradingviewUsername || parsed.username || parsed.user || parsed.trader || ''
+  );
+
+  const safeEntry = entry || 0;
+  const safeStop = stop_loss || (safeEntry ? safeEntry * 0.995 : 0);
+  const safeTp1 = take_profit_1 || (safeEntry ? (direction === 'short' ? safeEntry * 0.99 : safeEntry * 1.01) : 0);
+  const safeTp2 = take_profit_2 || (safeEntry ? (direction === 'short' ? safeEntry * 0.98 : safeEntry * 1.02) : 0);
+  const safeTp3 = take_profit_3 || (safeEntry ? (direction === 'short' ? safeEntry * 0.965 : safeEntry * 1.035) : 0);
+
+  return {
+    symbol,
+    direction,
+    entry: safeEntry,
+    stop_loss: safeStop,
+    stop_loss_1: stop_loss_1 || safeStop,
+    stop_loss_2: stop_loss_2 || undefined,
+    stop_loss_3: stop_loss_3 || undefined,
+    take_profit_1: safeTp1,
+    take_profit_2: safeTp2,
+    take_profit_3: safeTp3,
+    confidence: Math.min(Math.max(confidence, 0), 1),
+    notes,
+    tradingviewUsername,
+    alertType: TradingViewAlertService.normalizeAlertType(parsed.alertType || parsed.alert_type || parsed.type)
+  };
 }
 
 const app = express();
@@ -253,6 +320,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
   }
 });
 
+
 app.get('/api/subscription/me', requireAuth, (req, res) => {
   res.json({
     user: sanitizeUser(req.user)
@@ -269,6 +337,40 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
 
     const user = await UserConfig.findByIdAndUpdate(
       req.userId,
+
+app.get('/api/subscription/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const user = await resolveUser(username);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      username,
+      subscription: user.subscription || { status: 'inactive', tier: 'basic' },
+      email: user.email,
+      phone: user.phone
+    });
+  } catch (error) {
+    console.error('Get subscription error:', error);
+    res.status(500).json({ message: 'Unable to fetch subscription', error: error.message });
+  }
+});
+
+// Mock payment confirmation endpoint (for development/testing)
+app.post('/api/payments/mock/confirm', async (req, res) => {
+  try {
+    const { username, paymentId, tier } = req.body;
+
+    if (!username || !paymentId || !tier) {
+      return res.status(400).json({ message: 'username, paymentId, and tier are required' });
+    }
+
+    const user = await UserConfig.findOneAndUpdate(
+      { username },
+
       {
         subscription: {
           tier,
@@ -360,6 +462,7 @@ app.post('/api/webhook/payments', async (req, res) => {
   }
 });
 
+
 // ===== TRADINGVIEW SETUP (subscribers use TradingView as alert front-end) =====
 
 app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) => {
@@ -377,6 +480,146 @@ app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) =
 
 app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, res) => {
   try {
+
+// ===== TRADINGVIEW INTEGRATION ENDPOINTS =====
+
+// Get TradingView OAuth URL for frontend redirect
+app.get('/api/tradingview/oauth-url', (req, res) => {
+  const state = `state_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  const url = TradingViewService.getOAuthUrl(state);
+  res.json({ oauthUrl: url, state });
+});
+
+// OAuth callback endpoint (TradingView redirects here after user authorizes)
+app.get('/api/tradingview/oauth-callback', async (req, res) => {
+  try {
+    const { code, state, username } = req.query;
+
+    if (!code) {
+      return res.status(400).json({ message: 'Authorization code missing' });
+    }
+
+    // Exchange code for access token
+    const tokenResponse = await TradingViewService.exchangeCodeForToken(code);
+
+    // Store OAuth credentials in user profile
+    const user = await UserConfig.findOneAndUpdate(
+      { username },
+      {
+        tradingview: {
+          userId: tokenResponse.user_id,
+          oauthToken: tokenResponse.access_token,
+          linkedAt: new Date(),
+          isOAuthLinked: true,
+          apiAccessLevel: 'premium'
+        }
+      },
+      { new: true }
+    );
+
+    io.emit('tradingview:linked', { username, userId: tokenResponse.user_id });
+
+    // Redirect to frontend with success message
+    res.redirect(`http://localhost:5173?tradingview_linked=true&username=${username}`);
+  } catch (error) {
+    console.error('OAuth callback error:', error);
+    res.status(500).json({ message: 'OAuth callback failed', error: error.message });
+  }
+});
+
+// Link TradingView account by username (username-based, no OAuth)
+app.post('/api/tradingview/link', requireTradingViewAccess, async (req, res) => {
+  try {
+    const { username, tradingviewUsername } = req.body;
+
+    if (!username || !tradingviewUsername) {
+      return res.status(400).json({ message: 'Both username and tradingviewUsername are required' });
+    }
+
+    const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
+    const existing = await UserConfig.findOne({
+      tradingviewUsername: { $regex: new RegExp(`^${normalizedTv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+      username: { $ne: username }
+    });
+
+    if (existing) {
+      return res.status(409).json({ message: 'This TradingView username is already linked to another account.' });
+    }
+
+    const user = await UserConfig.findOneAndUpdate(
+      { username },
+      {
+        tradingviewUsername: normalizedTv,
+        updatedAt: new Date()
+      },
+      { upsert: true, new: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'TradingView account linked. Live entry, stop loss, and take profit alerts are enabled.',
+      user,
+      tradingviewUsername: user.tradingviewUsername
+    });
+  } catch (error) {
+    console.error('TradingView link error:', error);
+    res.status(500).json({ message: 'Unable to link TradingView account', error: error.message });
+  }
+});
+
+// Get user's TradingView linked accounts
+app.get('/api/tradingview/accounts/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const user = await resolveUser(username);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      username,
+      tradingviewUsername: user.tradingviewUsername,
+      liveAlertsEnabled: canAccessTradingViewAlerts(user.subscription),
+      subscription: user.subscription,
+      tradingview: {
+        isOAuthLinked: user.tradingview?.isOAuthLinked || false,
+        userId: user.tradingview?.userId,
+        linkedAt: user.tradingview?.linkedAt,
+        apiAccessLevel: user.tradingview?.apiAccessLevel || 'basic'
+      }
+    });
+  } catch (error) {
+    console.error('Get TradingView accounts error:', error);
+    res.status(500).json({ message: 'Unable to fetch TradingView accounts', error: error.message });
+  }
+});
+
+// Get historical data for a symbol from TradingView
+app.get('/api/tradingview/history/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { interval = '1h', limit = 100 } = req.query;
+
+    const historicalData = await TradingViewService.getHistoricalData(symbol, interval, parseInt(limit));
+    const indicators = TradingViewService.calculateIndicators(historicalData);
+
+    res.json({
+      symbol,
+      interval,
+      data: historicalData,
+      indicators
+    });
+  } catch (error) {
+    console.error('Get historical data error:', error);
+    res.status(500).json({ message: 'Unable to fetch historical data', error: error.message });
+  }
+});
+
+// Pine Script for subscribers (includes webhook URL + username placeholders)
+app.get('/api/tradingview/pine-script', (req, res) => {
+  try {
+    const { tradingviewUsername } = req.query;
     const pinePath = path.join(__dirname, 'tradingview-bot.pine');
     let script = fs.readFileSync(pinePath, 'utf8');
     const webhookUrl = `${PUBLIC_BACKEND_URL}/api/webhook/tradingview`;
@@ -523,8 +766,34 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', socket => {
+
   console.log('Subscriber connected:', socket.id, socket.userId);
   socket.emit('subscriber:ready', { userId: socket.userId });
+
+  console.log('Client connected:', socket.id);
+
+  socket.on('tv:subscribe', async ({ appUsername, tradingviewUsername }) => {
+    try {
+      if (!appUsername || !tradingviewUsername) {
+        return;
+      }
+
+      const user = await resolveUser(appUsername);
+      const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
+      const linkedTv = TradingViewAlertService.normalizeTradingViewUsername(user?.tradingviewUsername);
+
+      if (!user || linkedTv !== normalizedTv || !canAccessTradingViewAlerts(user.subscription)) {
+        socket.emit('tv:subscribe-error', { message: 'Unable to subscribe to live alerts for this TradingView username.' });
+        return;
+      }
+
+      socket.join(`tv:${normalizedTv}`);
+      socket.join(`user:${appUsername}`);
+      socket.emit('tv:subscribed', { tradingviewUsername: normalizedTv, appUsername });
+    } catch (error) {
+      socket.emit('tv:subscribe-error', { message: error.message });
+    }
+  });
 
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);

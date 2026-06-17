@@ -13,5 +13,7 @@
   "take_profit_3": 1.10800,
   "confidence": 0.85,
   "message": "KachingFx entry alert",
-  "broadcast": true
+  "broadcast": true,
+  "tradingviewUsername": "barasajohn1985",
+  "broadcast": false
 }

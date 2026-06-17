@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
+<<<<<<< HEAD
 import { useAuth } from '../context/AuthContext';
+=======
+>>>>>>> c02b076342de1b7d0ffc5033ab654cb2c655c162
 
 const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
@@ -32,8 +35,12 @@ const FEATURE_ACCESS = {
   }
 };
 
+<<<<<<< HEAD
 export default function SignalDashboard({ initialSignals, subscription }) {
   const { token, isAuthenticated } = useAuth();
+=======
+export default function SignalDashboard({ initialSignals, username, subscription }) {
+>>>>>>> c02b076342de1b7d0ffc5033ab654cb2c655c162
   const [signals, setSignals] = useState(initialSignals || []);
   const [tierFeatures, setTierFeatures] = useState(FEATURE_ACCESS.basic);
 
@@ -45,6 +52,7 @@ export default function SignalDashboard({ initialSignals, subscription }) {
   }, [subscription]);
 
   useEffect(() => {
+<<<<<<< HEAD
     if (!token || !isAuthenticated) return undefined;
 
     const socket = io(SOCKET_URL, { auth: { token } });
@@ -55,6 +63,21 @@ export default function SignalDashboard({ initialSignals, subscription }) {
 
     return () => socket.disconnect();
   }, [token, isAuthenticated, tierFeatures.maxSignals]);
+=======
+    const socket = io(SOCKET_URL);
+
+    socket.on('signal:update', newSignal => {
+      setSignals(prev => {
+        const updated = [newSignal, ...prev].slice(0, tierFeatures.maxSignals);
+        return updated;
+      });
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [tierFeatures.maxSignals]);
+>>>>>>> c02b076342de1b7d0ffc5033ab654cb2c655c162
 
   const renderFeatureLock = (feature) => {
     return (
