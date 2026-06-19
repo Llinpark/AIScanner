@@ -12,28 +12,22 @@ dotenv.config();
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
-const { TIERS, TRIAL_DAYS } = require('./config/subscriptions');
+const { TIERS, TRIAL_DAYS, PAYMENT_CONFIG } = require('./config/subscriptions');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
 const MarketScannerService = require('./services/MarketScannerService');
 const authRoutes = require('./routes/auth');
 const requireAuth = require('./middleware/requireAuth');
 const requireSubscription = require('./middleware/requireSubscription');
+const requireTradingViewAccess = require('./middleware/requireTradingViewAccess');
 const validateRequest = require('./middleware/validate');
 const { subscribeValidators } = require('./validators/authValidators');
-const { canAccessLiveAlerts } = require('./utils/subscriptionAccess');
+const { canAccessLiveAlerts, canAccessTradingViewAlerts } = require('./utils/subscriptionAccess');
 const { verifyToken, sanitizeUser } = require('./utils/auth');
 const { resolveUserById } = require('./middleware/requireAuth');
 
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
 const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
-
-const { TIERS, TRIAL_DAYS, PAYMENT_CONFIG } = require('./config/subscriptions');
-const TradingViewService = require('./services/TradingViewService');
-const TradingViewAlertService = require('./services/TradingViewAlertService');
-const MarketScannerService = require('./services/MarketScannerService');
-const requireTradingViewAccess = require('./middleware/requireTradingViewAccess');
-const { canAccessTradingViewAlerts } = require('./utils/subscriptionAccess');
 
 const devUserStore = require('./utils/devUserStore');
 
@@ -52,9 +46,6 @@ async function resolveUser(username) {
     return devUserStore.findByUsername(username);
   }
 }
-
-const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
-const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
 
 function verifyTradingViewSecret(req) {
   const headerSecret = req.headers['x-tradingview-secret'];
@@ -337,40 +328,6 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
 
     const user = await UserConfig.findByIdAndUpdate(
       req.userId,
-
-app.get('/api/subscription/:username', async (req, res) => {
-  try {
-    const { username } = req.params;
-    const user = await resolveUser(username);
-
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    res.json({
-      username,
-      subscription: user.subscription || { status: 'inactive', tier: 'basic' },
-      email: user.email,
-      phone: user.phone
-    });
-  } catch (error) {
-    console.error('Get subscription error:', error);
-    res.status(500).json({ message: 'Unable to fetch subscription', error: error.message });
-  }
-});
-
-// Mock payment confirmation endpoint (for development/testing)
-app.post('/api/payments/mock/confirm', async (req, res) => {
-  try {
-    const { username, paymentId, tier } = req.body;
-
-    if (!username || !paymentId || !tier) {
-      return res.status(400).json({ message: 'username, paymentId, and tier are required' });
-    }
-
-    const user = await UserConfig.findOneAndUpdate(
-      { username },
-
       {
         subscription: {
           tier,
@@ -394,6 +351,27 @@ app.post('/api/payments/mock/confirm', async (req, res) => {
   } catch (error) {
     console.error('Mock payment confirm error:', error);
     res.status(500).json({ message: 'Unable to confirm mock payment', error: error.message });
+  }
+});
+
+app.get('/api/subscription/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    const user = await resolveUser(username);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    res.json({
+      username,
+      subscription: user.subscription || { status: 'inactive', tier: 'basic' },
+      email: user.email,
+      phone: user.phone
+    });
+  } catch (error) {
+    console.error('Get subscription error:', error);
+    res.status(500).json({ message: 'Unable to fetch subscription', error: error.message });
   }
 });
 
@@ -477,9 +455,6 @@ app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) =
     ]
   });
 });
-
-app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, res) => {
-  try {
 
 // ===== TRADINGVIEW INTEGRATION ENDPOINTS =====
 
@@ -616,10 +591,8 @@ app.get('/api/tradingview/history/:symbol', async (req, res) => {
   }
 });
 
-// Pine Script for subscribers (includes webhook URL + username placeholders)
-app.get('/api/tradingview/pine-script', (req, res) => {
+app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, res) => {
   try {
-    const { tradingviewUsername } = req.query;
     const pinePath = path.join(__dirname, 'tradingview-bot.pine');
     let script = fs.readFileSync(pinePath, 'utf8');
     const webhookUrl = `${PUBLIC_BACKEND_URL}/api/webhook/tradingview`;
