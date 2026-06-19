@@ -12,17 +12,29 @@ dotenv.config();
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
-const { TIERS, TRIAL_DAYS, PAYMENT_CONFIG } = require('./config/subscriptions');
+const { TIERS, TRIAL_DAYS, PAYMENT_CONFIG, getPublicTiers, FEATURE_MATRIX } = require('./config/subscriptions');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
 const MarketScannerService = require('./services/MarketScannerService');
 const authRoutes = require('./routes/auth');
 const requireAuth = require('./middleware/requireAuth');
 const requireSubscription = require('./middleware/requireSubscription');
+const requireTierFeature = require('./middleware/requireTierFeature');
 const requireTradingViewAccess = require('./middleware/requireTradingViewAccess');
 const validateRequest = require('./middleware/validate');
 const { subscribeValidators } = require('./validators/authValidators');
-const { canAccessLiveAlerts, canAccessTradingViewAlerts } = require('./utils/subscriptionAccess');
+const {
+  canAccessLiveAlerts,
+  canAccessTradingViewAlerts,
+  getTierFeatures,
+  getTierDisplayName,
+  historyCutoffDate,
+  sanitizeSignalForTier,
+  filterSignalsForTier,
+  isCurrencyPairAllowed,
+  isTimeframeAllowed,
+  getAllowedCurrencyPairs
+} = require('./utils/subscriptionAccess');
 const { verifyToken, sanitizeUser } = require('./utils/auth');
 const { resolveUserById } = require('./middleware/requireAuth');
 
@@ -194,16 +206,66 @@ app.post('/api/webhook/tradingview', async (req, res) => {
 
 app.get('/api/signals', requireAuth, requireSubscription, async (req, res) => {
   try {
+    const features = getTierFeatures(req.user.subscription);
+    const cutoff = historyCutoffDate(req.user.subscription);
+
     if (!isDbReady()) {
-      return res.json(inMemorySignals.slice(0, 100));
+      const filtered = filterSignalsForTier(
+        inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff),
+        req.user.subscription
+      )
+        .slice(0, features.maxSignals)
+        .map(s => sanitizeSignalForTier(s, req.user.subscription));
+      return res.json(filtered);
     }
-    const signals = await Signal.find({ userId: req.userId }).sort({ createdAt: -1 }).limit(100);
+
+    const signals = await Signal.find({
+      createdAt: { $gte: cutoff }
+    })
+      .sort({ createdAt: -1 })
+      .limit(features.maxSignals * 2);
+
+    const sanitized = filterSignalsForTier(signals, req.user.subscription)
+      .slice(0, features.maxSignals)
+      .map(s => sanitizeSignalForTier(s, req.user.subscription));
+
     if (inMemorySignals.length) {
-      return res.json(inMemorySignals.concat(signals));
+      const memoryFiltered = filterSignalsForTier(
+        inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff),
+        req.user.subscription
+      )
+        .slice(0, features.maxSignals)
+        .map(s => sanitizeSignalForTier(s, req.user.subscription));
+      return res.json(memoryFiltered.concat(sanitized).slice(0, features.maxSignals));
     }
-    res.json(signals);
+    res.json(sanitized);
   } catch (error) {
     console.error('Error fetching signals:', error);
+    return res.status(500).json({ message: 'Unable to fetch signals', error: String(error) });
+  }
+});
+
+app.get('/api/v1/signals', requireAuth, requireSubscription, requireTierFeature('apiAccess'), async (req, res) => {
+  try {
+    const features = getTierFeatures(req.user.subscription);
+    const cutoff = historyCutoffDate(req.user.subscription);
+    const limit = Math.min(parseInt(req.query.limit, 10) || features.maxSignals, features.maxSignals);
+
+    const rawSignals = isDbReady()
+      ? await Signal.find({ createdAt: { $gte: cutoff } })
+          .sort({ createdAt: -1 })
+          .limit(limit * 2)
+      : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
+
+    const signals = filterSignalsForTier(rawSignals, req.user.subscription).slice(0, limit);
+
+    res.json({
+      tier: req.user.subscription?.tier || 'basic',
+      count: signals.length,
+      signals: signals.map(s => sanitizeSignalForTier(s, req.user.subscription))
+    });
+  } catch (error) {
+    console.error('API v1 signals error:', error);
     return res.status(500).json({ message: 'Unable to fetch signals', error: String(error) });
   }
 });
@@ -211,7 +273,7 @@ app.get('/api/signals', requireAuth, requireSubscription, async (req, res) => {
 // ===== SUBSCRIPTION ENDPOINTS =====
 
 app.get('/api/tiers', (req, res) => {
-  res.json(TIERS);
+  res.json({ trialDays: TRIAL_DAYS, tiers: getPublicTiers(), featureMatrix: FEATURE_MATRIX });
 });
 
 app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, async (req, res) => {
@@ -231,16 +293,17 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
 
     if (provider === 'mock') {
       const mockPaymentId = `mock_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const trialEnds = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
       user = await UserConfig.findByIdAndUpdate(
         userId,
         {
           phone: phone || user.phone,
           subscription: {
             tier,
-            status: 'pending',
+            status: 'trial',
             provider: 'mock',
             providerOrderId: mockPaymentId,
-            trialEnds: new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000)
+            trialEnds
           },
           updatedAt: new Date()
         },
@@ -313,8 +376,13 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
 
 
 app.get('/api/subscription/me', requireAuth, (req, res) => {
+  const tier = req.user.subscription?.tier || 'basic';
   res.json({
-    user: sanitizeUser(req.user)
+    user: sanitizeUser(req.user),
+    tierFeatures: getTierFeatures(req.user.subscription),
+    tierDisplayName: getTierDisplayName(tier),
+    allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription),
+    trialDays: TRIAL_DAYS
   });
 });
 
@@ -570,27 +638,6 @@ app.get('/api/tradingview/accounts/:username', async (req, res) => {
   }
 });
 
-// Get historical data for a symbol from TradingView
-app.get('/api/tradingview/history/:symbol', async (req, res) => {
-  try {
-    const { symbol } = req.params;
-    const { interval = '1h', limit = 100 } = req.query;
-
-    const historicalData = await TradingViewService.getHistoricalData(symbol, interval, parseInt(limit));
-    const indicators = TradingViewService.calculateIndicators(historicalData);
-
-    res.json({
-      symbol,
-      interval,
-      data: historicalData,
-      indicators
-    });
-  } catch (error) {
-    console.error('Get historical data error:', error);
-    res.status(500).json({ message: 'Unable to fetch historical data', error: error.message });
-  }
-});
-
 app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, res) => {
   try {
     const pinePath = path.join(__dirname, 'tradingview-bot.pine');
@@ -621,15 +668,20 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
 app.get('/api/tradingview/alerts', requireAuth, requireSubscription, async (req, res) => {
   try {
     const { symbol } = req.query;
-    const filter = { userId: req.userId };
+    const features = getTierFeatures(req.user.subscription);
+    const cutoff = historyCutoffDate(req.user.subscription);
+    const filter = { createdAt: { $gte: cutoff } };
     if (symbol) filter.symbol = symbol;
 
-    const signals = await Signal.find(filter).sort({ createdAt: -1 }).limit(symbol ? 50 : 200);
+    const limit = symbol ? Math.min(50, features.maxSignals) : features.maxSignals;
+    const signals = await Signal.find(filter).sort({ createdAt: -1 }).limit(limit * 2);
+    const filtered = filterSignalsForTier(signals, req.user.subscription).slice(0, limit);
 
     res.json({
       symbol: symbol || null,
-      alerts: signals,
-      count: signals.length
+      tier: req.user.subscription?.tier || 'basic',
+      alerts: filtered.map(s => sanitizeSignalForTier(s, req.user.subscription)),
+      count: filtered.length
     });
   } catch (error) {
     console.error('Get alerts error:', error);
@@ -641,14 +693,57 @@ app.get('/api/tradingview/history/:symbol', requireAuth, requireSubscription, as
   try {
     const { symbol } = req.params;
     const { interval = '1h', limit = 100 } = req.query;
+    const features = getTierFeatures(req.user.subscription);
+
+    if (!isCurrencyPairAllowed(symbol, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Currency pair ${symbol} is not included in your ${getTierDisplayName(req.user.subscription?.tier)} plan.`,
+        allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
+      });
+    }
+
+    if (!isTimeframeAllowed(interval, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Timeframe ${interval} is not included in your ${getTierDisplayName(req.user.subscription?.tier)} plan.`,
+        allowedTimeframes: features.timeframes
+      });
+    }
 
     const historicalData = await TradingViewService.getHistoricalData(symbol, interval, parseInt(limit, 10));
-    const indicators = TradingViewService.calculateIndicators(historicalData);
+    const response = { symbol, interval, data: historicalData };
 
-    res.json({ symbol, interval, data: historicalData, indicators });
+    if (features.newsFilter) {
+      response.newsFilterEnabled = true;
+    }
+
+    res.json(response);
   } catch (error) {
     console.error('Get historical data error:', error);
     res.status(500).json({ message: 'Unable to fetch historical data', error: error.message });
+  }
+});
+
+app.get('/api/performance/summary', requireAuth, requireSubscription, requireTierFeature('performanceDashboard'), async (req, res) => {
+  try {
+    const cutoff = historyCutoffDate(req.user.subscription);
+    const signals = isDbReady()
+      ? await Signal.find({ createdAt: { $gte: cutoff } }).sort({ createdAt: -1 }).limit(500)
+      : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
+
+    const filtered = filterSignalsForTier(signals, req.user.subscription);
+    const wins = filtered.filter(s => s.direction === 'long' || s.direction === 'buy').length;
+    const total = filtered.length;
+
+    res.json({
+      totalSignals: total,
+      longSignals: wins,
+      shortSignals: total - wins,
+      winRateEstimate: total ? Math.round((wins / total) * 100) : 0,
+      historyDays: getTierFeatures(req.user.subscription).historyDays
+    });
+  } catch (error) {
+    console.error('Performance summary error:', error);
+    res.status(500).json({ message: 'Unable to load performance summary', error: error.message });
   }
 });
 
@@ -658,7 +753,11 @@ app.get('/api/scanner/status', (req, res) => {
   res.json(MarketScannerService.getScannerStatus());
 });
 
-app.get('/api/scanner/patterns', (req, res) => {
+app.get('/api/scanner/patterns', requireAuth, (req, res) => {
+  const allowed = req.user
+    ? getAllowedCurrencyPairs(req.user.subscription)
+    : require('./config/subscriptions').ALL_CURRENCY_PAIRS;
+
   res.json({
     patterns: [
       {
@@ -672,6 +771,7 @@ app.get('/api/scanner/patterns', (req, res) => {
         description: 'Sharp displacement, clean gap on candle 2, confirmed by candle 3 close.'
       }
     ],
+    allowedCurrencyPairs: allowed,
     config: require('./config/patternScanner').PATTERN_SCANNER_CONFIG
   });
 });
@@ -698,12 +798,21 @@ app.post('/api/scanner/candle', async (req, res) => {
   }
 });
 
-app.post('/api/scanner/run', requireAuth, requireSubscription, async (req, res) => {
+app.post('/api/scanner/run', requireAuth, requireSubscription, requireTierFeature('multiMarketScanner'), async (req, res) => {
   try {
     const { symbol } = req.body;
+
+    if (symbol && !isCurrencyPairAllowed(symbol, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Currency pair ${symbol} is not included in your plan.`,
+        allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
+      });
+    }
+
+    const allowed = getAllowedCurrencyPairs(req.user.subscription);
     const results = symbol
       ? [await MarketScannerService.scanSymbol(io, symbol)]
-      : await MarketScannerService.runFullScan(io);
+      : await Promise.all(allowed.map(s => MarketScannerService.scanSymbol(io, s)));
     return res.json({ success: true, results });
   } catch (error) {
     console.error('Scanner run error:', error);

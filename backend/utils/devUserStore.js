@@ -47,15 +47,16 @@ function findByEmail(email) {
   return Object.values(store).find(u => String(u.email || '').trim().toLowerCase() === normalized) || null;
 }
 
-function createUser({ email, passwordHash, displayName, phone }) {
+function createUser({ email, passwordHash, displayName, phone, subscription }) {
   const id = randomUUID();
+  const trialEnds = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   return upsertUser(id, {
     id,
     email: String(email).trim().toLowerCase(),
     passwordHash,
     displayName: displayName || email.split('@')[0],
     phone: phone || '',
-    subscription: { status: 'inactive', tier: 'basic' },
+    subscription: subscription || { status: 'trial', tier: 'basic', trialEnds },
     createdAt: new Date().toISOString()
   });
 }

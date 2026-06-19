@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
-export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated, onNavigateDashboard }) {
+export default function Checkout({ tier, tierData, trialDays = 7, onBack, onSubscriptionUpdated, onNavigateDashboard }) {
   const { user, updateUser } = useAuth();
   const [provider, setProvider] = useState('mock');
   const [phone, setPhone] = useState(user?.phone || '');
@@ -76,7 +76,7 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
             <strong>Price:</strong> KES {tierData.price}/month
           </p>
           <p>
-            <strong>Trial:</strong> 7 days free
+            <strong>Trial:</strong> {trialDays} days free
           </p>
         </div>
 

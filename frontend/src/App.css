@@ -433,6 +433,172 @@ input::placeholder {
   box-shadow: 0 4px 12px rgba(212, 175, 55, 0.45);
 }
 
+.tier-current-badge {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(16, 185, 129, 0.2);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.pricing-card.current-plan {
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+.tier-meta {
+  color: #7a879c;
+  font-size: 0.85rem;
+  margin: 8px 0 0;
+}
+
+.export-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.plan-summary {
+  margin-bottom: 16px;
+  color: #9aa8be;
+  font-size: 0.95rem;
+}
+
+.performance-box {
+  margin-bottom: 20px;
+  padding: 16px;
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.1);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+}
+
+.performance-box h3 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+
+.performance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.performance-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.performance-stat span {
+  color: #9aa8be;
+  font-size: 0.85rem;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.feature-item {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.feature-item.enabled {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.feature-item.locked {
+  color: #8b97ac;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.feature-comparison {
+  margin: 48px 0 32px;
+}
+
+.feature-comparison h2 {
+  text-align: center;
+  margin-bottom: 20px;
+  color: #f0f4ff;
+}
+
+.comparison-table-wrap {
+  overflow-x: auto;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.comparison-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 640px;
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 12px 16px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.comparison-table th:first-child,
+.comparison-table td:first-child {
+  text-align: left;
+  color: #e8edf5;
+}
+
+.comparison-table th {
+  background: rgba(255, 255, 255, 0.04);
+  color: #d4af37;
+  font-size: 0.9rem;
+}
+
+.comparison-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.matrix-yes {
+  color: #10b981;
+  font-weight: 700;
+}
+
+.matrix-no {
+  color: #6b7280;
+}
+
+.matrix-text {
+  color: #9aa8be;
+  font-size: 0.85rem;
+}
+
+.premium-feature-hint {
+  color: #d4af37;
+  font-size: 0.9rem;
+  margin: 8px 0;
+}
+
+.api-hint {
+  margin-top: 12px;
+  color: #9aa8be;
+  font-size: 0.85rem;
+}
+
+.api-hint code {
+  color: #60a5fa;
+}
+
 .card-header {
   margin-bottom: 20px;
 }

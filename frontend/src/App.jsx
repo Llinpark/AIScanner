@@ -6,6 +6,8 @@ import AuthForm from './components/AuthForm';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
 
+const TIER_BADGE_LABELS = { basic: 'BASIC', professional: 'PRO', premium: 'PREMIUM' };
+
 function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
   const [signals, setSignals] = useState([]);
@@ -67,7 +69,7 @@ function AppContent() {
               <span>{user.displayName || user.email}</span>
               {subscription && (
                 <span className={`tier-badge tier-${subscription.tier}`}>
-                  {subscription.tier.toUpperCase()} ({subscription.status})
+                  {TIER_BADGE_LABELS[subscription.tier] || subscription.tier.toUpperCase()} ({subscription.status})
                 </span>
               )}
               <button type="button" className="btn-logout" onClick={logout}>

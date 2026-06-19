@@ -5,6 +5,7 @@ const devUserStore = require('../utils/devUserStore');
 const { hashPassword, comparePassword, signToken, sanitizeUser } = require('../utils/auth');
 const requireAuth = require('../middleware/requireAuth');
 const validateRequest = require('../middleware/validate');
+const { TRIAL_DAYS } = require('../config/subscriptions');
 const { registerValidators, loginValidators } = require('../validators/authValidators');
 
 const router = express.Router();
@@ -22,22 +23,32 @@ async function findUserByEmail(email) {
 }
 
 async function createUserRecord({ email, passwordHash, displayName, phone }) {
+  const trialEnds = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+  const subscription = {
+    tier: 'basic',
+    status: 'trial',
+    trialEnds,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  };
+
   if (mongoose.connection.readyState !== 1) {
-    return devUserStore.createUser({ email, passwordHash, displayName, phone });
+    return devUserStore.createUser({ email, passwordHash, displayName, phone, subscription });
   }
   try {
     const user = new UserConfig({
       email,
       passwordHash,
       displayName: displayName || email.split('@')[0],
-      phone
+      phone,
+      subscription
     });
     return user.save();
   } catch (error) {
     if (error.code === 11000) {
       throw Object.assign(new Error('Email already registered.'), { status: 409 });
     }
-    return devUserStore.createUser({ email, passwordHash, displayName, phone });
+    return devUserStore.createUser({ email, passwordHash, displayName, phone, subscription });
   }
 }
 

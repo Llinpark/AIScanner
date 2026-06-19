@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { io } from 'socket.io-client';
-import { tradingviewApi } from '../services/api';
+import { tradingviewApi, subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
@@ -24,7 +24,7 @@ function hasLiveAccess(subscription) {
   return false;
 }
 
-function AlertCard({ alert }) {
+function AlertCard({ alert, showConfidence }) {
   const type = alert.alertType || 'signal';
   return (
     <div className={`alert-card alert-${alert.direction} alert-type-${type}`}>
@@ -44,7 +44,7 @@ function AlertCard({ alert }) {
           label="Take Profits"
           value={`${Number(alert.take_profit_1).toFixed(5)} / ${Number(alert.take_profit_2).toFixed(5)} / ${Number(alert.take_profit_3).toFixed(5)}`}
         />
-        {alert.confidence > 0 && (
+        {showConfidence && alert.confidence > 0 && (
           <DetailRow label="Confidence" value={`${(alert.confidence * 100).toFixed(0)}%`} />
         )}
       </div>
@@ -76,8 +76,34 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
   const [pineScript, setPineScript] = useState('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
 
-  const symbols = ['EUR/USD', 'GBP/USD', 'AUD/USD', 'USD/JPY'];
+  const [tierLimits, setTierLimits] = useState({
+    showConfidence: false,
+    currencyPairs: ['EUR/USD', 'GBP/USD'],
+    timeframes: ['1h'],
+    historyDays: 7
+  });
+  const [selectedTimeframe, setSelectedTimeframe] = useState('1h');
+  const [historyError, setHistoryError] = useState('');
+
+  const symbols = tierLimits.currencyPairs || ['EUR/USD', 'GBP/USD'];
+  const timeframes = tierLimits.timeframes || ['1h'];
   const subscribed = hasLiveAccess(subscription);
+
+  useEffect(() => {
+    if (!subscribed) return;
+    subscriptionApi
+      .getMe()
+      .then(res => {
+        if (res.data.tierFeatures) {
+          setTierLimits(res.data.tierFeatures);
+          const pairs = res.data.allowedCurrencyPairs || res.data.tierFeatures.currencyPairs || ['EUR/USD'];
+          const frames = res.data.tierFeatures.timeframes || ['1h'];
+          if (!pairs.includes(selectedSymbol)) setSelectedSymbol(pairs[0]);
+          if (!frames.includes(selectedTimeframe)) setSelectedTimeframe(frames[0]);
+        }
+      })
+      .catch(() => {});
+  }, [subscribed, subscription]);
 
   const fetchSetup = useCallback(async () => {
     try {
@@ -148,11 +174,14 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
   const fetchHistoricalData = async () => {
     try {
       setLoading(true);
-      const response = await tradingviewApi.getHistory(selectedSymbol);
+      setHistoryError('');
+      const response = await tradingviewApi.getHistory(selectedSymbol, { interval: selectedTimeframe });
       setHistoricalData(response.data.data);
-      setIndicators(response.data.indicators);
+      setIndicators(response.data.indicators || null);
     } catch (error) {
-      console.error('Failed to fetch historical data:', error);
+      setHistoryError(error.response?.data?.message || 'Failed to fetch historical data.');
+      setHistoricalData([]);
+      setIndicators(null);
     } finally {
       setLoading(false);
     }
@@ -235,9 +264,11 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
                 <button type="button" className="btn-fetch" onClick={fetchAlerts} disabled={loading}>
                   Refresh
                 </button>
+              {tierLimits.telegramAlerts && (
                 <button type="button" className="btn-toggle" onClick={requestNotifications}>
-                  Enable browser notifications
+                  Enable browser / Telegram-style notifications
                 </button>
+              )}
               </div>
 
               {displayAlerts.length === 0 ? (
@@ -247,7 +278,11 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
               ) : (
                 <div className="alerts-list">
                   {displayAlerts.map((alert, idx) => (
-                    <AlertCard key={alert.id || alert._id || idx} alert={alert} />
+                    <AlertCard
+                      key={alert.id || alert._id || idx}
+                      alert={alert}
+                      showConfidence={tierLimits.showConfidence}
+                    />
                   ))}
                 </div>
               )}
@@ -272,6 +307,15 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
               <button type="button" className="btn-toggle" onClick={() => setShowPineScript(!showPineScript)}>
                 {showPineScript ? '▼' : '▶'} Show Pine Script
               </button>
+              {tierLimits.multiMarketScanner && (
+                <p className="premium-feature-hint">Multi-market scanner enabled on your Premium plan.</p>
+              )}
+              {tierLimits.smartMoneyConcepts && (
+                <p className="premium-feature-hint">Smart Money Concepts overlays included.</p>
+              )}
+              {tierLimits.propFirmMode && (
+                <p className="premium-feature-hint">Prop firm mode: drawdown guardrails active.</p>
+              )}
               {showPineScript && pineScript && (
                 <div className="pine-script-box">
                   <div className="pine-script-instructions">
@@ -310,29 +354,29 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
                     </option>
                   ))}
                 </select>
+                <select value={selectedTimeframe} onChange={e => setSelectedTimeframe(e.target.value)}>
+                  {timeframes.map(tf => (
+                    <option key={tf} value={tf}>
+                      {tf}
+                    </option>
+                  ))}
+                </select>
                 <button type="button" className="btn-fetch" onClick={fetchHistoricalData} disabled={loading}>
                   {loading ? 'Loading...' : 'Fetch Data'}
                 </button>
               </div>
 
-              {indicators && (
+              {historyError && <div className="feature-lock">{historyError}</div>}
+
+              {tierLimits.newsFilter && historicalData.length > 0 && (
                 <div className="indicators-box">
-                  <h4>Current Indicators</h4>
-                  <div className="indicator-grid">
-                    <div className="indicator-item">
-                      <span className="label">SMA (14)</span>
-                      <span className="value">{indicators.sma}</span>
-                    </div>
-                    <div className="indicator-item">
-                      <span className="label">RSI (14)</span>
-                      <span className="value">{indicators.rsi}</span>
-                    </div>
-                    <div className="indicator-item">
-                      <span className="label">Close</span>
-                      <span className="value">{indicators.currentClose}</span>
-                    </div>
-                  </div>
+                  <h4>News Filter</h4>
+                  <p>High-impact news filtering is active on your plan.</p>
                 </div>
+              )}
+
+              {!tierLimits.newsFilter && historicalData.length > 0 && (
+                <div className="feature-lock">🔒 News filter requires Pro or Premium</div>
               )}
 
               {historicalData.length > 0 && (

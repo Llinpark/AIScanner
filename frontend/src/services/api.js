@@ -34,7 +34,8 @@ export const subscriptionApi = {
   getTiers: () => api.get('/api/tiers'),
   subscribe: payload => api.post('/api/subscribe', payload),
   getMe: () => api.get('/api/subscription/me'),
-  confirmMockPayment: payload => api.post('/api/payments/mock/confirm', payload)
+  confirmMockPayment: payload => api.post('/api/payments/mock/confirm', payload),
+  getPerformanceSummary: () => api.get('/api/performance/summary')
 };
 
 export const tradingviewApi = {

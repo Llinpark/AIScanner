@@ -4,9 +4,33 @@ import { useAuth } from '../context/AuthContext';
 import Checkout from './Checkout';
 import AuthForm from './AuthForm';
 
+const TIER_COLUMNS = [
+  { key: 'basic', label: 'Basic' },
+  { key: 'professional', label: 'Pro' },
+  { key: 'premium', label: 'Premium' }
+];
+
+function isActiveSubscription(subscription) {
+  if (!subscription) return false;
+  if (subscription.status === 'active') return true;
+  if (subscription.status === 'trial') {
+    if (!subscription.trialEnds) return true;
+    return new Date(subscription.trialEnds) > new Date();
+  }
+  return false;
+}
+
+function renderMatrixCell(value) {
+  if (value === true) return <span className="matrix-yes">✓</span>;
+  if (value === false) return <span className="matrix-no">✗</span>;
+  return <span className="matrix-text">{value}</span>;
+}
+
 export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) {
-  const { isAuthenticated, user } = useAuth();
+  const { isAuthenticated, user, subscription } = useAuth();
   const [tiers, setTiers] = useState({});
+  const [featureMatrix, setFeatureMatrix] = useState([]);
+  const [trialDays, setTrialDays] = useState(7);
   const [loading, setLoading] = useState(true);
   const [selectedTier, setSelectedTier] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -15,7 +39,9 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
     const fetchTiers = async () => {
       try {
         const response = await subscriptionApi.getTiers();
-        setTiers(response.data);
+        setTiers(response.data.tiers || response.data);
+        setFeatureMatrix(response.data.featureMatrix || []);
+        setTrialDays(response.data.trialDays || 7);
       } catch (error) {
         console.error('Failed to fetch tiers:', error);
       } finally {
@@ -55,62 +81,127 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
     );
   }
 
+  const currentTier = subscription?.tier || 'basic';
+  const hasAccess = isActiveSubscription(subscription);
+
   return (
     <div className="pricing-container">
       <div className="pricing-header">
         <img className="pricing-logo" src="/logo-1.png" alt="KachingFx" />
         <h1>Choose Your Trading Plan</h1>
         <p>
-          Signed in as <strong>{user.displayName || user.email}</strong>. Complete payment to unlock live alerts.
+          Signed in as <strong>{user.displayName || user.email}</strong>.
+          {hasAccess ? (
+            <>
+              {' '}
+              Your <strong>{tiers[currentTier]?.name || currentTier}</strong> plan is {subscription.status}.
+              {subscription.status === 'trial' && subscription.trialEnds && (
+                <> Trial ends {new Date(subscription.trialEnds).toLocaleDateString()}.</>
+              )}
+            </>
+          ) : (
+            <> Complete payment to unlock live alerts.</>
+          )}
         </p>
       </div>
 
       {!showCheckout ? (
         <>
           <div className="pricing-tiers">
-            {Object.entries(tiers).map(([key, tier]) => (
-              <div key={key} className={`pricing-card ${key}`}>
-                {key === 'professional' && <span className="tier-popular-badge">Most Popular</span>}
-                {key === 'premium' && <span className="tier-popular-badge tier-best">Best Value</span>}
-                <div className="card-header">
-                  <h2>{tier.name}</h2>
-                  <p className="description">{tier.description}</p>
-                  <div className="price">
-                    <span className="amount">KES {tier.price}</span>
-                    <span className="period">/month</span>
+            {Object.entries(tiers).map(([key, tier]) => {
+              const isCurrent = key === currentTier && hasAccess;
+              const limits = tier.limits || {};
+
+              return (
+                <div key={key} className={`pricing-card ${key} ${isCurrent ? 'current-plan' : ''}`}>
+                  {key === 'professional' && <span className="tier-popular-badge">Most Popular</span>}
+                  {key === 'premium' && <span className="tier-popular-badge tier-best">Best Value</span>}
+                  {isCurrent && <span className="tier-current-badge">Current Plan</span>}
+                  <div className="card-header">
+                    <h2>{tier.name}</h2>
+                    <p className="description">{tier.description}</p>
+                    <div className="price">
+                      <span className="amount">KES {tier.price.toLocaleString()}</span>
+                      <span className="period">/month</span>
+                    </div>
+                    {limits.currencyPairs && (
+                      <p className="tier-meta">
+                        {limits.currencyPairs.length} pairs · {limits.timeframes?.length || 1} timeframe
+                        {(limits.timeframes?.length || 0) !== 1 ? 's' : ''}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="card-body">
+                    <ul className="features-list">
+                      {tier.features.map((feature, idx) => (
+                        <li key={idx}>
+                          <span className="check">✓</span> {feature}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <div className="card-footer">
+                    {isCurrent ? (
+                      <button type="button" className={`btn-subscribe btn-${key}`} disabled>
+                        <span className="btn-subscribe-label">Current Plan</span>
+                      </button>
+                    ) : (
+                      <button type="button" className={`btn-subscribe btn-${key}`} onClick={() => handleSelectTier(key)}>
+                        <span className="btn-subscribe-label">
+                          {hasAccess && key !== currentTier ? `Switch to ${tier.name}` : `Get ${tier.name}`}
+                        </span>
+                        <span className="btn-subscribe-arrow" aria-hidden="true">
+                          →
+                        </span>
+                      </button>
+                    )}
                   </div>
                 </div>
-
-                <div className="card-body">
-                  <ul className="features-list">
-                    {tier.features.map((feature, idx) => (
-                      <li key={idx}>
-                        <span className="check">✓</span> {feature}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div className="card-footer">
-                  <button type="button" className={`btn-subscribe btn-${key}`} onClick={() => handleSelectTier(key)}>
-                    <span className="btn-subscribe-label">Get {tier.name}</span>
-                    <span className="btn-subscribe-arrow" aria-hidden="true">
-                      →
-                    </span>
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
+          {featureMatrix.length > 0 && (
+            <div className="feature-comparison">
+              <h2>Feature Comparison</h2>
+              <div className="comparison-table-wrap">
+                <table className="comparison-table">
+                  <thead>
+                    <tr>
+                      <th>Feature</th>
+                      {TIER_COLUMNS.map(col => (
+                        <th key={col.key}>{col.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {featureMatrix.map(row => (
+                      <tr key={row.key}>
+                        <td>{row.label}</td>
+                        {TIER_COLUMNS.map(col => (
+                          <td key={col.key}>{renderMatrixCell(row[col.key])}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           <div className="pricing-footer">
-            <p>All plans include a 7-day free trial. After payment, open TradingView for accurate alerts.</p>
+            <p>
+              All plans include a {trialDays}-day free trial. After payment, open TradingView for accurate alerts.
+            </p>
           </div>
         </>
       ) : (
         <Checkout
           tier={selectedTier}
           tierData={tiers[selectedTier]}
+          trialDays={trialDays}
           onBack={() => setShowCheckout(false)}
           onSubscriptionUpdated={onSubscriptionUpdated}
           onNavigateDashboard={onNavigateDashboard}
