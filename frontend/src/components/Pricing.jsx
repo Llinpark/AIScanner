@@ -12,12 +12,7 @@ const TIER_COLUMNS = [
 
 function isActiveSubscription(subscription) {
   if (!subscription) return false;
-  if (subscription.status === 'active') return true;
-  if (subscription.status === 'trial') {
-    if (!subscription.trialEnds) return true;
-    return new Date(subscription.trialEnds) > new Date();
-  }
-  return false;
+  return subscription.status === 'active';
 }
 
 function renderMatrixCell(value) {
@@ -30,7 +25,6 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
   const { isAuthenticated, user, subscription } = useAuth();
   const [tiers, setTiers] = useState({});
   const [featureMatrix, setFeatureMatrix] = useState([]);
-  const [trialDays, setTrialDays] = useState(7);
   const [loading, setLoading] = useState(true);
   const [selectedTier, setSelectedTier] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -41,7 +35,6 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
         const response = await subscriptionApi.getTiers();
         setTiers(response.data.tiers || response.data);
         setFeatureMatrix(response.data.featureMatrix || []);
-        setTrialDays(response.data.trialDays || 7);
       } catch (error) {
         console.error('Failed to fetch tiers:', error);
       } finally {
@@ -94,10 +87,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
           {hasAccess ? (
             <>
               {' '}
-              Your <strong>{tiers[currentTier]?.name || currentTier}</strong> plan is {subscription.status}.
-              {subscription.status === 'trial' && subscription.trialEnds && (
-                <> Trial ends {new Date(subscription.trialEnds).toLocaleDateString()}.</>
-              )}
+              Your <strong>{tiers[currentTier]?.name || currentTier}</strong> plan is active.
             </>
           ) : (
             <> Complete payment to unlock live alerts.</>
@@ -192,16 +182,13 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
           )}
 
           <div className="pricing-footer">
-            <p>
-              All plans include a {trialDays}-day free trial. After payment, open TradingView for accurate alerts.
-            </p>
+            <p>After payment, open TradingView for accurate alerts.</p>
           </div>
         </>
       ) : (
         <Checkout
           tier={selectedTier}
           tierData={tiers[selectedTier]}
-          trialDays={trialDays}
           onBack={() => setShowCheckout(false)}
           onSubscriptionUpdated={onSubscriptionUpdated}
           onNavigateDashboard={onNavigateDashboard}

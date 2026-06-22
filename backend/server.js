@@ -12,7 +12,7 @@ dotenv.config();
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
-const { TIERS, TRIAL_DAYS, PAYMENT_CONFIG, getPublicTiers, FEATURE_MATRIX } = require('./config/subscriptions');
+const { TIERS, PAYMENT_CONFIG, getPublicTiers, FEATURE_MATRIX } = require('./config/subscriptions');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
 const MarketScannerService = require('./services/MarketScannerService');
@@ -273,7 +273,7 @@ app.get('/api/v1/signals', requireAuth, requireSubscription, requireTierFeature(
 // ===== SUBSCRIPTION ENDPOINTS =====
 
 app.get('/api/tiers', (req, res) => {
-  res.json({ trialDays: TRIAL_DAYS, tiers: getPublicTiers(), featureMatrix: FEATURE_MATRIX });
+  res.json({ tiers: getPublicTiers(), featureMatrix: FEATURE_MATRIX });
 });
 
 app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, async (req, res) => {
@@ -293,17 +293,15 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
 
     if (provider === 'mock') {
       const mockPaymentId = `mock_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const trialEnds = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
       user = await UserConfig.findByIdAndUpdate(
         userId,
         {
           phone: phone || user.phone,
           subscription: {
             tier,
-            status: 'trial',
+            status: 'pending',
             provider: 'mock',
-            providerOrderId: mockPaymentId,
-            trialEnds
+            providerOrderId: mockPaymentId
           },
           updatedAt: new Date()
         },
@@ -381,8 +379,7 @@ app.get('/api/subscription/me', requireAuth, (req, res) => {
     user: sanitizeUser(req.user),
     tierFeatures: getTierFeatures(req.user.subscription),
     tierDisplayName: getTierDisplayName(tier),
-    allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription),
-    trialDays: TRIAL_DAYS
+    allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
   });
 });
 

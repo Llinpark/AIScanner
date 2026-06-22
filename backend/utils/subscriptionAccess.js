@@ -13,12 +13,6 @@ function isSubscriptionActive(subscription) {
     }
     return true;
   }
-  if (subscription.status === 'trial') {
-    if (subscription.trialEnds && new Date(subscription.trialEnds) < new Date()) {
-      return false;
-    }
-    return true;
-  }
   return false;
 }
 

@@ -73,8 +73,6 @@ const TIERS = {
   }
 };
 
-const TRIAL_DAYS = 7;
-
 // Enforceable limits per tier
 const TIER_FEATURES = {
   basic: {
@@ -194,7 +192,6 @@ module.exports = {
   FEATURE_MATRIX,
   ALL_CURRENCY_PAIRS,
   ALL_TIMEFRAMES,
-  TRIAL_DAYS,
   PAYMENT_CONFIG,
   getPublicTiers
 };

@@ -16,12 +16,7 @@ const ALERT_LABELS = {
 
 function hasLiveAccess(subscription) {
   if (!subscription) return false;
-  if (subscription.status === 'active') return true;
-  if (subscription.status === 'trial') {
-    if (!subscription.trialEnds) return true;
-    return new Date(subscription.trialEnds) > new Date();
-  }
-  return false;
+  return subscription.status === 'active';
 }
 
 function AlertCard({ alert, showConfidence }) {

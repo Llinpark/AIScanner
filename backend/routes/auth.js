@@ -5,7 +5,6 @@ const devUserStore = require('../utils/devUserStore');
 const { hashPassword, comparePassword, signToken, sanitizeUser } = require('../utils/auth');
 const requireAuth = require('../middleware/requireAuth');
 const validateRequest = require('../middleware/validate');
-const { TRIAL_DAYS } = require('../config/subscriptions');
 const { registerValidators, loginValidators } = require('../validators/authValidators');
 
 const router = express.Router();
@@ -23,11 +22,9 @@ async function findUserByEmail(email) {
 }
 
 async function createUserRecord({ email, passwordHash, displayName, phone }) {
-  const trialEnds = new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
   const subscription = {
     tier: 'basic',
-    status: 'trial',
-    trialEnds,
+    status: 'inactive',
     createdAt: new Date(),
     updatedAt: new Date()
   };

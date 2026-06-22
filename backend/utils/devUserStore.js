@@ -49,14 +49,13 @@ function findByEmail(email) {
 
 function createUser({ email, passwordHash, displayName, phone, subscription }) {
   const id = randomUUID();
-  const trialEnds = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   return upsertUser(id, {
     id,
     email: String(email).trim().toLowerCase(),
     passwordHash,
     displayName: displayName || email.split('@')[0],
     phone: phone || '',
-    subscription: subscription || { status: 'trial', tier: 'basic', trialEnds },
+    subscription: subscription || { status: 'inactive', tier: 'basic' },
     createdAt: new Date().toISOString()
   });
 }
