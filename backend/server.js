@@ -410,7 +410,7 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Subscription activated! Open TradingView for live Entry, SL, and TP alerts.',
+      message: 'Subscription activated! Open TradingView for live Kaching Entry, Kaching Stop Loss, and Kaching Take Profit alerts.',
       user: sanitizeUser(user)
     });
   } catch (error) {
@@ -514,7 +514,7 @@ app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) =
     subscription: req.user.subscription,
     instructions: [
       'Open TradingView and add the KachingFx Structural Scanner indicator to your chart.',
-      'Create alerts for Entry, Stop Loss, Take Profit 1, Take Profit 2, and Take Profit 3.',
+      'Create alerts for Kaching Entry, Kaching Stop Loss, Kaching Take Profit 1, Kaching Take Profit 2, and Kaching Take Profit 3.',
       'Enable TradingView push/email notifications so alerts reach you in real time.',
       'Live signals from KachingFx are also delivered to this dashboard while your subscription is active.'
     ]
@@ -651,7 +651,7 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
       webhookUrl,
       instructions: [
         'Open TradingView → Pine Editor → paste this script and add it to your chart.',
-        'Create an alert on the chart for each level: Entry, Stop Loss, TP1, TP2, and TP3.',
+        'Create an alert on the chart for each level: Kaching Entry, Kaching Stop Loss, Kaching Take Profit 1, Kaching Take Profit 2, and Kaching Take Profit 3.',
         'Use TradingView notification settings (app push, email, or webhook) for real-time delivery.',
         'Your KachingFx subscription unlocks the live alert feed in this dashboard — no TradingView username linking required.'
       ]

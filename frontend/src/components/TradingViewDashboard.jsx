@@ -6,12 +6,12 @@ import { useAuth } from '../context/AuthContext';
 const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
 const ALERT_LABELS = {
-  entry: 'Entry',
-  stop_loss: 'Stop Loss',
-  take_profit_1: 'Take Profit 1',
-  take_profit_2: 'Take Profit 2',
-  take_profit_3: 'Take Profit 3',
-  signal: 'Signal'
+  entry: 'Kaching Entry',
+  stop_loss: 'Kaching Stop Loss',
+  take_profit_1: 'Kaching Take Profit 1',
+  take_profit_2: 'Kaching Take Profit 2',
+  take_profit_3: 'Kaching Take Profit 3',
+  signal: 'Kaching Signal'
 };
 
 function hasLiveAccess(subscription) {
@@ -30,13 +30,13 @@ function AlertCard({ alert, showConfidence }) {
       </div>
       <div className="alert-details">
         <DetailRow label="Symbol" value={alert.symbol} />
-        <DetailRow label="Entry" value={Number(alert.entry).toFixed(5)} />
+        <DetailRow label="Kaching Entry" value={Number(alert.entry).toFixed(5)} />
         <DetailRow
-          label="Stop Losses"
+          label="Kaching Stop Loss"
           value={`${Number(alert.stop_loss_1 ?? alert.stop_loss).toFixed(5)} / ${Number(alert.stop_loss_2 ?? alert.stop_loss).toFixed(5)} / ${Number(alert.stop_loss_3 ?? alert.stop_loss).toFixed(5)}`}
         />
         <DetailRow
-          label="Take Profits"
+          label="Kaching Take Profit"
           value={`${Number(alert.take_profit_1).toFixed(5)} / ${Number(alert.take_profit_2).toFixed(5)} / ${Number(alert.take_profit_3).toFixed(5)}`}
         />
         {showConfidence && alert.confidence > 0 && (
@@ -200,7 +200,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
       <div className="tv-header">
         <h2>TradingView Alert Setup</h2>
         <p>
-          After subscribing, open TradingView to receive accurate Entry, Stop Loss, Take Profit 1, 2, and 3 alerts.
+          After subscribing, open TradingView to receive accurate Kaching Entry, Kaching Stop Loss, and Kaching Take Profit alerts.
           No TradingView username linking is required.
         </p>
       </div>
@@ -245,7 +245,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
       {activeTab === 'live' && (
         <div className="tv-section">
           {!subscribed ? (
-            <div className="empty-state">Subscribe to receive live Entry, SL, and TP alerts.</div>
+            <div className="empty-state">Subscribe to receive live Kaching Entry, Kaching Stop Loss, and Kaching Take Profit alerts.</div>
           ) : (
             <>
               <div className="live-controls">
@@ -295,8 +295,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
               <h3>Open TradingView for accurate alerts</h3>
               <p>
                 Add the KachingFx indicator to your chart in TradingView. Create alerts for{' '}
-                <strong>Entry</strong>, <strong>Stop Loss</strong>, <strong>Take Profit 1</strong>,{' '}
-                <strong>Take Profit 2</strong>, and <strong>Take Profit 3</strong>.
+                <strong>Kaching Entry</strong>, <strong>Kaching Stop Loss</strong>, <strong>Kaching Take Profit 1</strong>,{' '}
+                <strong>Kaching Take Profit 2</strong>, and <strong>Kaching Take Profit 3</strong>.
                 Enable TradingView push or email notifications so alerts reach you instantly.
               </p>
               <button type="button" className="btn-toggle" onClick={() => setShowPineScript(!showPineScript)}>
@@ -317,7 +317,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing }
                     <ol>
                       <li>Open TradingView → Pine Editor → New script → paste the code below</li>
                       <li>Add the script to your chart</li>
-                      <li>Create alerts for Entry, Stop Loss, TP1, TP2, and TP3 with Webhook URL notifications</li>
+                      <li>Create alerts for Kaching Entry, Kaching Stop Loss, Kaching Take Profit 1, Kaching Take Profit 2, and Kaching Take Profit 3 with Webhook URL notifications</li>
                       <li>Enable TradingView mobile push notifications for real-time delivery</li>
                     </ol>
                   </div>

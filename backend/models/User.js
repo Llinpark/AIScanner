@@ -9,13 +9,12 @@ const UserConfigSchema = new mongoose.Schema({
 
   subscription: {
     tier: { type: String, enum: ['basic', 'professional', 'premium'], default: 'basic' },
-    status: { type: String, enum: ['inactive', 'pending', 'trial', 'active', 'cancelled'], default: 'inactive' },
+    status: { type: String, enum: ['inactive', 'pending', 'active', 'cancelled'], default: 'inactive' },
     provider: { type: String, enum: ['mpesa', 'paypal', 'mock'], default: null },
     providerCustomerId: { type: String },
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },
     current_period_end: { type: Date },
-    trialEnds: { type: Date },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
   },

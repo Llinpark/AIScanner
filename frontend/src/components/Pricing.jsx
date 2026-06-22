@@ -67,7 +67,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard }) 
         <div className="pricing-header">
           <img className="pricing-logo" src="/logo-1.png" alt="KachingFx" />
           <h1>Choose Your Trading Plan</h1>
-          <p>Create an account, subscribe, then open TradingView for live Entry, SL, and TP alerts.</p>
+          <p>Create an account, subscribe, then open TradingView for live Kaching Entry, Kaching Stop Loss, and Kaching Take Profit alerts.</p>
         </div>
         <AuthForm initialMode="register" onSuccess={() => {}} />
       </div>

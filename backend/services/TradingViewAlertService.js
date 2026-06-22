@@ -3,6 +3,7 @@ const Signal = require('../models/Signal');
 const UserConfig = require('../models/User');
 const { canAccessLiveAlerts } = require('../utils/subscriptionAccess');
 const devUserStore = require('../utils/devUserStore');
+const { ALERT_DISPLAY_NAMES } = require('../config/tradingview');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -56,18 +57,10 @@ function parseWebhookBody(body) {
 }
 
 function formatLiveAlertMessage(signal) {
-  const typeLabel = {
-    entry: 'ENTRY',
-    stop_loss: 'STOP LOSS',
-    take_profit_1: 'TAKE PROFIT 1',
-    take_profit_2: 'TAKE PROFIT 2',
-    take_profit_3: 'TAKE PROFIT 3',
-    signal: 'SIGNAL'
-  }[signal.alertType] || 'SIGNAL';
-
+  const typeLabel = ALERT_DISPLAY_NAMES[signal.alertType] || ALERT_DISPLAY_NAMES.signal;
   const sl2 = signal.stop_loss_2 ?? signal.stop_loss;
   const sl3 = signal.stop_loss_3 ?? signal.stop_loss;
-  return `${typeLabel} ${signal.direction.toUpperCase()} ${signal.symbol} | Entry ${signal.entry} | SL1 ${signal.stop_loss_1 ?? signal.stop_loss} | SL2 ${sl2} | SL3 ${sl3} | TP1 ${signal.take_profit_1} | TP2 ${signal.take_profit_2} | TP3 ${signal.take_profit_3}`;
+  return `${typeLabel} ${signal.direction.toUpperCase()} ${signal.symbol} | ${ALERT_DISPLAY_NAMES.entry} ${signal.entry} | ${ALERT_DISPLAY_NAMES.stop_loss} ${signal.stop_loss_1 ?? signal.stop_loss} | SL2 ${sl2} | SL3 ${sl3} | ${ALERT_DISPLAY_NAMES.take_profit_1} ${signal.take_profit_1} | ${ALERT_DISPLAY_NAMES.take_profit_2} ${signal.take_profit_2} | ${ALERT_DISPLAY_NAMES.take_profit_3} ${signal.take_profit_3}`;
 }
 
 function toLiveAlertPayload(signalDoc) {

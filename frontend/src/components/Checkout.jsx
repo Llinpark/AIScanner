@@ -174,8 +174,8 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
           <div className="success-message">
             <h3>Payment successful</h3>
             <p>
-              Your subscription is active. Open TradingView and follow the setup guide for Entry, Stop Loss, and Take
-              Profit 1, 2, and 3 alerts.
+              Your subscription is active. Open TradingView and follow the setup guide for Kaching Entry, Kaching Stop Loss, and Kaching
+              Take Profit alerts.
             </p>
             <button type="button" className="btn-dashboard" onClick={onNavigateDashboard || onBack}>
               Go to TradingView Setup

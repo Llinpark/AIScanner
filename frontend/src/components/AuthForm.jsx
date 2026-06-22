@@ -52,7 +52,7 @@ export default function AuthForm({ onSuccess, initialMode = 'login' }) {
         <p>
           {mode === 'login'
             ? 'Access your trading signals dashboard.'
-            : 'Sign up, subscribe, then open TradingView for Entry, SL, and TP alerts.'}
+            : 'Sign up, subscribe, then open TradingView for Kaching Entry, Kaching Stop Loss, and Kaching Take Profit alerts.'}
         </p>
 
         <form onSubmit={handleSubmit} className="auth-form">

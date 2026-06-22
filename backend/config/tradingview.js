@@ -44,7 +44,17 @@ const MOCK_HISTORICAL_DATA = {
   ]
 };
 
+const ALERT_DISPLAY_NAMES = {
+  entry: 'Kaching Entry',
+  stop_loss: 'Kaching Stop Loss',
+  take_profit_1: 'Kaching Take Profit 1',
+  take_profit_2: 'Kaching Take Profit 2',
+  take_profit_3: 'Kaching Take Profit 3',
+  signal: 'Kaching Signal'
+};
+
 module.exports = {
   TRADINGVIEW_CONFIG,
-  MOCK_HISTORICAL_DATA
+  MOCK_HISTORICAL_DATA,
+  ALERT_DISPLAY_NAMES
 };

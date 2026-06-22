@@ -34,10 +34,18 @@ avgVol = ta.sma(volume, 20)
 pipSize() =>
     str.contains(syminfo.ticker, "JPY") ? 0.01 : 0.0001
 
+kachingAlertLabel(string alertType) =>
+    alertType == "entry" ? "Kaching Entry" :
+     alertType == "stop_loss" ? "Kaching Stop Loss" :
+     alertType == "take_profit_1" ? "Kaching Take Profit 1" :
+     alertType == "take_profit_2" ? "Kaching Take Profit 2" :
+     alertType == "take_profit_3" ? "Kaching Take Profit 3" :
+     "Kaching Signal"
+
 buildPayload(string alertType, string pattern, string direction, float entry, float sl1, float sl2, float sl3, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
     tvUser = BROADCAST ? "" : TV_USERNAME
     bc = BROADCAST ? "true" : "false"
-    '{"symbol":"' + syminfo.tickerid + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl1, "#.#####") + ',"stop_loss_1":' + str.tostring(sl1, "#.#####") + ',"stop_loss_2":' + str.tostring(sl2, "#.#####") + ',"stop_loss_3":' + str.tostring(sl3, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"KachingFx ' + pattern + ' ' + alertType + '","tradingviewUsername":"' + tvUser + '","broadcast":' + bc + ',"secret":"' + WEBHOOK_SECRET + '"}'
+    '{"symbol":"' + syminfo.tickerid + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl1, "#.#####") + ',"stop_loss_1":' + str.tostring(sl1, "#.#####") + ',"stop_loss_2":' + str.tostring(sl2, "#.#####") + ',"stop_loss_3":' + str.tostring(sl3, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"' + kachingAlertLabel(alertType) + '","tradingviewUsername":"' + tvUser + '","broadcast":' + bc + ',"secret":"' + WEBHOOK_SECRET + '"}'
 
 calcLevels(string direction, float entry, float gapTop, float gapBot) =>
     pip = pipSize()
@@ -105,25 +113,25 @@ if perfectBullFVG
     [e, sl1, sl2, sl3, t1, t2, t3, _] = calcLevels("long", close, gapTopBull, gapBotBull)
     msg = buildPayload("entry", "perfect_fvg", "long", e, sl1, sl2, sl3, t1, t2, t3, gapTopBull, gapBotBull, 0.88)
     alert(msg, alert.freq_once_per_bar)
-    label.new(bar_index, low, "FVG LONG\nE:" + str.tostring(e) + "\nSL1:" + str.tostring(sl1), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
+    label.new(bar_index, low, "Kaching Entry\n" + str.tostring(e) + "\nKaching Stop Loss\n" + str.tostring(sl1), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
 
 if perfectBearFVG
     [e, sl1, sl2, sl3, t1, t2, t3, _] = calcLevels("short", close, gapTopBear, gapBotBear)
     msg = buildPayload("entry", "perfect_fvg", "short", e, sl1, sl2, sl3, t1, t2, t3, gapTopBear, gapBotBear, 0.88)
     alert(msg, alert.freq_once_per_bar)
-    label.new(bar_index, high, "FVG SHORT\nE:" + str.tostring(e) + "\nSL1:" + str.tostring(sl1), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
+    label.new(bar_index, high, "Kaching Entry\n" + str.tostring(e) + "\nKaching Stop Loss\n" + str.tostring(sl1), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
 
 if bullBreakConfirm
     [e, sl1, sl2, sl3, t1, t2, t3, _] = calcLevels("long", close, math.max(c2Open, c3h), c1h)
     msg = buildPayload("entry", "breakaway_gap", "long", e, sl1, sl2, sl3, t1, t2, t3, math.max(c2Open, c3h), c1h, 0.82)
     alert(msg, alert.freq_once_per_bar)
-    label.new(bar_index, low, "BREAK LONG", style=label.style_label_up, color=color.new(color.blue, 0), textcolor=color.white)
+    label.new(bar_index, low, "Kaching Entry", style=label.style_label_up, color=color.new(color.blue, 0), textcolor=color.white)
 
 if bearBreakConfirm
     [e, sl1, sl2, sl3, t1, t2, t3, _] = calcLevels("short", close, c1l, math.min(c2Open, c3l))
     msg = buildPayload("entry", "breakaway_gap", "short", e, sl1, sl2, sl3, t1, t2, t3, c1l, math.min(c2Open, c3l), 0.82)
     alert(msg, alert.freq_once_per_bar)
-    label.new(bar_index, high, "BREAK SHORT", style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white)
+    label.new(bar_index, high, "Kaching Entry", style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white)
 
 if SEND_CANDLE_FEED and barstate.isconfirmed
     feedMsg = '{"symbol":"' + syminfo.tickerid + '","alertType":"candle","pattern":"feed","open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"secret":"' + WEBHOOK_SECRET + '"}'

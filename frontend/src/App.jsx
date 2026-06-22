@@ -38,7 +38,7 @@ function AppContent() {
           <div>
             <h1>KachingFx AI Scanner</h1>
             <p>
-              Subscribe for live trading signals. Open TradingView for accurate Entry, Stop Loss, and Take Profit alerts.
+              Subscribe for live trading signals. Open TradingView for accurate Kaching Entry, Kaching Stop Loss, and Kaching Take Profit alerts.
             </p>
           </div>
         </div>

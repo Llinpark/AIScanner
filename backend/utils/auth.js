@@ -22,6 +22,15 @@ function verifyToken(token) {
   return jwt.verify(token, JWT_SECRET);
 }
 
+function normalizeSubscription(subscription) {
+  const sub = subscription || { status: 'inactive', tier: 'basic' };
+  if (sub.status === 'trial') {
+    return { ...sub, status: 'inactive', trialEnds: undefined };
+  }
+  const { trialEnds, ...rest } = sub;
+  return rest;
+}
+
 function sanitizeUser(user) {
   const obj = user.toObject ? user.toObject() : { ...user };
   delete obj.passwordHash;
@@ -30,7 +39,7 @@ function sanitizeUser(user) {
     email: obj.email,
     displayName: obj.displayName,
     phone: obj.phone,
-    subscription: obj.subscription || { status: 'inactive', tier: 'basic' },
+    subscription: normalizeSubscription(obj.subscription),
     createdAt: obj.createdAt
   };
 }

@@ -236,9 +236,9 @@ function buildActionableNotes(detection, levels) {
   const side = detection.direction.toUpperCase();
   return [
     `${detection.patternLabel}`,
-    `${side} ENTRY @ ${levels.entry}`,
-    `SL1 ${levels.stop_loss_1} | SL2 ${levels.stop_loss_2} | SL3 ${levels.stop_loss_3}`,
-    `TP1 ${levels.take_profit_1} | TP2 ${levels.take_profit_2} | TP3 ${levels.take_profit_3}`,
+    `${side} Kaching Entry @ ${levels.entry}`,
+    `Kaching Stop Loss SL1 ${levels.stop_loss_1} | SL2 ${levels.stop_loss_2} | SL3 ${levels.stop_loss_3}`,
+    `Kaching Take Profit 1 ${levels.take_profit_1} | Kaching Take Profit 2 ${levels.take_profit_2} | Kaching Take Profit 3 ${levels.take_profit_3}`,
     `Gap zone: ${detection.gapBottom} – ${detection.gapTop}`
   ].join(' | ');
 }
