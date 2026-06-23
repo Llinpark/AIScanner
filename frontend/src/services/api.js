@@ -35,6 +35,9 @@ export const subscriptionApi = {
   subscribe: payload => api.post('/api/subscribe', payload),
   getMe: () => api.get('/api/subscription/me'),
   confirmMockPayment: payload => api.post('/api/payments/mock/confirm', payload),
+  getMpesaStatus: checkoutRequestId => api.get(`/api/payments/mpesa/status/${checkoutRequestId}`),
+  confirmMpesaMock: payload => api.post('/api/payments/mpesa/mock-complete', payload),
+  confirmPaypalMock: payload => api.post('/api/payments/paypal/mock-complete', payload),
   getPerformanceSummary: () => api.get('/api/performance/summary')
 };
 

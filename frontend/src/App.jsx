@@ -12,6 +12,7 @@ function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
   const [signals, setSignals] = useState([]);
   const [currentPage, setCurrentPage] = useState('dashboard');
+  const [paymentNotice, setPaymentNotice] = useState('');
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -19,6 +20,30 @@ function AppContent() {
       .then(setSignals)
       .catch(err => console.error('Error fetching signals:', err.message));
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const paypalStatus = params.get('paypal');
+
+    if (!paypalStatus) return;
+
+    if (paypalStatus === 'success') {
+      refreshSubscription().then(() => {
+        setPaymentNotice('PayPal payment successful! Your subscription is now active.');
+        setCurrentPage('pricing');
+      });
+    } else if (paypalStatus === 'cancelled') {
+      setPaymentNotice('PayPal payment was cancelled.');
+      setCurrentPage('pricing');
+    } else if (paypalStatus === 'error') {
+      setPaymentNotice(`PayPal payment failed: ${params.get('message') || 'Unknown error'}`);
+      setCurrentPage('pricing');
+    } else if (paypalStatus === 'mock') {
+      setCurrentPage('pricing');
+    }
+
+    window.history.replaceState({}, '', window.location.pathname);
+  }, [refreshSubscription]);
 
   if (loading) {
     return (
@@ -79,6 +104,12 @@ function AppContent() {
           )}
         </nav>
       </header>
+
+      {paymentNotice && (
+        <div className="info-box" style={{ margin: '1rem 2rem' }}>
+          {paymentNotice}
+        </div>
+      )}
 
       {needsAuth ? (
         <AuthForm onSuccess={() => setCurrentPage('pricing')} />

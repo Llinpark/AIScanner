@@ -161,9 +161,11 @@ const PAYMENT_CONFIG = {
   mpesa: {
     consumerKey: process.env.MPESA_CONSUMER_KEY,
     consumerSecret: process.env.MPESA_CONSUMER_SECRET,
-    shortcode: process.env.MPESA_SHORTCODE,
+    shortcode: process.env.MPESA_SHORTCODE || '5337170',
     passkey: process.env.MPESA_PASSKEY,
-    callbackUrl: process.env.MPESA_CALLBACK_URL || 'http://localhost:4000/api/webhook/mpesa'
+    callbackUrl: process.env.MPESA_CALLBACK_URL || `${process.env.PUBLIC_BACKEND_URL || 'http://localhost:4000'}/api/webhook/mpesa`,
+    environment: process.env.MPESA_ENVIRONMENT || 'sandbox',
+    transactionType: 'CustomerBuyGoodsOnline'
   },
   paypal: {
     clientId: process.env.PAYPAL_CLIENT_ID,

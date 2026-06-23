@@ -13,6 +13,15 @@ const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
 const { TIERS, PAYMENT_CONFIG, getPublicTiers, FEATURE_MATRIX } = require('./config/subscriptions');
+const MpesaService = require('./services/MpesaService');
+const PayPalService = require('./services/PayPalService');
+const {
+  activateSubscription,
+  createPaymentTransaction,
+  completePaymentTransaction,
+  getPaymentStatus,
+  findPaymentByReference
+} = require('./services/SubscriptionService');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
 const MarketScannerService = require('./services/MarketScannerService');
@@ -288,6 +297,10 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
     );
 
     if (!user && !isDbReady()) {
+      user = devUserStore.upsertUser(userId, { phone: phone || req.user.phone });
+    }
+
+    if (!user) {
       return res.status(503).json({ message: 'Database unavailable. Try again shortly.' });
     }
 
@@ -308,6 +321,18 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         { new: true }
       );
 
+      if (!user && !isDbReady()) {
+        user = devUserStore.upsertUser(userId, {
+          phone: phone || req.user.phone,
+          subscription: {
+            tier,
+            status: 'pending',
+            provider: 'mock',
+            providerOrderId: mockPaymentId
+          }
+        });
+      }
+
       return res.json({
         success: true,
         message: 'Mock payment initiated',
@@ -317,7 +342,38 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
     }
 
     if (provider === 'mpesa') {
-      const stkRequestId = `stk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      if (!phone) {
+        return res.status(400).json({ message: 'Phone number is required for M-Pesa payment' });
+      }
+
+      const tierConfig = TIERS[tier];
+      let stkResult;
+
+      if (PAYMENT_CONFIG.mode === 'mock' || !MpesaService.isConfigured()) {
+        stkResult = {
+          checkoutRequestId: `stk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          merchantRequestId: `mr_${Date.now()}`,
+          customerMessage: 'Mock STK push — configure M-Pesa credentials for live payments'
+        };
+      } else {
+        stkResult = await MpesaService.initiateStkPush({
+          phone,
+          amount: tierConfig.price,
+          accountReference: userId,
+          description: `KachingFx ${tierConfig.name}`
+        });
+      }
+
+      await createPaymentTransaction({
+        userId,
+        tier,
+        provider: 'mpesa',
+        amount: tierConfig.price,
+        currency: tierConfig.currency,
+        providerReference: stkResult.checkoutRequestId,
+        merchantRequestId: stkResult.merchantRequestId
+      });
+
       user = await UserConfig.findByIdAndUpdate(
         userId,
         {
@@ -326,24 +382,69 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
             tier,
             status: 'pending',
             provider: 'mpesa',
-            providerOrderId: stkRequestId
+            providerOrderId: stkResult.checkoutRequestId
           },
           updatedAt: new Date()
         },
         { new: true }
       );
 
+      if (!user && !isDbReady()) {
+        user = devUserStore.upsertUser(userId, {
+          phone,
+          subscription: {
+            tier,
+            status: 'pending',
+            provider: 'mpesa',
+            providerOrderId: stkResult.checkoutRequestId
+          }
+        });
+      }
+
       return res.json({
         success: true,
-        message: 'M-Pesa STK push initiated. Check your phone for the prompt.',
+        message: stkResult.customerMessage || 'M-Pesa STK push initiated. Check your phone for the prompt.',
         user: sanitizeUser(user),
-        stkRequestId,
-        amount: TIERS[tier].price
+        stkRequestId: stkResult.checkoutRequestId,
+        checkoutRequestId: stkResult.checkoutRequestId,
+        amount: tierConfig.price,
+        tillNumber: PAYMENT_CONFIG.mpesa.shortcode,
+        mockMode: PAYMENT_CONFIG.mode === 'mock' || !MpesaService.isConfigured()
       });
     }
 
     if (provider === 'paypal') {
-      const checkoutId = `paypal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const tierConfig = TIERS[tier];
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const returnUrl = `${PUBLIC_BACKEND_URL}/api/payments/paypal/return?tier=${tier}`;
+      const cancelUrl = `${frontendUrl}?paypal=cancelled`;
+
+      let orderResult;
+
+      if (PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()) {
+        const mockOrderId = `paypal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        orderResult = {
+          orderId: mockOrderId,
+          approveUrl: `${frontendUrl}?paypal=mock&orderId=${mockOrderId}&tier=${tier}`
+        };
+      } else {
+        orderResult = await PayPalService.createOrder({
+          tier,
+          userId: userId.toString(),
+          returnUrl,
+          cancelUrl
+        });
+      }
+
+      await createPaymentTransaction({
+        userId,
+        tier,
+        provider: 'paypal',
+        amount: tierConfig.priceCents / 100,
+        currency: tierConfig.currencyPayPal,
+        providerReference: orderResult.orderId
+      });
+
       user = await UserConfig.findByIdAndUpdate(
         userId,
         {
@@ -351,19 +452,33 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
             tier,
             status: 'pending',
             provider: 'paypal',
-            providerOrderId: checkoutId
+            providerOrderId: orderResult.orderId
           },
           updatedAt: new Date()
         },
         { new: true }
       );
 
+      if (!user && !isDbReady()) {
+        user = devUserStore.upsertUser(userId, {
+          subscription: {
+            tier,
+            status: 'pending',
+            provider: 'paypal',
+            providerOrderId: orderResult.orderId
+          }
+        });
+      }
+
       return res.json({
         success: true,
         message: 'PayPal checkout session created',
         user: sanitizeUser(user),
-        checkoutId,
-        checkoutUrl: `https://sandbox.paypal.com/checkoutnow?token=${checkoutId}`
+        checkoutId: orderResult.orderId,
+        checkoutUrl: orderResult.approveUrl,
+        amount: tierConfig.priceCents / 100,
+        currency: tierConfig.currencyPayPal,
+        mockMode: PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()
       });
     }
   } catch (error) {
@@ -391,22 +506,13 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'paymentId and tier are required' });
     }
 
-    const user = await UserConfig.findByIdAndUpdate(
-      req.userId,
-      {
-        subscription: {
-          tier,
-          status: 'active',
-          provider: 'mock',
-          providerOrderId: paymentId,
-          current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-          updatedAt: new Date()
-        }
-      },
-      { new: true }
-    );
+    await completePaymentTransaction(paymentId, 'mock', { rawPayload: { mock: true } });
 
-    io.emit('subscription:updated', { userId: req.userId, subscription: user.subscription });
+    const user = await activateSubscription(
+      req.userId,
+      { tier, provider: 'mock', providerOrderId: paymentId },
+      io
+    );
 
     res.json({
       success: true,
@@ -416,6 +522,124 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
   } catch (error) {
     console.error('Mock payment confirm error:', error);
     res.status(500).json({ message: 'Unable to confirm mock payment', error: error.message });
+  }
+});
+
+app.get('/api/payments/mpesa/status/:checkoutRequestId', requireAuth, async (req, res) => {
+  try {
+    const { checkoutRequestId } = req.params;
+    const transaction = await getPaymentStatus(checkoutRequestId, 'mpesa', req.userId);
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    res.json({
+      status: transaction.status,
+      tier: transaction.tier,
+      failureReason: transaction.failureReason,
+      subscriptionActive: req.user.subscription?.status === 'active'
+    });
+  } catch (error) {
+    console.error('M-Pesa status error:', error);
+    res.status(500).json({ message: 'Unable to check payment status', error: error.message });
+  }
+});
+
+app.post('/api/payments/mpesa/mock-complete', requireAuth, async (req, res) => {
+  try {
+    const { checkoutRequestId, tier } = req.body;
+
+    if (!checkoutRequestId || !tier) {
+      return res.status(400).json({ message: 'checkoutRequestId and tier are required' });
+    }
+
+    const transaction = await getPaymentStatus(checkoutRequestId, 'mpesa', req.userId);
+    if (!transaction || transaction.status !== 'pending') {
+      return res.status(400).json({ message: 'No pending M-Pesa payment found' });
+    }
+
+    await completePaymentTransaction(checkoutRequestId, 'mpesa', { rawPayload: { mock: true } });
+
+    const user = await activateSubscription(
+      req.userId,
+      { tier, provider: 'mpesa', providerOrderId: checkoutRequestId },
+      io
+    );
+
+    res.json({
+      success: true,
+      message: 'M-Pesa payment confirmed (mock mode)',
+      user: sanitizeUser(user)
+    });
+  } catch (error) {
+    console.error('M-Pesa mock complete error:', error);
+    res.status(500).json({ message: 'Unable to confirm M-Pesa payment', error: error.message });
+  }
+});
+
+app.get('/api/payments/paypal/return', async (req, res) => {
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+  try {
+    const { token: orderId, tier } = req.query;
+
+    if (!orderId) {
+      return res.redirect(`${frontendUrl}?paypal=error&message=missing_order`);
+    }
+
+    const captureResult = await PayPalService.captureOrder(orderId);
+    const customId = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id
+      || captureResult.purchase_units?.[0]?.custom_id;
+    const [userId, capturedTier] = (customId || '').split(':');
+    const resolvedTier = tier || capturedTier || 'basic';
+
+    await completePaymentTransaction(orderId, 'paypal', { rawPayload: captureResult });
+
+    if (userId) {
+      await activateSubscription(
+        userId,
+        { tier: resolvedTier, provider: 'paypal', providerOrderId: orderId },
+        io
+      );
+    }
+
+    return res.redirect(`${frontendUrl}?paypal=success&tier=${resolvedTier}`);
+  } catch (error) {
+    console.error('PayPal return error:', error);
+    return res.redirect(`${frontendUrl}?paypal=error&message=${encodeURIComponent(error.message)}`);
+  }
+});
+
+app.post('/api/payments/paypal/mock-complete', requireAuth, async (req, res) => {
+  try {
+    const { orderId, tier } = req.body;
+
+    if (!orderId || !tier) {
+      return res.status(400).json({ message: 'orderId and tier are required' });
+    }
+
+    const transaction = await getPaymentStatus(orderId, 'paypal', req.userId);
+    if (!transaction || transaction.status !== 'pending') {
+      return res.status(400).json({ message: 'No pending PayPal payment found' });
+    }
+
+    await completePaymentTransaction(orderId, 'paypal', { rawPayload: { mock: true } });
+
+    const user = await activateSubscription(
+      req.userId,
+      { tier, provider: 'paypal', providerOrderId: orderId },
+      io
+    );
+
+    res.json({
+      success: true,
+      message: 'PayPal payment confirmed (mock mode)',
+      user: sanitizeUser(user)
+    });
+  } catch (error) {
+    console.error('PayPal mock complete error:', error);
+    res.status(500).json({ message: 'Unable to confirm PayPal payment', error: error.message });
   }
 });
 
@@ -442,8 +666,41 @@ app.get('/api/subscription/:username', async (req, res) => {
 
 app.post('/api/webhook/mpesa', async (req, res) => {
   try {
-    console.log('M-Pesa webhook received:', req.body);
-    res.status(200).json({ ResultCode: 0, ResultDesc: 'Received' });
+    console.log('M-Pesa webhook received:', JSON.stringify(req.body));
+    const callback = MpesaService.parseStkCallback(req.body);
+
+    if (!callback) {
+      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    }
+
+    const PaymentTransaction = require('./models/PaymentTransaction');
+    const transaction = await findPaymentByReference(callback.checkoutRequestId, 'mpesa');
+
+    if (!transaction) {
+      console.warn('M-Pesa callback for unknown transaction:', callback.checkoutRequestId);
+      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    }
+
+    if (callback.resultCode === 0) {
+      await completePaymentTransaction(callback.checkoutRequestId, 'mpesa', { rawPayload: callback });
+      await activateSubscription(
+        transaction.userId,
+        {
+          tier: transaction.tier,
+          provider: 'mpesa',
+          providerOrderId: callback.checkoutRequestId,
+          providerCustomerId: callback.mpesaReceiptNumber
+        },
+        io
+      );
+    } else {
+      await completePaymentTransaction(callback.checkoutRequestId, 'mpesa', {
+        rawPayload: callback,
+        failureReason: callback.resultDesc
+      });
+    }
+
+    res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
   } catch (error) {
     console.error('M-Pesa webhook error:', error);
     res.status(200).json({ ResultCode: 1, ResultDesc: 'Error' });
@@ -452,7 +709,33 @@ app.post('/api/webhook/mpesa', async (req, res) => {
 
 app.post('/api/webhook/paypal', async (req, res) => {
   try {
-    console.log('PayPal webhook received:', req.body);
+    console.log('PayPal webhook received:', req.body?.event_type);
+    const { eventType, customId, orderId } = PayPalService.parseWebhookEvent(req.body);
+
+    if (eventType === 'PAYMENT.CAPTURE.COMPLETED' || eventType === 'CHECKOUT.ORDER.APPROVED') {
+      const [userId, tier] = (customId || '').split(':');
+
+      if (userId && orderId) {
+        const existing = await getPaymentStatus(orderId, 'paypal');
+        if (existing && existing.status === 'pending') {
+          if (eventType === 'CHECKOUT.ORDER.APPROVED') {
+            try {
+              await PayPalService.captureOrder(orderId);
+            } catch (captureErr) {
+              console.warn('PayPal auto-capture skipped:', captureErr.message);
+            }
+          }
+
+          await completePaymentTransaction(orderId, 'paypal', { rawPayload: req.body });
+          await activateSubscription(
+            userId,
+            { tier: tier || existing.tier, provider: 'paypal', providerOrderId: orderId },
+            io
+          );
+        }
+      }
+    }
+
     res.status(200).json({ status: 'received' });
   } catch (error) {
     console.error('PayPal webhook error:', error);
