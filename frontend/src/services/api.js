@@ -41,6 +41,26 @@ export const subscriptionApi = {
   getPerformanceSummary: () => api.get('/api/performance/summary')
 };
 
+export const analyticsApi = {
+  getSummary: () => api.get('/api/analytics/summary'),
+  getTimeseries: () => api.get('/api/analytics/timeseries'),
+  getHistory: params => api.get('/api/analytics/history', { params })
+};
+
+export const journalApi = {
+  list: () => api.get('/api/journal'),
+  create: payload => api.post('/api/journal', payload),
+  update: (id, payload) => api.put(`/api/journal/${id}`, payload),
+  remove: id => api.delete(`/api/journal/${id}`)
+};
+
+export const telegramApi = {
+  getStatus: () => api.get('/api/telegram/status'),
+  createLinkCode: () => api.post('/api/telegram/link-code'),
+  unlink: () => api.post('/api/telegram/unlink'),
+  toggle: enabled => api.post('/api/telegram/toggle', { enabled })
+};
+
 export const tradingviewApi = {
   getSetup: () => api.get('/api/tradingview/setup'),
   getAlerts: (symbol) =>

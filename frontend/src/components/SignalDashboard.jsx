@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { io } from 'socket.io-client';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import OutcomeBadge, { RiskAnalysisCard } from './insights/RiskAnalysisCard';
 
 const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
@@ -9,8 +10,10 @@ const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
 const FEATURE_LABELS = [
   { key: 'showConfidence', label: 'Confidence Score', minTier: 'Pro' },
+  { key: 'riskAnalysis', label: 'Risk Analysis', minTier: 'Pro' },
+  { key: 'performanceDashboard', label: 'Analytics Dashboard', minTier: 'Pro' },
+  { key: 'tradeJournal', label: 'Trade Journal', minTier: 'Pro' },
   { key: 'newsFilter', label: 'News Filter', minTier: 'Pro' },
-  { key: 'performanceDashboard', label: 'Performance Dashboard', minTier: 'Pro' },
   { key: 'telegramAlerts', label: 'Telegram Alerts', minTier: 'Pro' },
   { key: 'multiMarketScanner', label: 'Multi-Market Scanner', minTier: 'Premium' },
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', minTier: 'Premium' },
@@ -32,6 +35,8 @@ export default function SignalDashboard({ initialSignals, subscription }) {
   const [allowedPairs, setAllowedPairs] = useState(['EUR/USD', 'GBP/USD']);
   const [tierDisplayName, setTierDisplayName] = useState('Basic');
   const [performance, setPerformance] = useState(null);
+  const [accountBalance, setAccountBalance] = useState(10000);
+  const [expandedId, setExpandedId] = useState(null);
 
   useEffect(() => {
     subscriptionApi
@@ -61,6 +66,12 @@ export default function SignalDashboard({ initialSignals, subscription }) {
       setSignals(prev => [newSignal, ...prev].slice(0, tierLimits.maxSignals || 50));
     });
 
+    socket.on('signal:outcome', updated => {
+      setSignals(prev =>
+        prev.map(s => (String(s._id) === String(updated._id) ? { ...s, ...updated } : s))
+      );
+    });
+
     return () => socket.disconnect();
   }, [token, isAuthenticated, tierLimits.maxSignals]);
 
@@ -73,7 +84,7 @@ export default function SignalDashboard({ initialSignals, subscription }) {
 
       {!hasAccess && (
         <div className="subscription-banner">
-          <p>⚠️ Your subscription is {subscription?.status || 'inactive'}. Go to Pricing to upgrade.</p>
+          <p>Your subscription is {subscription?.status || 'inactive'}. Go to Pricing to upgrade.</p>
         </div>
       )}
 
@@ -86,21 +97,23 @@ export default function SignalDashboard({ initialSignals, subscription }) {
 
       {tierLimits.performanceDashboard && performance && (
         <div className="performance-box">
-          <h3>Performance Dashboard</h3>
+          <h3>Performance Snapshot</h3>
           <div className="performance-grid">
             <div className="performance-stat">
-              <span>Total signals</span>
-              <strong>{performance.totalSignals}</strong>
+              <span>Win rate</span>
+              <strong>{performance.winRate ?? performance.winRateEstimate ?? 0}%</strong>
             </div>
             <div className="performance-stat">
-              <span>Long / Short</span>
-              <strong>
-                {performance.longSignals} / {performance.shortSignals}
-              </strong>
+              <span>Closed trades</span>
+              <strong>{performance.closedTrades ?? 0}</strong>
             </div>
             <div className="performance-stat">
-              <span>Win rate est.</span>
-              <strong>{performance.winRateEstimate}%</strong>
+              <span>Total R</span>
+              <strong>{performance.totalR ?? 0}R</strong>
+            </div>
+            <div className="performance-stat">
+              <span>Open trades</span>
+              <strong>{performance.openTrades ?? 0}</strong>
             </div>
           </div>
         </div>
@@ -110,35 +123,62 @@ export default function SignalDashboard({ initialSignals, subscription }) {
         {signals.length === 0 ? (
           <div className="signal-empty">No signals available for your plan pairs.</div>
         ) : (
-          signals.map(signal => (
-            <div key={signal._id || signal.timestamp} className="signal-item">
-              <div className="signal-header">
-                <span>{signal.symbol}</span>
-                {signal.pattern && <span className="pattern-badge">{signal.patternLabel || signal.pattern}</span>}
-                <strong>{signal.direction.toUpperCase()}</strong>
-              </div>
-              <div className="signal-row">
-                <span>Kaching Entry: {signal.entry.toFixed(5)}</span>
-                <span>Kaching SL: {(signal.stop_loss_1 ?? signal.stop_loss).toFixed(5)}</span>
-              </div>
-              <div className="signal-row">
-                <span>Kaching TP1: {signal.take_profit_1.toFixed(5)}</span>
-                <span>Kaching TP2: {signal.take_profit_2.toFixed(5)}</span>
-                <span>Kaching TP3: {signal.take_profit_3.toFixed(5)}</span>
-              </div>
-              <div className="signal-footer">
-                {tierLimits.showConfidence && signal.confidence != null ? (
-                  <small>Confidence: {(signal.confidence * 100).toFixed(0)}%</small>
-                ) : (
-                  <small>Confidence: upgrade to Pro</small>
-                )}
+          signals.map(signal => {
+            const signalId = signal._id || signal.timestamp;
+            const expanded = expandedId === signalId;
+
+            return (
+              <div key={signalId} className="signal-item">
+                <div className="signal-header">
+                  <span>{signal.symbol}</span>
+                  {signal.pattern && (
+                    <span className="pattern-badge">{signal.patternLabel || signal.pattern}</span>
+                  )}
+                  <OutcomeBadge outcome={signal.outcome} tradeStatus={signal.tradeStatus} />
+                  <strong>{signal.direction.toUpperCase()}</strong>
+                </div>
+                <div className="signal-row">
+                  <span>Kaching Entry: {signal.entry.toFixed(5)}</span>
+                  <span>Kaching SL: {(signal.stop_loss_1 ?? signal.stop_loss).toFixed(5)}</span>
+                </div>
+                <div className="signal-row">
+                  <span>Kaching TP1: {signal.take_profit_1.toFixed(5)}</span>
+                  <span>Kaching TP2: {signal.take_profit_2.toFixed(5)}</span>
+                  <span>Kaching TP3: {signal.take_profit_3.toFixed(5)}</span>
+                </div>
+                <div className="signal-footer">
+                  {tierLimits.showConfidence && signal.confidence != null ? (
+                    <small>Confidence: {(signal.confidence * 100).toFixed(0)}%</small>
+                  ) : (
+                    <small>Confidence: upgrade to Pro</small>
+                  )}
+                  {signal.outcomeR != null && <small>Result: {signal.outcomeR}R</small>}
+                  <span>{signal.notes}</span>
+                </div>
                 {tierLimits.aiTradeExplanation && signal.tradeExplanation && (
-                  <small className="ai-explanation">{signal.tradeExplanation}</small>
+                  <p className="ai-explanation">{signal.tradeExplanation}</p>
                 )}
-                <span>{signal.notes}</span>
+                {tierLimits.riskAnalysis && (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-small signal-expand-btn"
+                      onClick={() => setExpandedId(expanded ? null : signalId)}
+                    >
+                      {expanded ? 'Hide risk analysis' : 'Show risk analysis'}
+                    </button>
+                    {expanded && (
+                      <RiskAnalysisCard
+                        riskMetrics={signal.riskMetrics}
+                        accountBalance={accountBalance}
+                        onAccountBalanceChange={setAccountBalance}
+                      />
+                    )}
+                  </>
+                )}
               </div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
 
@@ -160,7 +200,9 @@ export default function SignalDashboard({ initialSignals, subscription }) {
           </p>
         )}
         {tierLimits.telegramAlerts && (
-          <p className="telegram-hint">Telegram alerts are enabled for your {TIER_LABELS[tierKey] || tierDisplayName} plan.</p>
+          <p className="telegram-hint">
+            Telegram alerts are enabled for your {TIER_LABELS[tierKey] || tierDisplayName} plan.
+          </p>
         )}
       </div>
     </div>

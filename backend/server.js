@@ -29,8 +29,18 @@ const {
   validateKachingEntrySignal
 } = require('./utils/kachingSignalLevels');
 const MarketScannerService = require('./services/MarketScannerService');
+const SignalEnrichmentService = require('./services/SignalEnrichmentService');
+const SignalOutcomeService = require('./services/SignalOutcomeService');
+const createAnalyticsRouter = require('./routes/analytics');
+const createJournalRouter = require('./routes/journal');
+const createTelegramRouter = require('./routes/telegram');
+const PineScriptGeneratorService = require('./services/PineScriptGeneratorService');
+const TelegramService = require('./services/TelegramService');
+const { buildAnalytics } = require('./utils/signalOutcome');
+const { verifyTradingViewWebhook } = require('./utils/webhookSecurity');
 const authRoutes = require('./routes/auth');
 const requireAuth = require('./middleware/requireAuth');
+const { resolveUserById } = require('./middleware/requireAuth');
 const requireSubscription = require('./middleware/requireSubscription');
 const requireTierFeature = require('./middleware/requireTierFeature');
 const requireTradingViewAccess = require('./middleware/requireTradingViewAccess');
@@ -49,7 +59,6 @@ const {
   getAllowedCurrencyPairs
 } = require('./utils/subscriptionAccess');
 const { verifyToken, sanitizeUser } = require('./utils/auth');
-const { resolveUserById } = require('./middleware/requireAuth');
 
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
 const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
@@ -72,10 +81,17 @@ async function resolveUser(username) {
   }
 }
 
-function verifyTradingViewSecret(req) {
-  const headerSecret = req.headers['x-tradingview-secret'];
-  const bodySecret = req.body.secret;
-  return TRADINGVIEW_WEBHOOK_SECRET && (headerSecret === TRADINGVIEW_WEBHOOK_SECRET || bodySecret === TRADINGVIEW_WEBHOOK_SECRET);
+async function assertTradingViewWebhook(req, res) {
+  const auth = await verifyTradingViewWebhook(req, resolveUserById);
+  if (!auth.ok) {
+    res.status(401).json({
+      message: 'Invalid webhook authentication',
+      reason: auth.reason || 'unauthorized'
+    });
+    return null;
+  }
+  req.webhookAuth = auth;
+  return auth;
 }
 
 function parseTradingViewPayload(body) {
@@ -112,9 +128,15 @@ const io = new Server(server, {
   }
 });
 
+function captureRawBody(req, res, buf) {
+  if (buf?.length) {
+    req.rawBody = buf;
+  }
+}
+
 app.use(cors());
-app.use(express.json({ limit: '1mb' }));
-app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'] }));
+app.use(express.json({ limit: '1mb', verify: captureRawBody }));
+app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], verify: captureRawBody }));
 
 const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/kachingscanner';
 mongoose.connect(mongoUri, {
@@ -131,19 +153,25 @@ app.use('/api/auth', authRoutes);
 
 const inMemorySignals = [];
 
+app.use('/api/analytics', createAnalyticsRouter({ inMemorySignals, isDbReady }));
+app.use('/api/journal', createJournalRouter());
+app.use('/api/telegram', createTelegramRouter());
+
 app.post('/api/signals', async (req, res) => {
   try {
     const payload = req.body;
     validateKachingEntrySignal(payload);
 
     if (!isDbReady()) {
-      const fallback = Object.assign({}, payload, { createdAt: new Date() });
+      const enriched = SignalEnrichmentService.enrichSignal(payload);
+      const fallback = Object.assign({}, enriched, { createdAt: new Date(), _id: `mem_${Date.now()}` });
       inMemorySignals.unshift(fallback);
       io.emit('signal:update', fallback);
       return res.status(201).json({ fallback: true, signal: fallback });
     }
 
-    const signal = new Signal(payload);
+    const enriched = SignalEnrichmentService.enrichSignal(payload);
+    const signal = new Signal(enriched);
     const saved = await signal.save();
     io.emit('signal:update', saved);
 
@@ -163,11 +191,23 @@ app.post('/api/signals', async (req, res) => {
   }
 });
 
+app.post('/api/webhook/telegram', async (req, res) => {
+  try {
+    const result = await TelegramService.handleWebhook(req);
+    if (!result.ok) {
+      return res.status(result.status || 401).json({ message: result.message || 'Unauthorized' });
+    }
+    res.json({ ok: true });
+  } catch (error) {
+    console.error('Telegram webhook error:', error);
+    res.status(500).json({ message: 'Telegram webhook processing failed', error: error.message });
+  }
+});
+
 app.post('/api/webhook/tradingview', async (req, res) => {
   try {
-    if (!verifyTradingViewSecret(req)) {
-      return res.status(401).json({ message: 'Invalid webhook secret' });
-    }
+    const auth = await assertTradingViewWebhook(req, res);
+    if (!auth) return;
 
     const parsed = TradingViewAlertService.parseWebhookBody(req.body);
     const isStructuredEntry =
@@ -193,7 +233,7 @@ app.post('/api/webhook/tradingview', async (req, res) => {
       return res.status(201).json({ success: true, mode: 'candle_scan', scanResult });
     }
 
-    const result = await TradingViewAlertService.processIncomingWebhook(io, req.body);
+    const result = await TradingViewAlertService.processIncomingWebhook(io, req.body, inMemorySignals);
     return res.status(201).json({ success: true, ...result });
   } catch (error) {
     console.error('TradingView webhook error:', error);
@@ -908,28 +948,26 @@ app.get('/api/tradingview/accounts/:username', async (req, res) => {
 
 app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, res) => {
   try {
-    const pinePath = path.join(__dirname, 'tradingview-bot.pine');
-    let script = fs.readFileSync(pinePath, 'utf8');
-    const webhookUrl = `${PUBLIC_BACKEND_URL}/api/webhook/tradingview`;
-    const secret = TRADINGVIEW_WEBHOOK_SECRET || 'your_webhook_secret';
-
-    script = script
-      .replace('http://localhost:4000/api/webhook/tradingview', webhookUrl)
-      .replace('your_webhook_secret', secret);
+    const generated = PineScriptGeneratorService.generateForUser(req.user, {
+      webhookUrl: `${PUBLIC_BACKEND_URL}/api/webhook/tradingview`,
+      webhookSecret: TRADINGVIEW_WEBHOOK_SECRET,
+      publicBackendUrl: PUBLIC_BACKEND_URL
+    });
 
     res.json({
-      script,
-      webhookUrl,
-      instructions: [
-        'Open TradingView → Pine Editor → paste this script and add it to your chart.',
-        'Create an alert on the chart for each level: Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3.',
-        'Use TradingView notification settings (app push, email, or webhook) for real-time delivery.',
-        'Your KachingFx subscription unlocks the live alert feed in this dashboard — no TradingView username linking required.'
-      ]
+      script: generated.script,
+      webhookUrl: generated.webhookUrl,
+      scriptId: generated.scriptId,
+      tier: generated.tier,
+      tierLabel: generated.tierLabel,
+      subscriberLabel: generated.subscriberLabel,
+      generatedAt: generated.generatedAt,
+      security: generated.security,
+      instructions: generated.instructions
     });
   } catch (error) {
     console.error('Pine script error:', error);
-    res.status(500).json({ message: 'Unable to load Pine Script', error: error.message });
+    res.status(500).json({ message: 'Unable to generate Pine Script', error: error.message });
   }
 });
 
@@ -995,19 +1033,16 @@ app.get('/api/performance/summary', requireAuth, requireSubscription, requireTie
   try {
     const cutoff = historyCutoffDate(req.user.subscription);
     const signals = isDbReady()
-      ? await Signal.find({ createdAt: { $gte: cutoff } }).sort({ createdAt: -1 }).limit(500)
+      ? await Signal.find({ createdAt: { $gte: cutoff } }).sort({ createdAt: -1 }).limit(1000).lean()
       : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
 
     const filtered = filterSignalsForTier(signals, req.user.subscription);
-    const wins = filtered.filter(s => s.direction === 'long' || s.direction === 'buy').length;
-    const total = filtered.length;
+    const analytics = buildAnalytics(filtered);
 
     res.json({
-      totalSignals: total,
-      longSignals: wins,
-      shortSignals: total - wins,
-      winRateEstimate: total ? Math.round((wins / total) * 100) : 0,
-      historyDays: getTierFeatures(req.user.subscription).historyDays
+      ...analytics,
+      historyDays: getTierFeatures(req.user.subscription).historyDays,
+      winRateEstimate: analytics.winRate
     });
   } catch (error) {
     console.error('Performance summary error:', error);
@@ -1046,9 +1081,8 @@ app.get('/api/scanner/patterns', requireAuth, (req, res) => {
 
 app.post('/api/scanner/candle', async (req, res) => {
   try {
-    if (!verifyTradingViewSecret(req)) {
-      return res.status(401).json({ message: 'Invalid webhook secret' });
-    }
+    const auth = await assertTradingViewWebhook(req, res);
+    if (!auth) return;
 
     const { symbol, open, high, low, close, volume, time } = req.body;
     if (!symbol || open == null || high == null || low == null || close == null) {
@@ -1180,4 +1214,10 @@ listenOnPort(activePort);
 server.on('listening', () => {
   console.log(`Backend listening on http://${host}:${activePort}`);
   MarketScannerService.startAutoScanner(io);
+  if (TelegramService.isConfigured()) {
+    TelegramService.startPolling();
+    if (!process.env.TELEGRAM_USE_POLLING) {
+      console.log('[Telegram] Bot configured. Set TELEGRAM_USE_POLLING=true for local dev or configure webhook for production.');
+    }
+  }
 });

@@ -65,10 +65,16 @@ function listActiveSubscribers() {
   return Object.values(store);
 }
 
+function findByChatId(chatId) {
+  const store = readStore();
+  return Object.values(store).find(u => String(u.telegram?.chatId || '') === String(chatId)) || null;
+}
+
 module.exports = {
   upsertUser,
   findById,
   findByEmail,
+  findByChatId,
   createUser,
   listActiveSubscribers
 };

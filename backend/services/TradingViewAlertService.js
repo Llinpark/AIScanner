@@ -9,6 +9,8 @@ const {
   validateKachingEntrySignal,
   formatKachingAlertMessage
 } = require('../utils/kachingSignalLevels');
+const SignalOutcomeService = require('../services/SignalOutcomeService');
+const TelegramService = require('../services/TelegramService');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -87,6 +89,11 @@ function toLiveAlertPayload(signalDoc) {
     take_profit_3: signal.take_profit_3,
     confidence: signal.confidence,
     notes: signal.notes,
+    tradeExplanation: signal.tradeExplanation,
+    riskMetrics: signal.riskMetrics,
+    outcome: signal.outcome,
+    tradeStatus: signal.tradeStatus,
+    outcomeR: signal.outcomeR,
     userId: signal.userId,
     createdAt: signal.createdAt,
     message: formatLiveAlertMessage(signal)
@@ -99,7 +106,8 @@ function toSubscriberRecord(user) {
     id: user._id?.toString() || user.id,
     email: user.email,
     displayName: user.displayName,
-    subscription: user.subscription
+    subscription: user.subscription,
+    telegram: user.telegram || null
   };
 }
 
@@ -123,9 +131,17 @@ async function findActiveSubscribers() {
   }
 }
 
-async function saveSignal(signalData) {
+async function saveSignal(signalData, inMemorySignals) {
   if (!isDbConnected()) {
-    return { ...signalData, createdAt: new Date(), _id: null };
+    const saved = {
+      ...signalData,
+      createdAt: new Date(),
+      _id: signalData._id || `mem_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
+    };
+    if (Array.isArray(inMemorySignals)) {
+      inMemorySignals.unshift(saved);
+    }
+    return saved;
   }
 
   try {
@@ -137,7 +153,7 @@ async function saveSignal(signalData) {
   }
 }
 
-async function deliverLiveAlert(io, signalDoc) {
+async function deliverLiveAlert(io, signalDoc, subscriber = null) {
   const payload = toLiveAlertPayload(signalDoc);
 
   if (payload.userId) {
@@ -145,27 +161,37 @@ async function deliverLiveAlert(io, signalDoc) {
   }
 
   io.emit('signal:update', signalDoc);
+
+  if (subscriber) {
+    TelegramService.notifySubscriber(subscriber, signalDoc).catch(err =>
+      console.warn('[Telegram] notify failed:', err.message)
+    );
+  }
+
   return payload;
 }
 
-async function broadcastToSubscribers(io, signalData) {
+async function broadcastToSubscribers(io, signalData, inMemorySignals) {
   const subscribers = await findActiveSubscribers();
   const results = [];
 
   if (subscribers.length === 0) {
-    const saved = await saveSignal({ ...signalData, isBroadcast: true });
+    const saved = await saveSignal({ ...signalData, isBroadcast: true }, inMemorySignals);
     await deliverLiveAlert(io, saved);
     return { delivered: 0, subscribers: [], broadcastSaved: true };
   }
 
   for (const subscriber of subscribers) {
-    const saved = await saveSignal({
-      ...signalData,
-      userId: subscriber.id,
-      isBroadcast: true
-    });
+    const saved = await saveSignal(
+      {
+        ...signalData,
+        userId: subscriber.id,
+        isBroadcast: true
+      },
+      inMemorySignals
+    );
 
-    const payload = await deliverLiveAlert(io, saved);
+    await deliverLiveAlert(io, saved, subscriber);
     results.push({ userId: subscriber.id, email: subscriber.email });
   }
 
@@ -202,17 +228,22 @@ function buildSignalData(body) {
   return signalData;
 }
 
-async function processIncomingWebhook(io, rawBody) {
+async function processIncomingWebhook(io, rawBody, inMemorySignals = []) {
   const body = parseWebhookBody(rawBody);
-  const signalData = buildSignalData(body);
+  const baseData = buildSignalData(body);
+  const { signalData, updatedEntry } = await SignalOutcomeService.processSignalLifecycle(
+    baseData,
+    inMemorySignals
+  );
 
-  if (!signalData.symbol || !signalData.direction) {
-    throw new Error('Invalid TradingView payload: symbol and direction are required');
+  if (updatedEntry) {
+    io.emit('signal:outcome', updatedEntry);
   }
 
   return {
     mode: 'broadcast',
-    ...(await broadcastToSubscribers(io, signalData))
+    outcomeLinked: Boolean(updatedEntry),
+    ...(await broadcastToSubscribers(io, signalData, inMemorySignals))
   };
 }
 

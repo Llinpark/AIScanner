@@ -7,6 +7,15 @@ const UserConfigSchema = new mongoose.Schema({
   phone: { type: String },
   preferences: { type: mongoose.Schema.Types.Mixed, default: {} },
 
+  telegram: {
+    chatId: { type: String, default: null },
+    username: { type: String, default: null },
+    linkedAt: { type: Date, default: null },
+    enabled: { type: Boolean, default: true },
+    linkCode: { type: String, default: null },
+    linkCodeExpiresAt: { type: Date, default: null }
+  },
+
   subscription: {
     tier: { type: String, enum: ['basic', 'professional', 'premium'], default: 'basic' },
     status: { type: String, enum: ['inactive', 'pending', 'active', 'cancelled'], default: 'inactive' },

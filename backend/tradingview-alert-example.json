@@ -1,4 +1,6 @@
 {
+  "userId": "your_user_id_from_pine_script",
+  "licenseToken": "kls_v1....generated_in_personal_pine_script",
   "secret": "your_tradingview_webhook_secret_here",
   "symbol": "EURUSD",
   "direction": "long",
@@ -12,5 +14,5 @@
   "confidence": 0.85,
   "message": "Kaching Entry",
   "broadcast": true,
-  "tradingviewUsername": "barasajohn1985"
+  "tradingviewUsername": "your_tradingview_username"
 }

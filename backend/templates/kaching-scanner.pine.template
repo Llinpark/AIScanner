@@ -1,23 +1,27 @@
 //@version=5
-// Legacy reference copy — production scripts are generated from templates/kaching-scanner.pine.template
-indicator("KachingFx Structural Scanner", overlay=true, max_labels_count=50)
+indicator("{{INDICATOR_TITLE}}", overlay=true, max_labels_count=50)
+
+// Generated for: {{SUBSCRIBER_LABEL}}
+// Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
 
 // ===== CONFIGURATION =====
-WEBHOOK_URL = input.string("http://localhost:4000/api/webhook/tradingview", "Webhook URL", group="KachingFx")
-WEBHOOK_SECRET = input.string("your_webhook_secret", "Webhook Secret", group="KachingFx")
-SEND_CANDLE_FEED = input.bool(true, "Send each bar to server scanner", group="KachingFx")
+WEBHOOK_URL = input.string("{{WEBHOOK_URL}}", "Webhook URL (paste in TV alert)", group="KachingFx")
+WEBHOOK_SECRET = input.string("{{WEBHOOK_SECRET}}", "Webhook Secret (legacy)", group="KachingFx")
+LICENSE_TOKEN = input.string("{{LICENSE_TOKEN}}", "License Token", group="KachingFx")
+TV_USERNAME = input.string("{{TV_USERNAME}}", "TradingView Username (optional)", group="KachingFx")
+SEND_CANDLE_FEED = input.bool({{SEND_CANDLE_FEED}}, "Send each bar to server scanner", group="KachingFx")
 
-minBodyRatio = input.float(0.62, "Perfect FVG: min C2 body/range", minval=0.4, maxval=0.95, group="Pattern A — FVG")
-maxWickRatio = input.float(0.28, "Perfect FVG: max C2 wick/range", minval=0.05, maxval=0.5, group="Pattern A — FVG")
-volMult = input.float(1.15, "Perfect FVG: volume multiplier", minval=1.0, maxval=3.0, group="Pattern A — FVG")
+minBodyRatio = input.float({{MIN_BODY_RATIO}}, "Perfect FVG: min C2 body/range", minval=0.4, maxval=0.95, group="Pattern A — FVG")
+maxWickRatio = input.float({{MAX_WICK_RATIO}}, "Perfect FVG: max C2 wick/range", minval=0.05, maxval=0.5, group="Pattern A — FVG")
+volMult = input.float({{VOL_MULT}}, "Perfect FVG: volume multiplier", minval=1.0, maxval=3.0, group="Pattern A — FVG")
 
-c1DispBody = input.float(0.55, "Breakaway: C1 min body/range", minval=0.35, maxval=0.95, group="Pattern B — Breakaway")
-minGapRatio = input.float(0.08, "Breakaway: min gap / C1 range", minval=0.02, maxval=0.5, group="Pattern B — Breakaway")
+c1DispBody = input.float({{C1_DISP_BODY}}, "Breakaway: C1 min body/range", minval=0.35, maxval=0.95, group="Pattern B — Breakaway")
+minGapRatio = input.float({{MIN_GAP_RATIO}}, "Breakaway: min gap / C1 range", minval=0.02, maxval=0.5, group="Pattern B — Breakaway")
 
-slPips = input.int(30, "Kaching SL (pips)", minval=1, group="Risk")
-tp1R = input.float(1.0, "Kaching TP1 (R)", group="Risk")
-tp2R = input.float(2.0, "Kaching TP2 (R)", group="Risk")
-tp3R = input.float(3.0, "Kaching TP3 (R)", group="Risk")
+slPips = input.int({{SL_PIPS}}, "Kaching SL (pips)", minval=1, group="Risk")
+tp1R = input.float({{TP1_R}}, "Kaching TP1 (R)", group="Risk")
+tp2R = input.float({{TP2_R}}, "Kaching TP2 (R)", group="Risk")
+tp3R = input.float({{TP3_R}}, "Kaching TP3 (R)", group="Risk")
 
 // ===== HELPERS =====
 bodyRatio(c) =>
@@ -40,7 +44,7 @@ kachingAlertLabel(string alertType) =>
      "Kaching Signal"
 
 buildPayload(string alertType, string pattern, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
-    '{"symbol":"' + syminfo.tickerid + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl, "#.#####") + ',"stop_loss_1":' + str.tostring(sl, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"' + kachingAlertLabel(alertType) + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
+    '{"symbol":"' + syminfo.tickerid + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl, "#.#####") + ',"stop_loss_1":' + str.tostring(sl, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"' + kachingAlertLabel(alertType) + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
 
 calcLevels(string direction, float entry, float gapTop, float gapBot) =>
     pip = pipSize()
@@ -131,7 +135,7 @@ if bearBreakConfirm
 
 // Feed each closed bar to backend scanner
 if SEND_CANDLE_FEED and barstate.isconfirmed
-    feedMsg = '{"symbol":"' + syminfo.tickerid + '","alertType":"candle","pattern":"feed","open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"secret":"' + WEBHOOK_SECRET + '"}'
+    feedMsg = '{"symbol":"' + syminfo.tickerid + '","alertType":"candle","pattern":"feed","open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","secret":"' + WEBHOOK_SECRET + '"}'
     alert(feedMsg, alert.freq_once_per_bar)
 
 // Visual gap zones

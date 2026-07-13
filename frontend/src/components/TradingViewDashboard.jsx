@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { io } from 'socket.io-client';
 import { tradingviewApi, subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import TelegramSetup from './TelegramSetup';
 
 const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
@@ -71,6 +72,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   }, [initialTab]);
   const [showPineScript, setShowPineScript] = useState(false);
   const [pineScript, setPineScript] = useState('');
+  const [pineMeta, setPineMeta] = useState(null);
   const [socketStatus, setSocketStatus] = useState('disconnected');
 
   const [tierLimits, setTierLimits] = useState({
@@ -115,6 +117,15 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     try {
       const response = await tradingviewApi.getPineScript();
       setPineScript(response.data.script);
+      setPineMeta({
+        webhookUrl: response.data.webhookUrl,
+        scriptId: response.data.scriptId,
+        tierLabel: response.data.tierLabel,
+        subscriberLabel: response.data.subscriberLabel,
+        generatedAt: response.data.generatedAt,
+        security: response.data.security,
+        instructions: response.data.instructions || []
+      });
     } catch (error) {
       console.error('Failed to load Pine Script:', error);
     }
@@ -184,12 +195,6 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     }
   };
 
-  const requestNotifications = () => {
-    if (typeof Notification !== 'undefined') {
-      Notification.requestPermission();
-    }
-  };
-
   const copyPineScript = () => {
     navigator.clipboard.writeText(pineScript);
     alert('Pine Script copied to clipboard!');
@@ -239,6 +244,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
         <button type="button" className={`tab-btn ${activeTab === 'setup' ? 'active' : ''}`} onClick={() => setActiveTab('setup')}>
           TradingView Setup
         </button>
+        <button type="button" className={`tab-btn ${activeTab === 'telegram' ? 'active' : ''}`} onClick={() => setActiveTab('telegram')}>
+          Telegram
+        </button>
         <button type="button" className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>
           History
         </button>
@@ -262,8 +270,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                   Refresh
                 </button>
               {tierLimits.telegramAlerts && (
-                <button type="button" className="btn-toggle" onClick={requestNotifications}>
-                  Enable browser / Telegram-style notifications
+                <button type="button" className="btn-toggle" onClick={() => setActiveTab('telegram')}>
+                  Set up Telegram bot alerts
                 </button>
               )}
               </div>
@@ -315,12 +323,42 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               )}
               {showPineScript && pineScript && (
                 <div className="pine-script-box">
+                  {pineMeta && (
+                    <div className="pine-script-meta">
+                      <p>
+                        <strong>Generated for:</strong> {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
+                      </p>
+                      <p>
+                        <strong>Webhook URL:</strong> <code>{pineMeta.webhookUrl}</code>
+                      </p>
+                      <p>
+                        <strong>Script ID:</strong> {pineMeta.scriptId}
+                        {pineMeta.generatedAt && (
+                          <span> · {new Date(pineMeta.generatedAt).toLocaleString()}</span>
+                        )}
+                      </p>
+                      {pineMeta.security && (
+                        <p>
+                          <strong>Security:</strong> Each alert includes your personal{' '}
+                          <code>licenseToken</code>. API clients may also send{' '}
+                          <code>{pineMeta.security.signatureHeader}</code> ({pineMeta.security.signatureFormat}).
+                        </p>
+                      )}
+                    </div>
+                  )}
                   <div className="pine-script-instructions">
                     <ol>
-                      <li>Open TradingView → Pine Editor → New script → paste the code below</li>
-                      <li>Add the script to your chart</li>
-                      <li>Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 with Webhook URL notifications</li>
-                      <li>Enable TradingView mobile push notifications for real-time delivery</li>
+                      {(pineMeta?.instructions?.length
+                        ? pineMeta.instructions
+                        : [
+                            'Open TradingView → Pine Editor → New script → paste the code below',
+                            'Add the script to your chart',
+                            'Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 with Webhook URL notifications',
+                            'Enable TradingView mobile push notifications for real-time delivery'
+                          ]
+                      ).map(step => (
+                        <li key={step}>{step}</li>
+                      ))}
                     </ol>
                   </div>
                   <div className="pine-script-code-container">
@@ -332,6 +370,16 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 </div>
               )}
             </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'telegram' && (
+        <div className="tv-section">
+          {!subscribed ? (
+            <div className="empty-state">Subscribe to link the KachingFx Telegram bot.</div>
+          ) : (
+            <TelegramSetup tierLimits={tierLimits} onNavigatePricing={onNavigatePricing} />
           )}
         </div>
       )}

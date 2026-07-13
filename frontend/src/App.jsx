@@ -8,6 +8,7 @@ import Footer from './components/Footer';
 import Hero from './components/Hero';
 import RiskDisclosure from './components/RiskDisclosure';
 import Contact from './components/Contact';
+import InsightsHub from './components/InsightsHub';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
 
@@ -115,6 +116,14 @@ function AppContent() {
           initialMode="register"
           onSuccess={() => setCurrentPage('pricing')}
         />
+      );
+    }
+
+    if (currentPage === 'insights') {
+      return isAuthenticated ? (
+        <InsightsHub subscription={subscription} onNavigatePricing={() => navigateTo('pricing')} />
+      ) : (
+        <AuthForm initialMode="login" onSuccess={() => setCurrentPage('insights')} />
       );
     }
 

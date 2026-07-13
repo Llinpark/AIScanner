@@ -1,5 +1,6 @@
 const TradingViewService = require('./TradingViewService');
 const TradingViewAlertService = require('./TradingViewAlertService');
+const SignalEnrichmentService = require('./SignalEnrichmentService');
 const PatternDetectionService = require('./PatternDetectionService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 
@@ -50,7 +51,7 @@ function shouldEmit(symbol, barTime) {
 }
 
 async function publishEntrySignal(io, symbol, detection) {
-  const payload = {
+  const payload = SignalEnrichmentService.enrichSignal({
     symbol,
     direction: detection.direction,
     entry: detection.entry,
@@ -68,7 +69,7 @@ async function publishEntrySignal(io, symbol, detection) {
     gapBottom: detection.gapBottom,
     source: 'pattern_scanner',
     broadcast: true
-  };
+  });
 
   const saved = await TradingViewAlertService.saveSignal(payload);
 

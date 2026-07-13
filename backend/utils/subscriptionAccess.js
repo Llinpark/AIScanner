@@ -91,6 +91,10 @@ function sanitizeSignalForTier(signal, subscription) {
     delete doc.breakEven;
   }
 
+  if (!features.riskAnalysis) {
+    delete doc.riskMetrics;
+  }
+
   if (!features.aiTradeExplanation) {
     delete doc.aiExplanation;
     delete doc.tradeExplanation;
