@@ -15,13 +15,21 @@ function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
   const [signals, setSignals] = useState([]);
   const [currentPage, setCurrentPage] = useState('home');
+  const [previousPage, setPreviousPage] = useState('home');
   const [pageOptions, setPageOptions] = useState({});
   const [paymentNotice, setPaymentNotice] = useState('');
 
   const navigateTo = (page, options = {}) => {
+    if (page === 'risk-disclosure') {
+      setPreviousPage(currentPage);
+    }
     setPageOptions(options);
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const closeRiskDisclosure = () => {
+    navigateTo(previousPage);
   };
 
   const handleLogout = () => {
@@ -76,7 +84,7 @@ function AppContent() {
 
   const renderPageContent = () => {
     if (currentPage === 'risk-disclosure') {
-      return <RiskDisclosure onNavigateHome={navigateHome} />;
+      return <RiskDisclosure onNavigateHome={navigateHome} onClose={closeRiskDisclosure} />;
     }
 
     if (currentPage === 'contact') {

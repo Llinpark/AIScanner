@@ -10,6 +10,10 @@ Write-Host ""
 
 # Prefer cloudflared (no browser warning). Fallback: localtunnel.
 $cfPath = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
+if (-not (Test-Path $cfPath)) {
+  $cfCmd = Get-Command cloudflared -ErrorAction SilentlyContinue
+  if ($cfCmd) { $cfPath = $cfCmd.Source }
+}
 if (Test-Path $cfPath) {
   Write-Host "Using Cloudflare Tunnel (recommended for TradingView)."
   Write-Host "Copy the https://....trycloudflare.com URL into TradingView webhook + backend/.env PUBLIC_BACKEND_URL"

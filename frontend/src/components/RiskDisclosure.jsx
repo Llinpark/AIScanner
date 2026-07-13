@@ -1,4 +1,6 @@
-export default function RiskDisclosure({ onNavigateHome }) {
+export default function RiskDisclosure({ onNavigateHome, onClose }) {
+  const handleClose = onClose || onNavigateHome;
+
   return (
     <div className="risk-disclosure-page">
       <nav className="page-breadcrumb" aria-label="Breadcrumb">
@@ -10,7 +12,17 @@ export default function RiskDisclosure({ onNavigateHome }) {
       </nav>
 
       <div className="risk-disclosure-card">
-        <h1>Risk Disclosure</h1>
+        <div className="risk-disclosure-header">
+          <h1>Risk Disclosure</h1>
+          <button
+            type="button"
+            className="risk-disclosure-close"
+            onClick={handleClose}
+            aria-label="Close risk disclosure"
+          >
+            ×
+          </button>
+        </div>
 
         <section>
           <h2>Trading Risk Notice</h2>
@@ -56,6 +68,12 @@ export default function RiskDisclosure({ onNavigateHome }) {
             </li>
           </ul>
         </section>
+
+        <div className="risk-disclosure-actions">
+          <button type="button" className="risk-disclosure-close-btn" onClick={handleClose}>
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
