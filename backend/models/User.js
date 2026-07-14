@@ -16,10 +16,22 @@ const UserConfigSchema = new mongoose.Schema({
     linkCodeExpiresAt: { type: Date, default: null }
   },
 
+  mt5: {
+    linkToken: { type: String, default: null },
+    enabled: { type: Boolean, default: false },
+    accountBalance: { type: Number, default: null },
+    accountCurrency: { type: String, default: 'USD' },
+    riskPercent: { type: Number, default: 1 },
+    symbolSuffix: { type: String, default: '' },
+    lastSyncAt: { type: Date, default: null },
+    linkedAt: { type: Date, default: null },
+    terminalId: { type: String, default: null }
+  },
+
   subscription: {
     tier: { type: String, enum: ['basic', 'professional', 'premium'], default: 'basic' },
     status: { type: String, enum: ['inactive', 'pending', 'active', 'cancelled'], default: 'inactive' },
-    provider: { type: String, enum: ['mpesa', 'paypal', 'mock'], default: null },
+    provider: { type: String, enum: ['mpesa', 'paypal', 'mock'] },
     providerCustomerId: { type: String },
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },

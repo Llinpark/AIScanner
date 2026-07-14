@@ -1,0 +1,17 @@
+const APP_DOMAIN = (import.meta.env.VITE_APP_DOMAIN || 'kachingscanner.com').replace(/^https?:\/\//, '').replace(/\/$/, '');
+
+export const SITE_URL = import.meta.env.VITE_SITE_URL || (import.meta.env.DEV ? 'http://localhost:5173' : `https://${APP_DOMAIN}`);
+
+export const BACKEND_URL =
+  import.meta.env.VITE_BACKEND_URL ||
+  (import.meta.env.DEV ? 'http://localhost:4000' : `https://api.${APP_DOMAIN}`);
+
+export const MARKET_DATA_WS_URL =
+  import.meta.env.VITE_MARKET_DATA_WS_URL ||
+  (import.meta.env.DEV ? 'ws://localhost:8001' : `wss://market.${APP_DOMAIN}`);
+
+export const SOCKET_URL = BACKEND_URL;
+
+export const CONTACT_EMAIL = `enquiries@${APP_DOMAIN}`;
+
+export const APP_NAME = 'KachingScanner';

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import SocialLinks from './SocialLinks';
+import { APP_NAME, CONTACT_EMAIL, SITE_URL } from '../config/appUrls';
 
 const RISK_DISMISSED_KEY = 'kachingfx_risk_bar_dismissed';
 
@@ -34,7 +35,7 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
             </p>
             <p>
               <strong>Email:</strong>{' '}
-              <a href="mailto:enquiries@kachingscanner.com">enquiries@kachingscanner.com</a>
+              <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
             </p>
           </div>
         </div>
@@ -97,7 +98,13 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
       </div>
 
       <div className="footer-bottom">
-        <p>&copy; Copyright KachingFxOfficial All Rights Reserved</p>
+        <p>
+          &copy; {new Date().getFullYear()}{' '}
+          <a href={SITE_URL} target="_blank" rel="noopener noreferrer">
+            {APP_NAME}
+          </a>
+          . All Rights Reserved
+        </p>
       </div>
 
       {!barDismissed && <div className="footer-risk-spacer" aria-hidden="true" />}

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { APP_NAME } from '../config/appUrls';
+
 const TIER_BADGE_LABELS = { basic: 'BASIC', professional: 'PRO', premium: 'PREMIUM' };
 
 export default function Navbar({
@@ -15,6 +17,7 @@ export default function Navbar({
   const [menuOpen, setMenuOpen] = useState(false);
 
   const pageLinks = [
+    { id: 'home', label: 'Home' },
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'insights', label: 'Insights' },
     { id: 'tradingview', label: 'TradingView Setup' },
@@ -42,10 +45,10 @@ export default function Navbar({
         <button
           type="button"
           className="navbar-brand"
-          onClick={() => handleNavigate(isAuthenticated ? 'dashboard' : 'home')}
-          aria-label="KachingFx AI Scanner home"
+          onClick={() => handleNavigate('home')}
+          aria-label={`${APP_NAME} home`}
         >
-          <img className="navbar-logo" src="/logo-1.png" alt="KachingFx AI Scanner" />
+          <img className="navbar-logo" src="/logo-1.png" alt={APP_NAME} />
         </button>
 
         <button

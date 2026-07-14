@@ -11,10 +11,10 @@ A hybrid Forex AI scanner architecture combining Python and the MERN stack.
 ## Architecture
 
 1. `python-service`
-   - Fetches market data from external providers.
-   - Computes indicators: RSI, MACD, Bollinger Bands.
-   - Generates trade signals and risk points (entry, stop loss, TP levels).
-   - Exposes a FastAPI REST interface for signal delivery.
+   - **Market Data Service** (FastAPI): provider-agnostic interface with Twelve Data primary and EODHD automatic fallback.
+   - Redis-backed caching (in-memory fallback when Redis is unavailable).
+   - WebSocket relay for live Twelve Data price streaming.
+   - Endpoints under `/market-data/*` plus `POST /signal` and `GET /health`.
 
 2. `backend`
    - Receives signals from Python.
@@ -31,6 +31,15 @@ A hybrid Forex AI scanner architecture combining Python and the MERN stack.
 ## Setup 
 
 ### Python service
+
+Set `TWELVE_DATA_API_KEY` and optional `EODHD_API_KEY` in `python-service/.env` (see `.env.example`).
+
+FastAPI market data endpoints:
+- `GET /market-data/status`
+- `GET /market-data/providers`
+- `GET /market-data/candles?symbol=EUR/USD&interval=1h&limit=100`
+- `GET /market-data/symbols/{symbol}/candles`
+- `WS /market-data/ws` — subscribe with `{"action":"subscribe","symbols":["EUR/USD"]}`
 
 ```powershell
 cd python-service
@@ -70,10 +79,24 @@ npm run dev
 3. Open **TradingView Setup** for the Pine Script and alert instructions.
 4. Create TradingView alerts for Entry, Stop Loss, TP1, TP2, and TP3.
 
+## Custom domain
+
+Production URLs (override in `backend/.env` and `frontend/.env`):
+
+| Service | URL |
+|---------|-----|
+| Website | https://kachingscanner.com |
+| API / webhooks | https://api.kachingscanner.com |
+
+- `APP_DOMAIN`, `FRONTEND_URL`, and `PUBLIC_BACKEND_URL` in `backend/.env`
+- `VITE_APP_DOMAIN`, `VITE_SITE_URL`, and `VITE_BACKEND_URL` in `frontend/.env`
+- TradingView webhooks: `https://api.kachingscanner.com/api/webhook/tradingview`
+- Point DNS: `kachingscanner.com` → frontend host, `api.kachingscanner.com` → backend host
+
 ## TradingView Webhook
 
 - Set `TRADINGVIEW_WEBHOOK_SECRET` in `backend/.env`.
-- Configure TradingView alerts to POST to `http://<your-public-backend>/api/webhook/tradingview`.
+- Configure TradingView alerts to POST to `https://api.kachingscanner.com/api/webhook/tradingview` (or your `PUBLIC_BACKEND_URL`).
 - Expected payload fields include:
   - `symbol`, `direction`, `entry`, `stop_loss`, `take_profit_1`, `take_profit_2`, `take_profit_3`
   - `alertType` (`entry`, `stop_loss`, `take_profit_1`, `take_profit_2`, `take_profit_3`)
@@ -84,11 +107,8 @@ npm run dev
 
 ## Notes
 
-## Notes
-
-- Replace API keys in backend `.env` and Python service env variables.
-- Implement model training and production-grade signal filters before using live trading.
-- This scaffold is designed for integration with data providers like Alpha Vantage, EODHD, or OANDA.
+- Replace API keys in `backend/.env` and `python-service/.env` (Twelve Data + optional EODHD fallback).
+- Market data uses **Twelve Data primary** with **EODHD automatic fallback** in both Node and Python services.
 
 ## Run All Services
 

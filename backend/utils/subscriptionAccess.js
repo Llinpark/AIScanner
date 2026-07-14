@@ -4,6 +4,7 @@ const {
   TIER_DISPLAY_NAMES,
   ALL_CURRENCY_PAIRS
 } = require('../config/subscriptions');
+const { normalizeSymbol } = require('../config/symbols');
 
 function isSubscriptionActive(subscription) {
   if (!subscription) return false;
@@ -31,14 +32,6 @@ function getTierFeatures(subscriptionOrTier) {
 
 function getTierDisplayName(tierKey) {
   return TIER_DISPLAY_NAMES[tierKey] || tierKey;
-}
-
-function normalizeSymbol(symbol) {
-  const raw = String(symbol || '').trim().toUpperCase();
-  if (!raw) return '';
-  if (raw.includes('/')) return raw;
-  if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
-  return raw;
 }
 
 function getAllowedCurrencyPairs(subscription) {
@@ -98,6 +91,7 @@ function sanitizeSignalForTier(signal, subscription) {
   if (!features.aiTradeExplanation) {
     delete doc.aiExplanation;
     delete doc.tradeExplanation;
+    delete doc.aiFactors;
   }
 
   if (!features.propFirmMode) {

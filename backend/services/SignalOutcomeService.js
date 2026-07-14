@@ -56,7 +56,7 @@ async function updateEntryOutcome(entry, alertType, inMemorySignals) {
 }
 
 async function processSignalLifecycle(rawSignalData, inMemorySignals = []) {
-  const signalData = enrichSignal(rawSignalData);
+  const signalData = await enrichSignal(rawSignalData);
   const alertType = signalData.alertType || 'signal';
 
   if (isOutcomeAlert(alertType)) {

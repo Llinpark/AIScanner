@@ -1,6 +1,8 @@
+const { ALL_CURRENCY_PAIRS } = require('./symbols');
+
 // Structural pattern scanner thresholds (FVG + Breakaway Gap)
 const PATTERN_SCANNER_CONFIG = {
-  symbols: ['EUR/USD', 'GBP/USD', 'AUD/USD', 'USD/JPY'],
+  symbols: ALL_CURRENCY_PAIRS,
   candleBufferSize: 120,
   duplicateBarCooldownMs: 60_000,
 

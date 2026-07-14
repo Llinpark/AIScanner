@@ -13,6 +13,13 @@ const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
 const { TIERS, PAYMENT_CONFIG, getPublicTiers, FEATURE_MATRIX } = require('./config/subscriptions');
+const {
+  APP_DOMAIN,
+  FRONTEND_URL,
+  PUBLIC_BACKEND_URL,
+  CORS_ORIGINS,
+  WEBHOOK_TRADINGVIEW_URL
+} = require('./config/appUrls');
 const MpesaService = require('./services/MpesaService');
 const PayPalService = require('./services/PayPalService');
 const {
@@ -34,6 +41,7 @@ const SignalOutcomeService = require('./services/SignalOutcomeService');
 const createAnalyticsRouter = require('./routes/analytics');
 const createJournalRouter = require('./routes/journal');
 const createTelegramRouter = require('./routes/telegram');
+const createMt5Router = require('./routes/mt5');
 const PineScriptGeneratorService = require('./services/PineScriptGeneratorService');
 const TelegramService = require('./services/TelegramService');
 const { buildAnalytics } = require('./utils/signalOutcome');
@@ -59,9 +67,68 @@ const {
   getAllowedCurrencyPairs
 } = require('./utils/subscriptionAccess');
 const { verifyToken, sanitizeUser } = require('./utils/auth');
+const { normalizeSymbol } = require('./config/symbols');
+const { TRADINGVIEW_CONFIG } = require('./config/tradingview');
+const { fetchHistoricalData } = require('./utils/marketData');
 
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
-const PUBLIC_BACKEND_URL = process.env.PUBLIC_BACKEND_URL || `http://localhost:${process.env.PORT || 4000}`;
+const PYTHON_SERVICE_URL = (process.env.PYTHON_SERVICE_URL || 'http://localhost:8001').replace(/\/$/, '');
+
+async function fetchCandlesFromPython(symbol, interval, limit) {
+  const url = new URL(`${PYTHON_SERVICE_URL}/market-data/candles`);
+  url.searchParams.set('symbol', String(symbol));
+  url.searchParams.set('interval', String(interval));
+  url.searchParams.set('limit', String(limit));
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const payload = await response.json();
+    if (!response.ok) {
+      const error = new Error(payload.detail || payload.message || `FastAPI HTTP ${response.status}`);
+      error.status = response.status;
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchCandlesFromNode(symbol, interval, limit) {
+  const normalized = normalizeSymbol(symbol);
+  const parsedLimit = parseInt(limit, 10) || 200;
+  const candles = await fetchHistoricalData(TRADINGVIEW_CONFIG, normalized, interval, parsedLimit);
+  return {
+    provider: TRADINGVIEW_CONFIG.primaryProvider || 'twelve_data',
+    symbol: normalized,
+    provider_symbol: normalized,
+    interval,
+    requested_limit: parsedLimit,
+    count: candles.length,
+    fallback_used: true,
+    source: 'node',
+    candles: candles.map(candle => ({
+      timestamp: new Date(candle.time).toISOString(),
+      open: candle.open,
+      high: candle.high,
+      low: candle.low,
+      close: candle.close,
+      volume: candle.volume || 0
+    }))
+  };
+}
+
+async function fetchMarketCandles(symbol, interval, limit) {
+  try {
+    return await fetchCandlesFromPython(symbol, interval, limit);
+  } catch (pythonError) {
+    console.warn('[MarketData] FastAPI unavailable, using Node Twelve Data fallback:', pythonError.message);
+    return fetchCandlesFromNode(symbol, interval, limit);
+  }
+}
 
 const devUserStore = require('./utils/devUserStore');
 
@@ -106,7 +173,7 @@ function parseTradingViewPayload(body) {
   );
 
   const payload = {
-    symbol,
+    symbol: normalizeSymbol(symbol),
     direction,
     ...levels,
     confidence: Math.min(Math.max(confidence, 0), 1),
@@ -123,7 +190,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || '*',
+    origin: CORS_ORIGINS,
     methods: ['GET', 'POST']
   }
 });
@@ -134,7 +201,7 @@ function captureRawBody(req, res, buf) {
   }
 }
 
-app.use(cors());
+app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '1mb', verify: captureRawBody }));
 app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], verify: captureRawBody }));
 
@@ -146,7 +213,14 @@ mongoose.connect(mongoUri, {
   .catch(err => console.error('MongoDB connection error:', err));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'backend', dbState: mongoose.connection.readyState });
+  res.json({
+    status: 'ok',
+    service: 'backend',
+    dbState: mongoose.connection.readyState,
+    domain: APP_DOMAIN,
+    frontendUrl: FRONTEND_URL,
+    publicBackendUrl: PUBLIC_BACKEND_URL
+  });
 });
 
 app.use('/api/auth', authRoutes);
@@ -156,6 +230,7 @@ const inMemorySignals = [];
 app.use('/api/analytics', createAnalyticsRouter({ inMemorySignals, isDbReady }));
 app.use('/api/journal', createJournalRouter());
 app.use('/api/telegram', createTelegramRouter());
+app.use('/api/mt5', createMt5Router());
 
 app.post('/api/signals', async (req, res) => {
   try {
@@ -163,14 +238,14 @@ app.post('/api/signals', async (req, res) => {
     validateKachingEntrySignal(payload);
 
     if (!isDbReady()) {
-      const enriched = SignalEnrichmentService.enrichSignal(payload);
+      const enriched = await SignalEnrichmentService.enrichSignal(payload);
       const fallback = Object.assign({}, enriched, { createdAt: new Date(), _id: `mem_${Date.now()}` });
       inMemorySignals.unshift(fallback);
       io.emit('signal:update', fallback);
       return res.status(201).json({ fallback: true, signal: fallback });
     }
 
-    const enriched = SignalEnrichmentService.enrichSignal(payload);
+    const enriched = await SignalEnrichmentService.enrichSignal(payload);
     const signal = new Signal(enriched);
     const saved = await signal.save();
     io.emit('signal:update', saved);
@@ -443,7 +518,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
 
     if (provider === 'paypal') {
       const tierConfig = TIERS[tier];
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+      const frontendUrl = FRONTEND_URL;
       const returnUrl = `${PUBLIC_BACKEND_URL}/api/payments/paypal/return?tier=${tier}`;
       const cancelUrl = `${frontendUrl}?paypal=cancelled`;
 
@@ -607,7 +682,7 @@ app.post('/api/payments/mpesa/mock-complete', requireAuth, async (req, res) => {
 });
 
 app.get('/api/payments/paypal/return', async (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = FRONTEND_URL;
 
   try {
     const { token: orderId, tier } = req.query;
@@ -871,7 +946,7 @@ app.get('/api/tradingview/oauth-callback', async (req, res) => {
     io.emit('tradingview:linked', { username, userId: tokenResponse.user_id });
 
     // Redirect to frontend with success message
-    res.redirect(`http://localhost:5173?tradingview_linked=true&username=${username}`);
+    res.redirect(`${FRONTEND_URL}?tradingview_linked=true&username=${encodeURIComponent(username)}`);
   } catch (error) {
     console.error('OAuth callback error:', error);
     res.status(500).json({ message: 'OAuth callback failed', error: error.message });
@@ -949,7 +1024,7 @@ app.get('/api/tradingview/accounts/:username', async (req, res) => {
 app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, res) => {
   try {
     const generated = PineScriptGeneratorService.generateForUser(req.user, {
-      webhookUrl: `${PUBLIC_BACKEND_URL}/api/webhook/tradingview`,
+      webhookUrl: WEBHOOK_TRADINGVIEW_URL,
       webhookSecret: TRADINGVIEW_WEBHOOK_SECRET,
       publicBackendUrl: PUBLIC_BACKEND_URL
     });
@@ -1026,6 +1101,52 @@ app.get('/api/tradingview/history/:symbol', requireAuth, requireSubscription, as
   } catch (error) {
     console.error('Get historical data error:', error);
     res.status(500).json({ message: 'Unable to fetch historical data', error: error.message });
+  }
+});
+
+app.get('/api/market-data/candles', requireAuth, requireSubscription, async (req, res) => {
+  try {
+    const { symbol, interval = '1h', limit = 200 } = req.query;
+    if (!symbol) {
+      return res.status(400).json({ message: 'symbol query parameter is required' });
+    }
+
+    if (!isCurrencyPairAllowed(symbol, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Currency pair ${symbol} is not included in your ${getTierDisplayName(req.user.subscription?.tier)} plan.`,
+        allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
+      });
+    }
+
+    if (!isTimeframeAllowed(interval, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Timeframe ${interval} is not included in your ${getTierDisplayName(req.user.subscription?.tier)} plan.`,
+        allowedTimeframes: getTierFeatures(req.user.subscription).timeframes
+      });
+    }
+
+    const payload = await fetchMarketCandles(symbol, interval, parseInt(limit, 10) || 200);
+    res.json(payload);
+  } catch (error) {
+    console.error('Market data proxy error:', error);
+    res.status(502).json({
+      message: error.message || 'Unable to fetch market data',
+      detail: error.message
+    });
+  }
+});
+
+app.get('/api/market-data/status', requireAuth, requireSubscription, async (req, res) => {
+  try {
+    const response = await fetch(`${PYTHON_SERVICE_URL}/market-data/status`);
+    const payload = await response.json();
+    if (!response.ok) {
+      return res.status(response.status).json(payload);
+    }
+    res.json(payload);
+  } catch (error) {
+    console.error('Market data status proxy error:', error);
+    res.status(502).json({ message: 'Unable to reach FastAPI market data service', error: error.message });
   }
 });
 
@@ -1213,6 +1334,7 @@ server.on('error', (error) => {
 listenOnPort(activePort);
 server.on('listening', () => {
   console.log(`Backend listening on http://${host}:${activePort}`);
+  console.log(`Domain: ${APP_DOMAIN} | API: ${PUBLIC_BACKEND_URL} | Frontend: ${FRONTEND_URL}`);
   MarketScannerService.startAutoScanner(io);
   if (TelegramService.isConfigured()) {
     TelegramService.startPolling();

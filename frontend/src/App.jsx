@@ -39,12 +39,6 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (!loading && isAuthenticated && currentPage === 'home') {
-      setCurrentPage('dashboard');
-    }
-  }, [loading, isAuthenticated, currentPage]);
-
-  useEffect(() => {
     if (!isAuthenticated) return;
     fetchSignals()
       .then(setSignals)
@@ -80,7 +74,7 @@ function AppContent() {
   }
 
   const navigateHome = () => {
-    navigateTo(isAuthenticated ? 'dashboard' : 'home');
+    navigateTo('home');
   };
 
   const renderPageContent = () => {

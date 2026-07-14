@@ -3,6 +3,7 @@ const TradingViewAlertService = require('./TradingViewAlertService');
 const SignalEnrichmentService = require('./SignalEnrichmentService');
 const PatternDetectionService = require('./PatternDetectionService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
+const { normalizeSymbol } = require('../config/symbols');
 
 const candleBuffers = new Map();
 const lastEmittedBar = new Map();
@@ -51,31 +52,37 @@ function shouldEmit(symbol, barTime) {
 }
 
 async function publishEntrySignal(io, symbol, detection) {
-  const payload = SignalEnrichmentService.enrichSignal({
-    symbol,
-    direction: detection.direction,
-    entry: detection.entry,
-    stop_loss: detection.stop_loss,
-    stop_loss_1: detection.stop_loss_1 ?? detection.stop_loss,
-    take_profit_1: detection.take_profit_1,
-    take_profit_2: detection.take_profit_2,
-    take_profit_3: detection.take_profit_3,
-    confidence: detection.confidence,
-    notes: detection.notes,
-    alertType: 'entry',
-    pattern: detection.pattern,
-    patternLabel: detection.patternLabel,
-    gapTop: detection.gapTop,
-    gapBottom: detection.gapBottom,
-    source: 'pattern_scanner',
-    broadcast: true
-  });
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const candles = getCandles(normalizedSymbol);
+  const payload = await SignalEnrichmentService.enrichSignal(
+    {
+      symbol: normalizedSymbol,
+      direction: detection.direction,
+      entry: detection.entry,
+      stop_loss: detection.stop_loss,
+      stop_loss_1: detection.stop_loss_1 ?? detection.stop_loss,
+      take_profit_1: detection.take_profit_1,
+      take_profit_2: detection.take_profit_2,
+      take_profit_3: detection.take_profit_3,
+      confidence: detection.confidence,
+      notes: detection.notes,
+      alertType: 'entry',
+      pattern: detection.pattern,
+      patternLabel: detection.patternLabel,
+      gapTop: detection.gapTop,
+      gapBottom: detection.gapBottom,
+      source: 'pattern_scanner',
+      broadcast: true,
+      timeframe: '1h'
+    },
+    { candles, timeframe: '1h' }
+  );
 
   const saved = await TradingViewAlertService.saveSignal(payload);
 
   io.emit('signal:update', saved);
   io.emit('scanner:entry', {
-    symbol,
+    symbol: normalizedSymbol,
     pattern: detection.pattern,
     patternLabel: detection.patternLabel,
     direction: detection.direction,
@@ -84,7 +91,7 @@ async function publishEntrySignal(io, symbol, detection) {
 
   await TradingViewAlertService.broadcastToSubscribers(io, payload);
 
-  console.log(`[Scanner] ENTRY ${detection.pattern} ${symbol} ${detection.direction} @ ${detection.entry}`);
+  console.log(`[Scanner] ENTRY ${detection.pattern} ${normalizedSymbol} ${detection.direction} @ ${detection.entry}`);
   return saved;
 }
 

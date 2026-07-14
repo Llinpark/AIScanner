@@ -1,6 +1,5 @@
 import axios from 'axios';
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+import { BACKEND_URL } from '../config/appUrls';
 
 export const api = axios.create({
   baseURL: BACKEND_URL
@@ -61,12 +60,26 @@ export const telegramApi = {
   toggle: enabled => api.post('/api/telegram/toggle', { enabled })
 };
 
+export const mt5Api = {
+  getStatus: () => api.get('/api/mt5/status'),
+  createLinkToken: () => api.post('/api/mt5/link-token'),
+  updateSettings: payload => api.post('/api/mt5/settings', payload)
+};
+
 export const tradingviewApi = {
   getSetup: () => api.get('/api/tradingview/setup'),
   getAlerts: (symbol) =>
     api.get('/api/tradingview/alerts', { params: symbol ? { symbol } : {} }),
   getPineScript: () => api.get('/api/tradingview/pine-script'),
   getHistory: (symbol, options = {}) => api.get(`/api/tradingview/history/${symbol}`, { params: options })
+};
+
+export const marketDataApi = {
+  getCandles: (symbol, options = {}) =>
+    api.get('/api/market-data/candles', {
+      params: { symbol, interval: options.interval || '1h', limit: options.limit || 200 }
+    }),
+  getStatus: () => api.get('/api/market-data/status')
 };
 
 export const scannerApi = {

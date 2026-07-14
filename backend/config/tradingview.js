@@ -1,31 +1,36 @@
 // TradingView OAuth and API Configuration
+const { TRADINGVIEW_OAUTH_CALLBACK_URL } = require('./appUrls');
+
 const TRADINGVIEW_CONFIG = {
   oauth: {
     clientId: process.env.TRADINGVIEW_CLIENT_ID || 'demo_client_id',
     clientSecret: process.env.TRADINGVIEW_CLIENT_SECRET || 'demo_secret',
-    redirectUri: process.env.TRADINGVIEW_REDIRECT_URI || 'http://localhost:4000/api/tradingview/oauth-callback',
+    redirectUri: process.env.TRADINGVIEW_REDIRECT_URI || TRADINGVIEW_OAUTH_CALLBACK_URL,
     authUrl: 'https://www.tradingview.com/accounts/signin/',
     tokenUrl: 'https://www.tradingview.com/accounts/oauth-token/',
     apiBaseUrl: 'https://api.tradingview.com'
   },
-  dataProvider: process.env.DATA_PROVIDER || 'mock', // 'mock', 'alpha_vantage', 'eodhd', 'polygon'
+  dataProvider: process.env.DATA_PROVIDER || process.env.MARKET_DATA_PRIMARY || 'twelve_data',
+  primaryProvider: process.env.MARKET_DATA_PRIMARY || process.env.DATA_PROVIDER || 'twelve_data',
+  fallbackProvider: process.env.MARKET_DATA_FALLBACK || 'eodhd',
   providers: {
-    alpha_vantage: {
-      apiKey: process.env.ALPHA_VANTAGE_API_KEY,
-      baseUrl: 'https://www.alphavantage.co'
+    twelve_data: {
+      apiKey: process.env.TWELVE_DATA_API_KEY,
+      baseUrl: process.env.TWELVE_DATA_BASE_URL || 'https://api.twelvedata.com'
     },
     eodhd: {
       apiKey: process.env.EODHD_API_KEY,
-      baseUrl: 'https://eodhd.com/api'
-    },
-    polygon: {
-      apiKey: process.env.POLYGON_API_KEY,
-      baseUrl: 'https://api.polygon.io'
+      baseUrl: process.env.EODHD_BASE_URL || 'https://eodhd.com/api'
     }
   },
   symbols: {
     eurusd: { symbol: 'EUR/USD', exchange: 'FOREX' },
     gbpusd: { symbol: 'GBP/USD', exchange: 'FOREX' },
+    xauusd: { symbol: 'XAU/USD', exchange: 'FOREX' },
+    xagusd: { symbol: 'XAG/USD', exchange: 'FOREX' },
+    us30: { symbol: 'US30', exchange: 'INDEX' },
+    us100: { symbol: 'US100', exchange: 'INDEX' },
+    usdbtc: { symbol: 'USD/BTC', exchange: 'CRYPTO' },
     audusd: { symbol: 'AUD/USD', exchange: 'FOREX' },
     usdjpy: { symbol: 'USD/JPY', exchange: 'FOREX' }
   }

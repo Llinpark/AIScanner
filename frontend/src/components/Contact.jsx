@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import SocialLinks from './SocialLinks';
-
-const CONTACT_EMAIL = 'enquiries@kachingscanner.com';
+import { CONTACT_EMAIL } from '../config/appUrls';
 
 export default function Contact({ onNavigateHome }) {
   const [form, setForm] = useState({

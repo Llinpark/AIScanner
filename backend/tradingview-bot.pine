@@ -3,7 +3,7 @@
 indicator("KachingFx Structural Scanner", overlay=true, max_labels_count=50)
 
 // ===== CONFIGURATION =====
-WEBHOOK_URL = input.string("http://localhost:4000/api/webhook/tradingview", "Webhook URL", group="KachingFx")
+WEBHOOK_URL = input.string("https://api.kachingscanner.com/api/webhook/tradingview", "Webhook URL", group="KachingFx")
 WEBHOOK_SECRET = input.string("your_webhook_secret", "Webhook Secret", group="KachingFx")
 SEND_CANDLE_FEED = input.bool(true, "Send each bar to server scanner", group="KachingFx")
 

@@ -10,7 +10,9 @@ const {
   formatKachingAlertMessage
 } = require('../utils/kachingSignalLevels');
 const SignalOutcomeService = require('../services/SignalOutcomeService');
+const SignalEnrichmentService = require('../services/SignalEnrichmentService');
 const TelegramService = require('../services/TelegramService');
+const { normalizeSymbol } = require('../config/symbols');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -90,6 +92,7 @@ function toLiveAlertPayload(signalDoc) {
     confidence: signal.confidence,
     notes: signal.notes,
     tradeExplanation: signal.tradeExplanation,
+    aiFactors: signal.aiFactors,
     riskMetrics: signal.riskMetrics,
     outcome: signal.outcome,
     tradeStatus: signal.tradeStatus,
@@ -107,7 +110,8 @@ function toSubscriberRecord(user) {
     email: user.email,
     displayName: user.displayName,
     subscription: user.subscription,
-    telegram: user.telegram || null
+    telegram: user.telegram || null,
+    mt5: user.mt5 || null
   };
 }
 
@@ -182,14 +186,20 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals) {
   }
 
   for (const subscriber of subscribers) {
-    const saved = await saveSignal(
+    const mt5 = subscriber.mt5 || {};
+    const MarketScannerService = require('../services/MarketScannerService');
+    const candles = MarketScannerService.getCandles(signalData.symbol);
+    const enriched = await SignalEnrichmentService.enrichSignal(
+      { ...signalData, userId: subscriber.id, isBroadcast: true },
       {
-        ...signalData,
-        userId: subscriber.id,
-        isBroadcast: true
-      },
-      inMemorySignals
+        accountBalance: mt5.accountBalance,
+        riskPercent: mt5.riskPercent || 1,
+        candles,
+        timeframe: signalData.timeframe || '1h'
+      }
     );
+
+    const saved = await saveSignal(enriched, inMemorySignals);
 
     await deliverLiveAlert(io, saved, subscriber);
     results.push({ userId: subscriber.id, email: subscriber.email });
@@ -203,7 +213,7 @@ function buildSignalData(body) {
   const levels = normalizeSignalLevels(body, direction);
 
   const signalData = {
-    symbol: body.symbol || body.ticker || 'UNKNOWN',
+    symbol: normalizeSymbol(body.symbol || body.ticker || 'UNKNOWN'),
     direction,
     ...levels,
     confidence: Math.min(Math.max(parseFloat(body.confidence || 0) || 0, 0), 1),

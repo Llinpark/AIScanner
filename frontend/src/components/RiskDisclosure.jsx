@@ -1,3 +1,5 @@
+import { CONTACT_EMAIL } from '../config/appUrls';
+
 export default function RiskDisclosure({ onNavigateHome, onClose }) {
   const handleClose = onClose || onNavigateHome;
 
@@ -58,7 +60,7 @@ export default function RiskDisclosure({ onNavigateHome, onClose }) {
             </li>
             <li>
               Email:{' '}
-              <a href="mailto:info@kachingfxofficial.com">info@kachingfxofficial.com</a>
+              <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>
             </li>
             <li>
               WhatsApp:{' '}

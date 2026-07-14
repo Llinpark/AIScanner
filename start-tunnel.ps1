@@ -1,4 +1,5 @@
 # Exposes backend (port 4000) to the internet for TradingView webhooks.
+# For production, use https://api.kachingscanner.com instead (see backend/.env PUBLIC_BACKEND_URL).
 # Keep this window open while TradingView alerts are active.
 
 $env:PATH = "C:\Program Files\nodejs;" + $env:PATH

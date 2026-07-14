@@ -1,16 +1,6 @@
 // Subscription tier definitions and pricing
-const ALL_CURRENCY_PAIRS = [
-  'EUR/USD',
-  'GBP/USD',
-  'AUD/USD',
-  'USD/JPY',
-  'USD/CAD',
-  'NZD/USD',
-  'USD/CHF',
-  'EUR/GBP',
-  'EUR/JPY',
-  'GBP/JPY'
-];
+const { WEBHOOK_MPESA_URL } = require('./appUrls');
+const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
 const ALL_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W'];
 
@@ -26,23 +16,23 @@ const TIERS = {
     features: [
       'AI Alerts',
       'TradingView Alerts',
-      '2 currency pairs (EUR/USD, GBP/USD)',
-      '1 timeframe (1h)',
+      '3 markets (EUR/USD, GBP/USD, XAU/USD)',
+      '2 timeframes (1m, 1h)',
       '7-day signal history'
     ]
   },
   professional: {
     name: 'Pro',
-    price: 8500,
-    priceCents: 9800,
+    price: 12000,
+    priceCents: 13882,
     currency: 'KES',
     currencyPayPal: 'USD',
     duration: 'monthly',
     description: 'Advanced alerts with confidence and performance tools',
     features: [
       'Everything in Basic',
-      'Most major currency pairs (4 pairs)',
-      '3 timeframes (15m, 1h, 4h)',
+      'Most major markets (9 symbols incl. gold & indices)',
+      '4 timeframes (1m, 15m, 1h, 4h)',
       'Confidence score',
       'News filter',
       'Performance dashboard',
@@ -59,18 +49,21 @@ const TIERS = {
     currency: 'KES',
     currencyPayPal: 'USD',
     duration: 'monthly',
-    description: 'Full multi-market scanner with SMC and API access',
+    description: 'Full multi-market scanner with MT5 automation and SMC',
     features: [
       'Everything in Pro',
-      'All currency pairs (10+ markets)',
+      'All markets (15+ symbols)',
       'All timeframes',
       'Multi-market scanner',
       'Smart Money Concepts',
       'Trade management alerts',
       'AI trade explanation',
       'Advanced analytics',
-      'Prop firm mode',
-      'REST API access',
+      'One-click MT5 execution via Telegram',
+      'Telegram trade copier (auto entry, SL, TP, lot)',
+      'Trailing stop',
+      'Break-even automation',
+      'Auto lot sizing based on account balance',
       '90-day signal history'
     ]
   }
@@ -81,8 +74,8 @@ const TIER_FEATURES = {
   basic: {
     aiAlerts: true,
     tradingViewAlerts: true,
-    currencyPairs: ['EUR/USD', 'GBP/USD'],
-    timeframes: ['1h'],
+    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD'],
+    timeframes: ['1m', '1h'],
     showConfidence: false,
     newsFilter: false,
     performanceDashboard: false,
@@ -93,16 +86,28 @@ const TIER_FEATURES = {
     smartMoneyConcepts: false,
     tradeManagementAlerts: false,
     aiTradeExplanation: false,
-    propFirmMode: false,
-    apiAccess: false,
+    mt5Execution: false,
+    trailingStop: false,
+    breakEvenAutomation: false,
+    autoLotSizing: false,
     historyDays: 7,
     maxSignals: 50
   },
   professional: {
     aiAlerts: true,
     tradingViewAlerts: true,
-    currencyPairs: ['EUR/USD', 'GBP/USD', 'AUD/USD', 'USD/JPY'],
-    timeframes: ['15m', '1h', '4h'],
+    currencyPairs: [
+      'EUR/USD',
+      'GBP/USD',
+      'XAU/USD',
+      'XAG/USD',
+      'AUD/USD',
+      'USD/JPY',
+      'US30',
+      'US100',
+      'USD/BTC'
+    ],
+    timeframes: ['1m', '15m', '1h', '4h'],
     showConfidence: true,
     newsFilter: true,
     performanceDashboard: true,
@@ -113,8 +118,10 @@ const TIER_FEATURES = {
     smartMoneyConcepts: false,
     tradeManagementAlerts: false,
     aiTradeExplanation: false,
-    propFirmMode: false,
-    apiAccess: false,
+    mt5Execution: false,
+    trailingStop: false,
+    breakEvenAutomation: false,
+    autoLotSizing: false,
     historyDays: 30,
     maxSignals: 100
   },
@@ -133,8 +140,10 @@ const TIER_FEATURES = {
     smartMoneyConcepts: true,
     tradeManagementAlerts: true,
     aiTradeExplanation: true,
-    propFirmMode: true,
-    apiAccess: true,
+    mt5Execution: true,
+    trailingStop: true,
+    breakEvenAutomation: true,
+    autoLotSizing: true,
     historyDays: 90,
     maxSignals: 500
   }
@@ -144,7 +153,7 @@ const FEATURE_MATRIX = [
   { key: 'aiAlerts', label: 'AI Alerts', basic: true, professional: true, premium: true },
   { key: 'tradingViewAlerts', label: 'TradingView Alerts', basic: true, professional: true, premium: true },
   { key: 'currencyPairs', label: 'Currency Pairs', basic: 'Limited', professional: 'Most', premium: 'All' },
-  { key: 'timeframes', label: 'Timeframes', basic: '1', professional: '3', premium: 'All' },
+  { key: 'timeframes', label: 'Timeframes', basic: '2', professional: '4', premium: 'All' },
   { key: 'showConfidence', label: 'Confidence Score', basic: false, professional: true, premium: true },
   { key: 'newsFilter', label: 'News Filter', basic: false, professional: true, premium: true },
   { key: 'performanceDashboard', label: 'Performance Dashboard', basic: false, professional: true, premium: true },
@@ -155,8 +164,10 @@ const FEATURE_MATRIX = [
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', basic: false, professional: false, premium: true },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', basic: false, professional: false, premium: true },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', basic: false, professional: false, premium: true },
-  { key: 'propFirmMode', label: 'Prop Firm Mode', basic: false, professional: false, premium: true },
-  { key: 'apiAccess', label: 'API Access', basic: false, professional: false, premium: true }
+  { key: 'mt5Execution', label: 'One-click MT5 Execution', basic: false, professional: false, premium: true },
+  { key: 'trailingStop', label: 'Trailing Stop', basic: false, professional: false, premium: true },
+  { key: 'breakEvenAutomation', label: 'Break-even Automation', basic: false, professional: false, premium: true },
+  { key: 'autoLotSizing', label: 'Auto Lot Sizing', basic: false, professional: false, premium: true }
 ];
 
 const TIER_ORDER = ['basic', 'professional', 'premium'];
@@ -174,7 +185,7 @@ const PAYMENT_CONFIG = {
     consumerSecret: process.env.MPESA_CONSUMER_SECRET,
     shortcode: process.env.MPESA_SHORTCODE || '5337170',
     passkey: process.env.MPESA_PASSKEY,
-    callbackUrl: process.env.MPESA_CALLBACK_URL || `${process.env.PUBLIC_BACKEND_URL || 'http://localhost:4000'}/api/webhook/mpesa`,
+    callbackUrl: process.env.MPESA_CALLBACK_URL || WEBHOOK_MPESA_URL,
     environment: process.env.MPESA_ENVIRONMENT || 'sandbox',
     transactionType: 'CustomerBuyGoodsOnline'
   },

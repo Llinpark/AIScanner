@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { WEBHOOK_TRADINGVIEW_URL } = require('../config/appUrls');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { generateLicenseToken } = require('../utils/webhookSecurity');
 const { getTierDisplayName } = require('../utils/subscriptionAccess');
@@ -40,9 +41,7 @@ function generateForUser(user, options = {}) {
   const subscription = user.subscription || {};
   const tier = subscription.tier || 'basic';
   const risk = PATTERN_SCANNER_CONFIG.risk || {};
-  const webhookUrl =
-    options.webhookUrl ||
-    `${options.publicBackendUrl || process.env.PUBLIC_BACKEND_URL || 'http://localhost:4000'}/api/webhook/tradingview`;
+  const webhookUrl = options.webhookUrl || WEBHOOK_TRADINGVIEW_URL;
   const webhookSecret = options.webhookSecret || process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
 
   const tvUsername =

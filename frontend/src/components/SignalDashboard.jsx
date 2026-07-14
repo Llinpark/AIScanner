@@ -3,8 +3,10 @@ import { io } from 'socket.io-client';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import OutcomeBadge, { RiskAnalysisCard } from './insights/RiskAnalysisCard';
+import AiExplanationCard from './insights/AiExplanationCard';
+import MarketChartPanel from './charts/MarketChartPanel';
 
-const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+import { SOCKET_URL } from '../config/appUrls';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -19,8 +21,10 @@ const FEATURE_LABELS = [
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', minTier: 'Premium' },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', minTier: 'Premium' },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', minTier: 'Premium' },
-  { key: 'propFirmMode', label: 'Prop Firm Mode', minTier: 'Premium' },
-  { key: 'apiAccess', label: 'API Access', minTier: 'Premium' }
+  { key: 'mt5Execution', label: 'One-click MT5 Execution', minTier: 'Premium' },
+  { key: 'trailingStop', label: 'Trailing Stop', minTier: 'Premium' },
+  { key: 'breakEvenAutomation', label: 'Break-even Automation', minTier: 'Premium' },
+  { key: 'autoLotSizing', label: 'Auto Lot Sizing', minTier: 'Premium' }
 ];
 
 function isActiveSubscription(subscription) {
@@ -37,6 +41,14 @@ export default function SignalDashboard({ initialSignals, subscription }) {
   const [performance, setPerformance] = useState(null);
   const [accountBalance, setAccountBalance] = useState(10000);
   const [expandedId, setExpandedId] = useState(null);
+  const [chartSymbol, setChartSymbol] = useState('EUR/USD');
+  const chartInterval = tierLimits.timeframes?.[0] || '1h';
+
+  useEffect(() => {
+    if (allowedPairs.length && !allowedPairs.includes(chartSymbol)) {
+      setChartSymbol(allowedPairs[0]);
+    }
+  }, [allowedPairs, chartSymbol]);
 
   useEffect(() => {
     subscriptionApi
@@ -95,6 +107,31 @@ export default function SignalDashboard({ initialSignals, subscription }) {
         </p>
       </div>
 
+      {hasAccess && (
+        <div className="dashboard-chart-section">
+          <div className="controls">
+            <label>
+              Chart symbol
+              <select value={chartSymbol} onChange={e => setChartSymbol(e.target.value)}>
+                {allowedPairs.map(pair => (
+                  <option key={pair} value={pair}>
+                    {pair}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <MarketChartPanel
+            symbol={chartSymbol}
+            interval={chartInterval}
+            overlaySignals={signals}
+            subscribed={hasAccess}
+            liveEnabled
+            height={380}
+          />
+        </div>
+      )}
+
       {tierLimits.performanceDashboard && performance && (
         <div className="performance-box">
           <h3>Performance Snapshot</h3>
@@ -128,7 +165,7 @@ export default function SignalDashboard({ initialSignals, subscription }) {
             const expanded = expandedId === signalId;
 
             return (
-              <div key={signalId} className="signal-item">
+              <div key={signalId} className="signal-item" onClick={() => setChartSymbol(signal.symbol)}>
                 <div className="signal-header">
                   <span>{signal.symbol}</span>
                   {signal.pattern && (
@@ -155,8 +192,8 @@ export default function SignalDashboard({ initialSignals, subscription }) {
                   {signal.outcomeR != null && <small>Result: {signal.outcomeR}R</small>}
                   <span>{signal.notes}</span>
                 </div>
-                {tierLimits.aiTradeExplanation && signal.tradeExplanation && (
-                  <p className="ai-explanation">{signal.tradeExplanation}</p>
+                {tierLimits.aiTradeExplanation && (signal.aiFactors || signal.tradeExplanation) && (
+                  <AiExplanationCard aiFactors={signal.aiFactors} tradeExplanation={signal.tradeExplanation} />
                 )}
                 {tierLimits.riskAnalysis && (
                   <>
@@ -194,9 +231,9 @@ export default function SignalDashboard({ initialSignals, subscription }) {
             </div>
           ))}
         </div>
-        {tierLimits.apiAccess && (
+        {tierLimits.mt5Execution && (
           <p className="api-hint">
-            REST API: <code>GET /api/v1/signals</code> with your Bearer token
+            MT5 automation: one-click execution, trailing stops, break-even rules, and auto lot sizing from your account balance are enabled on your Premium plan.
           </p>
         )}
         {tierLimits.telegramAlerts && (

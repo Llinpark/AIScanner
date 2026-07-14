@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { tradingviewApi, subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
+import MarketChartPanel from './charts/MarketChartPanel';
+import { alertMatchesSymbol, normalizeMarketSymbol } from '../constants/markets';
 
-const SOCKET_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+import { SOCKET_URL } from '../config/appUrls';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -57,7 +59,9 @@ function DetailRow({ label, value }) {
 export default function TradingViewDashboard({ subscription, onNavigatePricing, initialTab }) {
   const { token } = useAuth();
   const [setup, setSetup] = useState(null);
-  const [selectedSymbol, setSelectedSymbol] = useState('EUR/USD');
+  const [liveFilter, setLiveFilter] = useState('ALL');
+  const [chartSymbol, setChartSymbol] = useState('EUR/USD');
+  const [historySymbol, setHistorySymbol] = useState('EUR/USD');
   const [historicalData, setHistoricalData] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [liveAlerts, setLiveAlerts] = useState([]);
@@ -70,9 +74,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       setActiveTab(initialTab);
     }
   }, [initialTab]);
-  const [showPineScript, setShowPineScript] = useState(false);
-  const [pineScript, setPineScript] = useState('');
   const [pineMeta, setPineMeta] = useState(null);
+  const [pineCopyState, setPineCopyState] = useState('idle');
+  const [pineLoadError, setPineLoadError] = useState('');
+  const pineScriptRef = useRef('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
 
   const [tierLimits, setTierLimits] = useState({
@@ -89,6 +94,15 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   const subscribed = hasLiveAccess(subscription);
 
   useEffect(() => {
+    if (symbols.length && !symbols.includes(historySymbol)) {
+      setHistorySymbol(symbols[0]);
+    }
+    if (symbols.length && !symbols.includes(chartSymbol)) {
+      setChartSymbol(symbols[0]);
+    }
+  }, [symbols, historySymbol, chartSymbol]);
+
+  useEffect(() => {
     if (!subscribed) return;
     subscriptionApi
       .getMe()
@@ -97,7 +111,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
           setTierLimits(res.data.tierFeatures);
           const pairs = res.data.allowedCurrencyPairs || res.data.tierFeatures.currencyPairs || ['EUR/USD'];
           const frames = res.data.tierFeatures.timeframes || ['1h'];
-          if (!pairs.includes(selectedSymbol)) setSelectedSymbol(pairs[0]);
+          if (!pairs.includes(historySymbol)) setHistorySymbol(pairs[0]);
           if (!frames.includes(selectedTimeframe)) setSelectedTimeframe(frames[0]);
         }
       })
@@ -113,42 +127,54 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     }
   }, []);
 
-  const loadPineScript = useCallback(async () => {
+  const loadPineScriptBundle = useCallback(async () => {
+    const response = await tradingviewApi.getPineScript();
+    pineScriptRef.current = response.data.script || '';
+    setPineMeta({
+      webhookUrl: response.data.webhookUrl,
+      scriptId: response.data.scriptId,
+      tierLabel: response.data.tierLabel,
+      subscriberLabel: response.data.subscriberLabel,
+      generatedAt: response.data.generatedAt,
+      security: response.data.security,
+      instructions: response.data.instructions || []
+    });
+    return pineScriptRef.current;
+  }, []);
+
+  const loadPineMeta = useCallback(async () => {
+    setPineLoadError('');
     try {
-      const response = await tradingviewApi.getPineScript();
-      setPineScript(response.data.script);
-      setPineMeta({
-        webhookUrl: response.data.webhookUrl,
-        scriptId: response.data.scriptId,
-        tierLabel: response.data.tierLabel,
-        subscriberLabel: response.data.subscriberLabel,
-        generatedAt: response.data.generatedAt,
-        security: response.data.security,
-        instructions: response.data.instructions || []
-      });
+      await loadPineScriptBundle();
     } catch (error) {
       console.error('Failed to load Pine Script:', error);
+      setPineLoadError(error.response?.data?.message || 'Unable to load your Pine Script. Try again or refresh the page.');
     }
-  }, []);
+  }, [loadPineScriptBundle]);
 
   const fetchAlerts = useCallback(async () => {
     try {
       setLoading(true);
-      const response = await tradingviewApi.getAlerts(selectedSymbol);
+      const response = await tradingviewApi.getAlerts(liveFilter === 'ALL' ? null : liveFilter);
       setAlerts(response.data.alerts);
     } catch (error) {
       console.error('Failed to fetch alerts:', error);
     } finally {
       setLoading(false);
     }
-  }, [selectedSymbol]);
+  }, [liveFilter]);
 
   useEffect(() => {
     if (subscribed) {
       fetchSetup();
-      loadPineScript();
     }
-  }, [subscribed, fetchSetup, loadPineScript]);
+  }, [subscribed, fetchSetup]);
+
+  useEffect(() => {
+    if (subscribed && activeTab === 'setup' && !pineScriptRef.current) {
+      loadPineMeta();
+    }
+  }, [subscribed, activeTab, loadPineMeta]);
 
   useEffect(() => {
     if (subscribed) {
@@ -168,22 +194,19 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
 
     socket.on('tv:live-alert', alert => {
       setLiveAlerts(prev => [alert, ...prev].slice(0, 100));
-      if (alert.symbol === selectedSymbol) {
-        setAlerts(prev => [alert, ...prev].slice(0, 50));
-      }
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification('KachingFx Live Alert', { body: alert.message });
       }
     });
 
     return () => socket.disconnect();
-  }, [token, subscribed, selectedSymbol]);
+  }, [token, subscribed]);
 
   const fetchHistoricalData = async () => {
     try {
       setLoading(true);
       setHistoryError('');
-      const response = await tradingviewApi.getHistory(selectedSymbol, { interval: selectedTimeframe });
+      const response = await tradingviewApi.getHistory(historySymbol, { interval: selectedTimeframe });
       setHistoricalData(response.data.data);
       setIndicators(response.data.indicators || null);
     } catch (error) {
@@ -195,12 +218,35 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     }
   };
 
-  const copyPineScript = () => {
-    navigator.clipboard.writeText(pineScript);
-    alert('Pine Script copied to clipboard!');
+  const copyPineScript = async () => {
+    setPineCopyState('loading');
+    try {
+      if (!pineScriptRef.current) {
+        await loadPineScriptBundle();
+      }
+      if (!pineScriptRef.current) {
+        throw new Error('Script unavailable');
+      }
+      await navigator.clipboard.writeText(pineScriptRef.current);
+      setPineCopyState('success');
+      window.setTimeout(() => setPineCopyState('idle'), 3000);
+    } catch (error) {
+      console.error('Failed to copy Pine Script:', error);
+      setPineCopyState('error');
+      window.setTimeout(() => setPineCopyState('idle'), 4000);
+    }
   };
 
-  const displayAlerts = liveAlerts.length ? liveAlerts : alerts;
+  const displayAlerts = useMemo(() => {
+    const source = liveAlerts.length ? liveAlerts : alerts;
+    const allowed = new Set(symbols.map(normalizeMarketSymbol));
+
+    return source.filter(alert => {
+      const normalized = normalizeMarketSymbol(alert.symbol);
+      if (!allowed.has(normalized)) return false;
+      return alertMatchesSymbol(alert, liveFilter);
+    });
+  }, [liveAlerts, alerts, liveFilter, symbols]);
 
   return (
     <div className="tv-dashboard">
@@ -245,7 +291,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
           TradingView Setup
         </button>
         <button type="button" className={`tab-btn ${activeTab === 'telegram' ? 'active' : ''}`} onClick={() => setActiveTab('telegram')}>
-          Telegram
+          Trade Copier
+        </button>
+        <button type="button" className={`tab-btn ${activeTab === 'chart' ? 'active' : ''}`} onClick={() => setActiveTab('chart')}>
+          Chart
         </button>
         <button type="button" className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')}>
           History
@@ -259,7 +308,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
           ) : (
             <>
               <div className="live-controls">
-                <select value={selectedSymbol} onChange={e => setSelectedSymbol(e.target.value)}>
+                <select value={liveFilter} onChange={e => setLiveFilter(e.target.value)}>
+                  <option value="ALL">All symbols</option>
                   {symbols.map(symbol => (
                     <option key={symbol} value={symbol}>
                       {symbol}
@@ -309,66 +359,98 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 <strong>Kaching TP2</strong>, and <strong>Kaching TP3</strong>.
                 Enable TradingView push or email notifications so alerts reach you instantly.
               </p>
-              <button type="button" className="btn-toggle" onClick={() => setShowPineScript(!showPineScript)}>
-                {showPineScript ? '▼' : '▶'} Show Pine Script
-              </button>
               {tierLimits.multiMarketScanner && (
                 <p className="premium-feature-hint">Multi-market scanner enabled on your Premium plan.</p>
               )}
               {tierLimits.smartMoneyConcepts && (
                 <p className="premium-feature-hint">Smart Money Concepts overlays included.</p>
               )}
-              {tierLimits.propFirmMode && (
-                <p className="premium-feature-hint">Prop firm mode: drawdown guardrails active.</p>
+              {tierLimits.mt5Execution && (
+                <p className="premium-feature-hint">
+                  Telegram Trade Copier is enabled — tap Execute on MT5 alerts to auto-fill entry, SL, TP, and lot size.
+                </p>
               )}
-              {showPineScript && pineScript && (
-                <div className="pine-script-box">
-                  {pineMeta && (
-                    <div className="pine-script-meta">
-                      <p>
-                        <strong>Generated for:</strong> {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
-                      </p>
-                      <p>
-                        <strong>Webhook URL:</strong> <code>{pineMeta.webhookUrl}</code>
-                      </p>
-                      <p>
-                        <strong>Script ID:</strong> {pineMeta.scriptId}
-                        {pineMeta.generatedAt && (
-                          <span> · {new Date(pineMeta.generatedAt).toLocaleString()}</span>
-                        )}
-                      </p>
-                      {pineMeta.security && (
-                        <p>
-                          <strong>Security:</strong> Each alert includes your personal{' '}
-                          <code>licenseToken</code>. API clients may also send{' '}
-                          <code>{pineMeta.security.signatureHeader}</code> ({pineMeta.security.signatureFormat}).
-                        </p>
+              {tierLimits.trailingStop && (
+                <p className="premium-feature-hint">Trailing stop automation is included.</p>
+              )}
+              {tierLimits.breakEvenAutomation && (
+                <p className="premium-feature-hint">Break-even automation is active for Premium trades.</p>
+              )}
+              {tierLimits.autoLotSizing && (
+                <p className="premium-feature-hint">Auto lot sizing adjusts position size from your MT5 account balance.</p>
+              )}
+
+              <div className="pine-script-box">
+                {pineMeta && (
+                  <div className="pine-script-meta">
+                    <p>
+                      <strong>Generated for:</strong> {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
+                    </p>
+                    <p>
+                      <strong>Webhook URL:</strong> <code>{pineMeta.webhookUrl}</code>
+                    </p>
+                    <p>
+                      <strong>Script ID:</strong> {pineMeta.scriptId}
+                      {pineMeta.generatedAt && (
+                        <span> · {new Date(pineMeta.generatedAt).toLocaleString()}</span>
                       )}
-                    </div>
-                  )}
-                  <div className="pine-script-instructions">
-                    <ol>
-                      {(pineMeta?.instructions?.length
-                        ? pineMeta.instructions
-                        : [
-                            'Open TradingView → Pine Editor → New script → paste the code below',
-                            'Add the script to your chart',
-                            'Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 with Webhook URL notifications',
-                            'Enable TradingView mobile push notifications for real-time delivery'
-                          ]
-                      ).map(step => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
+                    </p>
+                    {pineMeta.security && (
+                      <p>
+                        <strong>Security:</strong> Each alert includes your personal{' '}
+                        <code>licenseToken</code>. API clients may also send{' '}
+                        <code>{pineMeta.security.signatureHeader}</code> ({pineMeta.security.signatureFormat}).
+                      </p>
+                    )}
                   </div>
-                  <div className="pine-script-code-container">
-                    <pre id="pine-script-code">{pineScript}</pre>
-                    <button type="button" className="btn-copy" onClick={copyPineScript}>
-                      Copy Script
-                    </button>
-                  </div>
+                )}
+
+                <div className="pine-script-instructions">
+                  <ol>
+                    {(pineMeta?.instructions?.length
+                      ? pineMeta.instructions
+                      : [
+                          'Open TradingView → Pine Editor → New script → paste from your clipboard',
+                          'Add the script to your chart',
+                          'Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 with Webhook URL notifications',
+                          'Enable TradingView mobile push notifications for real-time delivery'
+                        ]
+                    ).map(step => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ol>
                 </div>
-              )}
+
+                <div className="pine-script-actions">
+                  <button
+                    type="button"
+                    className="btn-copy-script"
+                    onClick={copyPineScript}
+                    disabled={pineCopyState === 'loading'}
+                  >
+                    {pineCopyState === 'loading' ? 'Copying…' : 'Copy Script'}
+                  </button>
+                  <p className="pine-script-copy-note">
+                    Your personal Pine Script is copied to the clipboard only — it is not shown on this page.
+                  </p>
+                  {!pineMeta && !pineLoadError && pineCopyState !== 'loading' && (
+                    <p className="pine-script-loading">Preparing your script…</p>
+                  )}
+                  {pineLoadError && (
+                    <p className="pine-script-copy-feedback error">{pineLoadError}</p>
+                  )}
+                  {pineCopyState === 'success' && (
+                    <p className="pine-script-copy-feedback success">
+                      Script copied. Paste it into the TradingView Pine Editor.
+                    </p>
+                  )}
+                  {pineCopyState === 'error' && !pineLoadError && (
+                    <p className="pine-script-copy-feedback error">
+                      Could not copy the script. Allow clipboard access and try again.
+                    </p>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
@@ -384,6 +466,44 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
         </div>
       )}
 
+      {activeTab === 'chart' && (
+        <div className="tv-section">
+          {!subscribed ? (
+            <div className="empty-state">Subscribe to access the Kaching live chart.</div>
+          ) : (
+            <div className="history-section">
+              <h3>Kaching Live Chart</h3>
+              <p className="chart-subtitle">
+                Historical and live candles from Twelve Data (via FastAPI), with Kaching Entry, SL, TP, and pattern overlays.
+              </p>
+              <div className="controls">
+                <select value={chartSymbol} onChange={e => setChartSymbol(e.target.value)}>
+                  {symbols.map(symbol => (
+                    <option key={symbol} value={symbol}>
+                      {symbol}
+                    </option>
+                  ))}
+                </select>
+                <select value={selectedTimeframe} onChange={e => setSelectedTimeframe(e.target.value)}>
+                  {timeframes.map(tf => (
+                    <option key={tf} value={tf}>
+                      {tf}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <MarketChartPanel
+                symbol={chartSymbol}
+                interval={selectedTimeframe}
+                overlaySignals={[...liveAlerts, ...alerts]}
+                subscribed={subscribed}
+                liveEnabled
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === 'history' && (
         <div className="tv-section">
           {!subscribed ? (
@@ -392,7 +512,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
             <div className="history-section">
               <h3>Historical Data</h3>
               <div className="controls">
-                <select value={selectedSymbol} onChange={e => setSelectedSymbol(e.target.value)}>
+                <select value={historySymbol} onChange={e => setHistorySymbol(e.target.value)}>
                   {symbols.map(symbol => (
                     <option key={symbol} value={symbol}>
                       {symbol}

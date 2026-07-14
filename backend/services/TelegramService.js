@@ -4,6 +4,8 @@ const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
 const { hasTierFeature, getTierDisplayName } = require('../utils/subscriptionAccess');
 const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
+const { isEntryAlert } = require('../utils/signalOutcome');
+const Mt5TradeCopierService = require('./Mt5TradeCopierService');
 
 const LINK_CODE_TTL_MS = 15 * 60 * 1000;
 const linkCodeIndex = new Map();
@@ -115,14 +117,50 @@ async function sendMessage(chatId, text, options = {}) {
   if (!chatId || !isConfigured()) return null;
 
   try {
-    return await apiRequest('sendMessage', {
+    const payload = {
       chat_id: chatId,
       text,
       parse_mode: options.parseMode || 'HTML',
       disable_web_page_preview: true
-    });
+    };
+
+    if (options.replyMarkup) {
+      payload.reply_markup = options.replyMarkup;
+    }
+
+    return await apiRequest('sendMessage', payload);
   } catch (error) {
     console.warn('[Telegram] sendMessage failed:', error.message);
+    return null;
+  }
+}
+
+async function answerCallbackQuery(callbackQueryId, text, showAlert = false) {
+  if (!callbackQueryId || !isConfigured()) return null;
+
+  try {
+    return await apiRequest('answerCallbackQuery', {
+      callback_query_id: callbackQueryId,
+      text: text || '',
+      show_alert: showAlert
+    });
+  } catch (error) {
+    console.warn('[Telegram] answerCallbackQuery failed:', error.message);
+    return null;
+  }
+}
+
+async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
+  if (!chatId || !messageId || !isConfigured()) return null;
+
+  try {
+    return await apiRequest('editMessageReplyMarkup', {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup
+    });
+  } catch (error) {
+    console.warn('[Telegram] editMessageReplyMarkup failed:', error.message);
     return null;
   }
 }
@@ -134,12 +172,11 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
-function formatSignalMessage(signal) {
+function formatSignalMessage(signal, subscriber = null) {
   const alertType = signal.alertType || 'signal';
   const title = escapeHtml(formatKachingAlertMessage(signal).split('|')[0]?.trim() || 'Kaching Alert');
   const sl = signal.stop_loss_1 ?? signal.stop_loss;
-
-  return [
+  const lines = [
     `<b>${title}</b>`,
     `<b>Symbol:</b> ${escapeHtml(signal.symbol)}`,
     `<b>Direction:</b> ${escapeHtml(String(signal.direction || '').toUpperCase())}`,
@@ -147,12 +184,61 @@ function formatSignalMessage(signal) {
     `<b>Kaching SL:</b> ${Number(sl).toFixed(5)}`,
     `<b>Kaching TP1:</b> ${Number(signal.take_profit_1).toFixed(5)}`,
     `<b>Kaching TP2:</b> ${Number(signal.take_profit_2).toFixed(5)}`,
-    `<b>Kaching TP3:</b> ${Number(signal.take_profit_3).toFixed(5)}`,
-    signal.confidence != null ? `<b>Confidence:</b> ${Math.round(Number(signal.confidence) * 100)}%` : null,
-    signal.tradeExplanation ? `\n<i>${escapeHtml(signal.tradeExplanation)}</i>` : null
-  ]
-    .filter(Boolean)
-    .join('\n');
+    `<b>Kaching TP3:</b> ${Number(signal.take_profit_3).toFixed(5)}`
+  ];
+
+  if (subscriber && hasTierFeature(subscriber.subscription, 'autoLotSizing')) {
+    const lotSize = Mt5TradeCopierService.computeLotSize(signal, subscriber);
+    if (lotSize) {
+      lines.push(`<b>Auto Lot Size:</b> ${Number(lotSize).toFixed(2)}`);
+    }
+  }
+
+  if (signal.confidence != null) {
+    lines.push(`<b>Confidence:</b> ${Math.round(Number(signal.confidence) * 100)}%`);
+  }
+
+  if (signal.tradeExplanation) {
+    lines.push(`\n<i>${escapeHtml(signal.tradeExplanation)}</i>`);
+  }
+
+  if (isEntryAlert(alertType) && subscriber && hasTierFeature(subscriber.subscription, 'mt5Execution')) {
+    lines.push('\n<i>Tap Execute to copy this trade to MT5 — entry, SL, TP, and lot size are filled automatically.</i>');
+  }
+
+  return lines.filter(Boolean).join('\n');
+}
+
+function buildExecuteCallbackData(signalId) {
+  return `exec:${String(signalId)}`.slice(0, 64);
+}
+
+function parseExecuteCallbackData(data) {
+  const raw = String(data || '');
+  if (!raw.startsWith('exec:')) return null;
+  return raw.slice(5);
+}
+
+function buildSignalReplyMarkup(signal, subscriber) {
+  if (!subscriber || !hasTierFeature(subscriber.subscription, 'mt5Execution')) {
+    return null;
+  }
+
+  if (!isEntryAlert(signal.alertType || 'signal')) {
+    return null;
+  }
+
+  const mt5 = subscriber.mt5 || {};
+  if (!mt5.linkToken || mt5.enabled === false) {
+    return null;
+  }
+
+  const signalId = signal._id || signal.id;
+  if (!signalId) return null;
+
+  return {
+    inline_keyboard: [[{ text: '⚡ Execute on MT5', callback_data: buildExecuteCallbackData(signalId) }]]
+  };
 }
 
 async function notifySubscriber(subscriber, signalDoc) {
@@ -166,8 +252,9 @@ async function notifySubscriber(subscriber, signalDoc) {
   }
 
   const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
-  const text = formatSignalMessage(signal);
-  const result = await sendMessage(telegram.chatId, text);
+  const text = formatSignalMessage(signal, subscriber);
+  const replyMarkup = buildSignalReplyMarkup(signal, subscriber);
+  const result = await sendMessage(telegram.chatId, text, { replyMarkup });
   return Boolean(result);
 }
 
@@ -239,7 +326,7 @@ async function handleCommand(chatId, text, fromUsername) {
       if (linked.ok) {
         await sendMessage(
           chatId,
-          `✅ Linked to <b>${escapeHtml(linked.email)}</b>.\nYou will receive Kaching alerts here while your subscription is active.`
+          `✅ Linked to <b>${escapeHtml(linked.email)}</b>.\nYou will receive Kaching trade alerts here. Premium users can tap <b>Execute on MT5</b> to copy trades automatically.`
         );
         return;
       }
@@ -250,13 +337,12 @@ async function handleCommand(chatId, text, fromUsername) {
     await sendMessage(
       chatId,
       [
-        '<b>Welcome to KachingFx Alerts</b>',
+        '<b>Welcome to KachingScanner Trade Copier</b>',
         '',
         '1. Open KachingScanner → TradingView Setup → Telegram',
-        '2. Generate a link code',
-        '3. Send <code>/link YOUR_CODE</code> here',
-        '',
-        `Or use the dashboard deep link and tap Start.`
+        '2. Generate a link code and send <code>/link YOUR_CODE</code> here',
+        '3. Premium: install the MT5 EA and generate a link token in the dashboard',
+        '4. When a signal arrives, tap <b>Execute on MT5</b> — entry, SL, TP, and lot size are filled for you'
       ].join('\n')
     );
     return;
@@ -297,14 +383,16 @@ async function handleCommand(chatId, text, fromUsername) {
       return;
     }
     const status = await getPublicStatus(user);
+    const mt5Status = await Mt5TradeCopierService.getPublicStatus(user);
     await sendMessage(
       chatId,
       [
-        `<b>KachingScanner Telegram Status</b>`,
+        `<b>KachingScanner Trade Copier</b>`,
         `Plan: ${escapeHtml(status.tier)}`,
-        `Feature: ${status.featureEnabled ? 'enabled' : 'locked'}`,
-        `Linked: ${status.linked ? 'yes' : 'no'}`,
-        `Alerts: ${status.enabled ? 'on' : 'off'}`
+        `Telegram: ${status.linked ? 'linked' : 'not linked'} (${status.enabled ? 'alerts on' : 'alerts off'})`,
+        mt5Status.featureEnabled
+          ? `MT5: ${mt5Status.linked ? 'EA linked' : 'EA not linked'}${mt5Status.accountBalance ? ` | Balance: ${mt5Status.accountBalance} ${mt5Status.accountCurrency}` : ''}`
+          : 'MT5 execution: upgrade to Premium'
       ].join('\n')
     );
     return;
@@ -317,8 +405,11 @@ async function handleCommand(chatId, text, fromUsername) {
         '<b>Commands</b>',
         '/link CODE — link your KachingScanner account',
         '/unlink — stop alerts in this chat',
-        '/status — show link and plan status',
-        '/help — show this message'
+        '/status — show link and trade copier status',
+        '/help — show this message',
+        '',
+        '<b>Trade Copier</b>',
+        'Premium users: link the MT5 EA in the dashboard, then tap Execute on any entry alert.'
       ].join('\n')
     );
   }
@@ -334,7 +425,63 @@ async function findUserByChatId(chatId) {
   return devUserStore.findByChatId(normalized);
 }
 
+async function handleExecuteCallback(callbackQuery) {
+  const callbackId = callbackQuery.id;
+  const chatId = callbackQuery.message?.chat?.id;
+  const messageId = callbackQuery.message?.message_id;
+  const signalId = parseExecuteCallbackData(callbackQuery.data);
+
+  if (!signalId) {
+    await answerCallbackQuery(callbackId, 'Invalid action.', true);
+    return;
+  }
+
+  const user = await findUserByChatId(chatId);
+  if (!user) {
+    await answerCallbackQuery(callbackId, 'Link your KachingScanner account first.', true);
+    return;
+  }
+
+  const userId = user._id?.toString() || user.id;
+  const result = await Mt5TradeCopierService.queueExecutionForUser(userId, signalId);
+
+  if (!result.ok) {
+    const messages = {
+      subscription_required: 'MT5 execution requires Premium.',
+      mt5_not_linked: 'Link the MT5 EA in your dashboard first.',
+      mt5_disabled: 'MT5 trade copier is paused in your dashboard.',
+      lot_size_unavailable: 'Sync your MT5 balance via the EA first.',
+      already_queued: 'This trade is already queued or executed.',
+      not_entry_signal: 'Only entry signals can be executed.',
+      signal_not_found: 'Signal expired or not found.'
+    };
+    await answerCallbackQuery(callbackId, messages[result.reason] || 'Unable to queue trade.', true);
+    return;
+  }
+
+  const summary = Mt5TradeCopierService.formatExecutionSummary(result.execution);
+  await answerCallbackQuery(callbackId, 'Trade queued for MT5.');
+  await sendMessage(
+    chatId,
+    `✅ <b>Trade queued for MT5</b>\n\n${escapeHtml(summary)}\n\nYour MT5 EA will execute this automatically.`
+  );
+
+  if (messageId) {
+    await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [[{ text: '✅ Queued for MT5', callback_data: 'noop' }]] });
+  }
+}
+
 async function processUpdate(update) {
+  if (update?.callback_query) {
+    const data = update.callback_query.data || '';
+    if (data.startsWith('exec:')) {
+      await handleExecuteCallback(update.callback_query);
+    } else if (data !== 'noop') {
+      await answerCallbackQuery(update.callback_query.id);
+    }
+    return;
+  }
+
   const message = update?.message;
   if (!message?.text || !message.chat?.id) return;
 
@@ -364,7 +511,7 @@ async function pollOnce() {
   const updates = await apiRequest('getUpdates', {
     offset: pollingOffset,
     timeout: 30,
-    allowed_updates: ['message']
+    allowed_updates: ['message', 'callback_query']
   });
 
   for (const update of updates) {

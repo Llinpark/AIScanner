@@ -42,6 +42,17 @@ const SignalSchema = new mongoose.Schema({
   patternLabel: { type: String },
   gapTop: { type: Number },
   gapBottom: { type: Number },
+  fvgTimeStart: { type: Number },
+  fvgTimeEnd: { type: Number },
+  orderBlockTop: { type: Number },
+  orderBlockBottom: { type: Number },
+  orderBlockTimeStart: { type: Number },
+  orderBlockTimeEnd: { type: Number },
+  liquidityZoneTop: { type: Number },
+  liquidityZoneBottom: { type: Number },
+  liquidityTimeStart: { type: Number },
+  liquidityTimeEnd: { type: Number },
+  chartZones: { type: mongoose.Schema.Types.Mixed },
   signalGroupId: { type: String, index: true },
   parentSignalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Signal' },
   tradeStatus: {
@@ -57,6 +68,7 @@ const SignalSchema = new mongoose.Schema({
   outcomeR: { type: Number },
   closedAt: { type: Date },
   tradeExplanation: { type: String },
+  aiFactors: { type: mongoose.Schema.Types.Mixed },
   riskMetrics: RiskMetricsSchema,
   createdAt: { type: Date, default: Date.now }
 });

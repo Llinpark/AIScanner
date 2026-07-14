@@ -1,5 +1,7 @@
 // TradingView Service - handles OAuth, data fetching, and API calls
 const { TRADINGVIEW_CONFIG, MOCK_HISTORICAL_DATA } = require('../config/tradingview');
+const { getBasePrice, normalizeSymbol } = require('../config/symbols');
+const { fetchHistoricalData } = require('../utils/marketData');
 
 // Mock OAuth token manager (in production, use encryption)
 const tokenCache = {};
@@ -44,29 +46,17 @@ class TradingViewService {
 
   /**
    * Fetch historical OHLCV data for a symbol
-   * Supports mock, Alpha Vantage, EODHD, Polygon
+   * Primary: Twelve Data. Automatic fallback: EODHD. Dev fallback: mock.
    */
   static async getHistoricalData(symbol, interval = '1h', limit = 100) {
-    try {
-      if (TRADINGVIEW_CONFIG.dataProvider === 'mock') {
-        return TradingViewService.getMockHistoricalData(symbol, limit);
-      }
-
-      if (TRADINGVIEW_CONFIG.dataProvider === 'alpha_vantage') {
-        return await TradingViewService.fetchFromAlphaVantage(symbol, interval, limit);
-      }
-
-      if (TRADINGVIEW_CONFIG.dataProvider === 'eodhd') {
-        return await TradingViewService.fetchFromEODHD(symbol, interval, limit);
-      }
-
-      if (TRADINGVIEW_CONFIG.dataProvider === 'polygon') {
-        return await TradingViewService.fetchFromPolygon(symbol, interval, limit);
-      }
-
+    if (TRADINGVIEW_CONFIG.dataProvider === 'mock') {
       return TradingViewService.getMockHistoricalData(symbol, limit);
+    }
+
+    try {
+      return await fetchHistoricalData(TRADINGVIEW_CONFIG, symbol, interval, limit);
     } catch (error) {
-      console.error('Error fetching historical data:', error);
+      console.error('[MarketData] Provider chain failed, falling back to mock:', error.message);
       return TradingViewService.getMockHistoricalData(symbol, limit);
     }
   }
@@ -77,27 +67,30 @@ class TradingViewService {
   static buildDemoPatternCandles(basePrice = 1.0850) {
     const t = Date.now();
     const base = basePrice;
+    const step = base >= 1000 ? base * 0.0015 : base >= 100 ? base * 0.002 : 0.0035;
     return [
-      { time: t - 10800000, open: base - 0.001, high: base - 0.0004, low: base - 0.0012, close: base - 0.0007, volume: 850000 },
-      { time: t - 7200000, open: base - 0.0008, high: base - 0.0002, low: base - 0.001, close: base - 0.0005, volume: 820000 },
-      { time: t - 3600000, open: base - 0.0002, high: base + 0.0038, low: base - 0.0001, close: base + 0.0035, volume: 1650000 },
-      { time: t, open: base + 0.0028, high: base + 0.0042, low: base + 0.0025, close: base + 0.0039, volume: 1200000 }
+      { time: t - 10800000, open: base - step, high: base - step * 0.4, low: base - step * 1.2, close: base - step * 0.7, volume: 850000 },
+      { time: t - 7200000, open: base - step * 0.8, high: base - step * 0.2, low: base - step, close: base - step * 0.5, volume: 820000 },
+      { time: t - 3600000, open: base - step * 0.2, high: base + step * 1.1, low: base - step * 0.1, close: base + step, volume: 1650000 },
+      { time: t, open: base + step * 0.8, high: base + step * 1.2, low: base + step * 0.7, close: base + step * 1.1, volume: 1200000 }
     ];
   }
 
   static getMockHistoricalData(symbol, limit = 100) {
-    const seed = MOCK_HISTORICAL_DATA[symbol] || [];
+    const normalized = normalizeSymbol(symbol);
+    const seed = MOCK_HISTORICAL_DATA[normalized] || MOCK_HISTORICAL_DATA[symbol] || [];
     const data = [...seed];
-    const lastCandle = data[data.length - 1] || { close: 1.0850, time: Date.now() };
+    const basePrice = getBasePrice(normalized);
+    const lastCandle = data[data.length - 1] || { close: basePrice, time: Date.now() };
 
     while (data.length < Math.max(limit - 4, 20)) {
       const i = data.length;
-      const randomChange = (Math.random() - 0.5) * 0.001;
+      const randomChange = (Math.random() - 0.5) * (basePrice >= 1000 ? basePrice * 0.0002 : basePrice >= 100 ? basePrice * 0.0005 : 0.001);
       data.push({
         time: lastCandle.time - i * 3600000,
         open: lastCandle.close,
-        high: lastCandle.close + randomChange + 0.0005,
-        low: lastCandle.close + randomChange - 0.0005,
+        high: lastCandle.close + randomChange + Math.abs(randomChange) * 0.5,
+        low: lastCandle.close + randomChange - Math.abs(randomChange) * 0.5,
         close: lastCandle.close + randomChange,
         volume: Math.floor(900000 + Math.random() * 200000)
       });
@@ -106,42 +99,6 @@ class TradingViewService {
     const demo = TradingViewService.buildDemoPatternCandles(lastCandle.close);
     const merged = data.slice(0, -demo.length).concat(demo);
     return merged.slice(-limit).sort((a, b) => a.time - b.time);
-  }
-
-  /**
-   * Fetch from Alpha Vantage API
-   */
-  static async fetchFromAlphaVantage(symbol, interval, limit) {
-    const apiKey = TRADINGVIEW_CONFIG.providers.alpha_vantage.apiKey;
-    if (!apiKey) throw new Error('Alpha Vantage API key not configured');
-
-    // Mock implementation
-    console.log(`Fetching from Alpha Vantage: ${symbol}`);
-    return TradingViewService.getMockHistoricalData(symbol, limit);
-  }
-
-  /**
-   * Fetch from EODHD API
-   */
-  static async fetchFromEODHD(symbol, interval, limit) {
-    const apiKey = TRADINGVIEW_CONFIG.providers.eodhd.apiKey;
-    if (!apiKey) throw new Error('EODHD API key not configured');
-
-    // Mock implementation
-    console.log(`Fetching from EODHD: ${symbol}`);
-    return TradingViewService.getMockHistoricalData(symbol, limit);
-  }
-
-  /**
-   * Fetch from Polygon API
-   */
-  static async fetchFromPolygon(symbol, interval, limit) {
-    const apiKey = TRADINGVIEW_CONFIG.providers.polygon.apiKey;
-    if (!apiKey) throw new Error('Polygon API key not configured');
-
-    // Mock implementation
-    console.log(`Fetching from Polygon: ${symbol}`);
-    return TradingViewService.getMockHistoricalData(symbol, limit);
   }
 
   /**

@@ -70,11 +70,19 @@ function findByChatId(chatId) {
   return Object.values(store).find(u => String(u.telegram?.chatId || '') === String(chatId)) || null;
 }
 
+function findByMt5Token(token) {
+  const normalized = String(token || '').trim();
+  if (!normalized) return null;
+  const store = readStore();
+  return Object.values(store).find(u => String(u.mt5?.linkToken || '') === normalized) || null;
+}
+
 module.exports = {
   upsertUser,
   findById,
   findByEmail,
   findByChatId,
+  findByMt5Token,
   createUser,
   listActiveSubscribers
 };
