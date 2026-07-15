@@ -28,8 +28,54 @@ const PATTERN_SCANNER_CONFIG = {
     entryMode: 'close' // 'close' | 'gap_mid'
   },
 
-  autoScanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS, 10) || 60_000,
-  autoScanEnabled: process.env.SCANNER_AUTO_ENABLED !== 'false'
+  autoScanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS, 10) || 300_000,
+  scanBatchSize: Math.max(1, parseInt(process.env.SCANNER_BATCH_SIZE, 10) || 2),
+  autoScanEnabled: process.env.SCANNER_AUTO_ENABLED !== 'false',
+
+  // 10-step SMC pipeline (liquidity → sweep → MSS → expansion → FVG → retrace → entry)
+  pipeline: {
+    enabled: process.env.SCANNER_PIPELINE_ENABLED !== 'false',
+    minBars: 22,
+    fvgLookbackBars: 22,
+    liquidity: {
+      lookbackBars: 24,
+      minHistoryBars: 8,
+      swingWindow: 2,
+      sweepLookbackBars: 18
+    },
+    mss: {
+      structureLookbackBars: 20
+    },
+    expansion: {
+      minBodyRatio: 0.58,
+      minRangeToAtrRatio: 1.05
+    },
+    htf: {
+      timeframe: process.env.SCANNER_HTF_TIMEFRAME || '4h',
+      smaPeriod: 20,
+      requireData: false,
+      requireStructure: true
+    },
+    retracement: {
+      maxWaitBars: 12,
+      minReactionRatio: 0.0005
+    },
+    risk: {
+      slBufferPips: 5
+    },
+    scoring: {
+      premiumThreshold: Number(process.env.SCANNER_PREMIUM_THRESHOLD || 85),
+      expansionIdealBodyRatio: 0.82,
+      weights: {
+        liquiditySweep: 0.3,
+        fvgRule: 0.2,
+        expansionCandle: 0.1,
+        htfBias: 0.2,
+        fvgUnmitigated: 0.1,
+        marketStructureShift: 0.1
+      }
+    }
+  }
 };
 
 module.exports = { PATTERN_SCANNER_CONFIG };

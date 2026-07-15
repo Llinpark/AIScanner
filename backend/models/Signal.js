@@ -29,6 +29,10 @@ const SignalSchema = new mongoose.Schema({
   take_profit_2: { type: Number, required: true },
   take_profit_3: { type: Number, required: true },
   confidence: { type: Number, default: 0 },
+  pipelineScore: { type: Number },
+  pipelineScoreBreakdown: { type: mongoose.Schema.Types.Mixed },
+  signalQuality: { type: String },
+  isPremiumSignal: { type: Boolean, default: false },
   notes: { type: String },
   alertType: {
     type: String,

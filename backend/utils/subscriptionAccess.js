@@ -18,7 +18,7 @@ function isSubscriptionActive(subscription) {
 }
 
 function getTierName(subscription) {
-  const tier = subscription?.tier || 'basic';
+  const tier = String(subscription?.tier || 'basic').trim().toLowerCase();
   return TIER_FEATURES[tier] ? tier : 'basic';
 }
 
@@ -39,6 +39,8 @@ function getAllowedCurrencyPairs(subscription) {
   return pairs.map(normalizeSymbol);
 }
 
+const { normalizeInterval } = require('./marketIntervals');
+
 function getAllowedTimeframes(subscription) {
   return getTierFeatures(subscription).timeframes || ['1h'];
 }
@@ -49,8 +51,10 @@ function isCurrencyPairAllowed(symbol, subscription) {
 }
 
 function isTimeframeAllowed(interval, subscription) {
-  const allowed = getAllowedTimeframes(subscription);
-  return allowed.includes(String(interval || '').trim());
+  const canonical = normalizeInterval(interval);
+  return getAllowedTimeframes(subscription).some(
+    allowed => normalizeInterval(allowed) === canonical
+  );
 }
 
 function historyCutoffDate(subscription) {

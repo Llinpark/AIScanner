@@ -1,4 +1,5 @@
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
+const TradingPipelineService = require('./TradingPipelineService');
 
 function normalizeCandle(raw) {
   return {
@@ -238,7 +239,48 @@ function buildActionableNotes(detection, levels) {
   ].join(' | ');
 }
 
-function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '') {
+function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', options = {}) {
+  if (config.pipeline?.enabled === false) {
+    return legacyScanLastCandles(candles, config, symbol);
+  }
+
+  const pipelineResult = TradingPipelineService.runPipeline(candles, {
+    config,
+    symbol,
+    htfCandles: options.htfCandles || []
+  });
+
+  if (pipelineResult.passed && pipelineResult.stage === 'entry') {
+    return {
+      entry: { ...pipelineResult.entry, symbol },
+      pending: null,
+      pipeline: pipelineResult
+    };
+  }
+
+  if (pipelineResult.stage === 'pending_retrace' && pipelineResult.pending) {
+    return {
+      entry: null,
+      pending: { ...pipelineResult.pending, symbol },
+      pipeline: pipelineResult
+    };
+  }
+
+  if (pipelineResult.stage === 'below_premium_threshold') {
+    return {
+      entry: null,
+      pending: null,
+      stage: 'below_premium_threshold',
+      pipelineScore: pipelineResult.pipelineScore,
+      pipelineScoreBreakdown: pipelineResult.pipelineScoreBreakdown,
+      pipeline: pipelineResult
+    };
+  }
+
+  return { entry: null, pending: null, pipeline: pipelineResult };
+}
+
+function legacyScanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '') {
   if (candles.length < 3) {
     return { entry: null, pending: null };
   }
@@ -297,6 +339,7 @@ module.exports = {
   buildTradeInstructions,
   buildActionableNotes,
   scanLastCandles,
+  getPipSize,
   averageVolume,
   averageRange
 };

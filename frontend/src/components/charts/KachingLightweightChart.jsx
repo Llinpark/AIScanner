@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import {
   BaselineSeries,
   CandlestickSeries,
@@ -10,12 +10,17 @@ import {
 } from 'lightweight-charts';
 import {
   buildChartOverlay,
-  intervalToSeconds,
-  normalizeCandles,
-  symbolsMatch,
-  toChartTime
+  normalizeCandles
 } from '../../utils/chartLevels';
-import { MARKET_DATA_WS_URL } from '../../config/appUrls';
+import { timeframeLabel } from '../../constants/chartTimeframes';
+import {
+  formatInstrumentPrice,
+  getChartPriceFormat
+} from '../../utils/pricePrecision';
+
+const CHART_BAR_SPACING = 12;
+const CHART_MIN_BAR_SPACING = 5;
+const CHART_VISIBLE_BARS = 72;
 
 const LEVEL_COLORS = {
   entry: '#38bdf8',
@@ -113,17 +118,57 @@ function createZoneSeries(chart, zone, options) {
   return series;
 }
 
+function applyDefaultChartView(chart, barCount) {
+  if (!chart) return;
+  chart.timeScale().applyOptions({
+    barSpacing: CHART_BAR_SPACING,
+    minBarSpacing: CHART_MIN_BAR_SPACING
+  });
+  if (barCount > 1) {
+    chart.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, barCount - CHART_VISIBLE_BARS),
+      to: barCount + 0.5
+    });
+  } else {
+    chart.timeScale().fitContent();
+  }
+}
+
+function lastCandleColor(candles) {
+  if (!candles.length) return '#38bdf8';
+  const last = candles[candles.length - 1];
+  return last.close >= last.open ? '#22c55e' : '#ef4444';
+}
+
+function getTradeSide(overlay) {
+  const direction = String(overlay?.direction || '').toLowerCase();
+  const isLong = direction === 'long' || direction === 'buy';
+  return {
+    isLong,
+    label: isLong ? 'Buy' : 'Sell',
+    color: isLong ? '#22c55e' : '#ef4444'
+  };
+}
+
 function buildMarkers(candles, overlay) {
   if (!overlay || !candles.length) return [];
   const last = candles[candles.length - 1];
-  const isLong = overlay.direction === 'long' || overlay.direction === 'buy';
+  const { isLong, label, color } = getTradeSide(overlay);
+  const position = isLong ? 'belowBar' : 'aboveBar';
   const markers = [
     {
       time: last.time,
-      position: isLong ? 'belowBar' : 'aboveBar',
-      color: LEVEL_COLORS.entry,
+      position,
+      color,
+      shape: 'circle',
+      text: ''
+    },
+    {
+      time: last.time,
+      position,
+      color,
       shape: isLong ? 'arrowUp' : 'arrowDown',
-      text: 'Entry'
+      text: label
     }
   ];
 
@@ -146,8 +191,9 @@ export default function KachingLightweightChart({
   symbol,
   interval = '1h',
   liveEnabled = true,
+  liveStatus = 'idle',
   provider = null,
-  height = 420
+  height = 600
 }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -156,7 +202,8 @@ export default function KachingLightweightChart({
   const zoneSeriesRef = useRef([]);
   const priceLinesRef = useRef([]);
   const candlesRef = useRef([]);
-  const [liveStatus, setLiveStatus] = useState('idle');
+  const viewKeyRef = useRef('');
+  const resetViewRef = useRef(() => {});
 
   const overlay = useMemo(
     () => buildChartOverlay(overlaySignal, candles, interval),
@@ -169,21 +216,61 @@ export default function KachingLightweightChart({
     const chart = createChart(containerRef.current, {
       height,
       layout: {
-        background: { type: ColorType.Solid, color: '#0f172a' },
+        background: { type: ColorType.Solid, color: '#0F172A' },
         textColor: '#cbd5e1'
       },
       grid: {
-        vertLines: { color: 'rgba(148, 163, 184, 0.12)' },
-        horzLines: { color: 'rgba(148, 163, 184, 0.12)' }
+        vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.04)' }
       },
-      crosshair: { mode: CrosshairMode.Normal },
+      crosshair: {
+        mode: CrosshairMode.Normal,
+        vertLine: {
+          color: 'rgba(148, 163, 184, 0.45)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: '#1e293b'
+        },
+        horzLine: {
+          color: 'rgba(148, 163, 184, 0.45)',
+          width: 1,
+          style: LineStyle.Dashed,
+          labelBackgroundColor: '#1e293b'
+        }
+      },
       timeScale: {
         borderColor: 'rgba(148, 163, 184, 0.25)',
         timeVisible: true,
-        secondsVisible: false
+        secondsVisible: false,
+        barSpacing: CHART_BAR_SPACING,
+        minBarSpacing: CHART_MIN_BAR_SPACING,
+        rightOffset: 8
       },
       rightPriceScale: {
-        borderColor: 'rgba(148, 163, 184, 0.25)'
+        borderColor: 'rgba(148, 163, 184, 0.25)',
+        autoScale: true
+      },
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: false
+      },
+      handleScale: {
+        mouseWheel: true,
+        pinch: true,
+        axisPressedMouseMove: {
+          time: true,
+          price: true
+        },
+        axisDoubleClickReset: {
+          time: true,
+          price: true
+        }
+      },
+      kineticScroll: {
+        mouse: true,
+        touch: true
       }
     });
 
@@ -192,13 +279,25 @@ export default function KachingLightweightChart({
       downColor: '#ef4444',
       borderVisible: false,
       wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444'
+      wickDownColor: '#ef4444',
+      priceLineVisible: true,
+      lastValueVisible: true,
+      priceLineWidth: 1,
+      priceLineStyle: LineStyle.Dashed,
+      crosshairMarkerVisible: true,
+      crosshairMarkerRadius: 4
     });
     const seriesMarkers = createSeriesMarkers(series, []);
 
     chartRef.current = chart;
     seriesRef.current = series;
     markersRef.current = seriesMarkers;
+
+    const handleDoubleClick = () => {
+      applyDefaultChartView(chart, candlesRef.current.length);
+    };
+
+    chart.subscribeDblClick(handleDoubleClick);
 
     const resizeObserver = new ResizeObserver(entries => {
       const entry = entries[0];
@@ -208,6 +307,7 @@ export default function KachingLightweightChart({
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      chart.unsubscribeDblClick(handleDoubleClick);
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
@@ -220,12 +320,45 @@ export default function KachingLightweightChart({
   useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
+    if (!chart || !series || !symbol) return;
+
+    const priceFormat = getChartPriceFormat(symbol);
+    series.applyOptions({ priceFormat });
+    chart.applyOptions({
+      localization: {
+        priceFormatter: price => formatInstrumentPrice(price, symbol)
+      }
+    });
+  }, [symbol]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = seriesRef.current;
     const seriesMarkers = markersRef.current;
     if (!series || !chart) return;
 
     const normalized = normalizeCandles(candles);
     candlesRef.current = normalized;
     series.setData(normalized);
+
+    resetViewRef.current = () => applyDefaultChartView(chart, normalized.length);
+
+    const currentViewKey = `${symbol}:${interval}`;
+    const shouldResetView = viewKeyRef.current !== currentViewKey;
+    if (shouldResetView) {
+      viewKeyRef.current = currentViewKey;
+    }
+
+    const currentPriceColor = lastCandleColor(normalized);
+    series.applyOptions({
+      priceLineVisible: true,
+      lastValueVisible: true,
+      priceLineColor: currentPriceColor,
+      priceLineStyle: LineStyle.Dashed,
+      crosshairMarkerVisible: true,
+      crosshairMarkerBorderColor: currentPriceColor,
+      crosshairMarkerBackgroundColor: currentPriceColor
+    });
 
     priceLinesRef.current.forEach(line => {
       try {
@@ -302,99 +435,30 @@ export default function KachingLightweightChart({
       seriesMarkers?.setMarkers([]);
     }
 
-    chart.timeScale().fitContent();
-  }, [candles, overlay]);
-
-  useEffect(() => {
-    if (!liveEnabled || !symbol || !MARKET_DATA_WS_URL) {
-      setLiveStatus('off');
-      return undefined;
+    if (shouldResetView) {
+      applyDefaultChartView(chart, normalized.length);
     }
+  }, [candles, overlay, symbol, interval]);
 
-    let closed = false;
-    let ws;
-    setLiveStatus('connecting');
+  const handleResetView = () => resetViewRef.current();
 
-    try {
-      ws = new WebSocket(`${MARKET_DATA_WS_URL}/market-data/ws`);
-    } catch {
-      setLiveStatus('error');
-      return undefined;
-    }
-
-    ws.onopen = () => {
-      if (closed) return;
-      setLiveStatus('connected');
-      ws.send(JSON.stringify({ action: 'subscribe', symbols: [symbol] }));
-    };
-
-    ws.onmessage = event => {
-      const series = seriesRef.current;
-      if (!series) return;
-
-      let payload;
-      try {
-        payload = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-
-      if (payload.type !== 'price') return;
-      if (payload.symbol && !symbolsMatch(payload.symbol, symbol)) return;
-
-      const price = Number(payload.price);
-      if (!Number.isFinite(price)) return;
-
-      const current = candlesRef.current;
-      if (!current.length) return;
-
-      const bucketSeconds = intervalToSeconds(interval);
-      const tickTime = toChartTime(payload.timestamp) || Math.floor(Date.now() / 1000);
-      const last = { ...current[current.length - 1] };
-      const sameBucket = tickTime - last.time < bucketSeconds;
-
-      if (sameBucket) {
-        last.close = price;
-        last.high = Math.max(last.high, price);
-        last.low = Math.min(last.low, price);
-        current[current.length - 1] = last;
-      } else {
-        const nextTime = last.time + bucketSeconds;
-        current.push({
-          time: nextTime,
-          open: price,
-          high: price,
-          low: price,
-          close: price
-        });
-      }
-
-      candlesRef.current = current;
-      series.update(current[current.length - 1]);
-    };
-
-    ws.onerror = () => setLiveStatus('error');
-    ws.onclose = () => {
-      if (!closed) setLiveStatus('disconnected');
-    };
-
-    return () => {
-      closed = true;
-      ws?.close();
-    };
-  }, [liveEnabled, symbol, interval]);
-
-  const formatLevel = value => (Number.isFinite(value) ? value.toFixed(5) : '—');
+  const displayLiveStatus = liveEnabled ? liveStatus : 'off';
+  const formatLevel = value => formatInstrumentPrice(value, symbol);
 
   return (
     <div className="kaching-chart-wrap">
       <div className="kaching-chart-meta">
         <span>
-          <strong>{symbol}</strong> · {interval}
+          <strong>{symbol}</strong> · {timeframeLabel(interval)}
           {provider ? ` · ${provider}` : ''}
         </span>
-        <span className={`kaching-chart-live live-${liveStatus}`}>
-          Live: {liveStatus}
+        <span className="kaching-chart-controls">
+          <button type="button" className="chart-reset-btn" onClick={handleResetView} title="Reset zoom and pan">
+            Reset view
+          </button>
+          <span className={`kaching-chart-live live-${displayLiveStatus}`}>
+            Live: {displayLiveStatus}
+          </span>
         </span>
       </div>
       <div ref={containerRef} className="kaching-chart-container" />

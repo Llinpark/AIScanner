@@ -246,17 +246,63 @@ export function intervalToSeconds(interval) {
   const map = {
     '1m': 60,
     '1min': 60,
+    M1: 60,
     '5m': 300,
     '5min': 300,
+    M5: 300,
     '15m': 900,
     '15min': 900,
+    M15: 900,
     '30m': 1800,
     '30min': 1800,
+    M30: 1800,
     '1h': 3600,
     '60min': 3600,
+    H1: 3600,
     '4h': 14400,
+    H4: 14400,
     '1D': 86400,
-    '1day': 86400
+    '1d': 86400,
+    '1day': 86400,
+    D1: 86400,
+    '1W': 604800,
+    '1w': 604800,
+    W1: 604800,
+    MN: 2592000,
+    '1M': 2592000
   };
   return map[String(interval || '1h')] || 3600;
+}
+
+export function normalizeInterval(interval) {
+  const aliases = {
+    '1m': '1m',
+    '1min': '1m',
+    M1: '1m',
+    '5m': '5m',
+    '5min': '5m',
+    M5: '5m',
+    '15m': '15m',
+    '15min': '15m',
+    M15: '15m',
+    '30m': '30m',
+    '30min': '30m',
+    M30: '30m',
+    '1h': '1h',
+    '60min': '1h',
+    H1: '1h',
+    '4h': '4h',
+    H4: '4h',
+    '1D': '1d',
+    '1d': '1d',
+    '1day': '1d',
+    D1: '1d',
+    '1W': '1w',
+    '1w': '1w',
+    W1: '1w',
+    MN: '1M',
+    '1M': '1M'
+  };
+  const raw = String(interval || '1h').trim();
+  return aliases[raw] || aliases[raw.toLowerCase()] || raw;
 }

@@ -49,8 +49,23 @@ class MarketDataCache:
         entry = self._memory.get(key)
         if not entry:
             return None
-        expires_at, payload = entry
+        expires_at, stored_at, payload = entry
         if time.time() >= expires_at:
+            self._memory.pop(key, None)
+            return None
+        return payload
+
+    def get_stale(self, key: str) -> dict[str, Any] | None:
+        fresh = self.get(key)
+        if fresh:
+            return fresh
+
+        entry = self._memory.get(key)
+        if not entry:
+            return None
+
+        _expires_at, stored_at, payload = entry
+        if time.time() - stored_at > self.settings.stale_cache_seconds:
             self._memory.pop(key, None)
             return None
         return payload
@@ -60,11 +75,11 @@ class MarketDataCache:
         if redis_client:
             try:
                 redis_client.setex(key, self.settings.cache_ttl_seconds, json.dumps(payload, default=str))
-                return
             except Exception:
                 pass
 
-        self._memory[key] = (time.time() + self.settings.cache_ttl_seconds, payload)
+        expires_at = time.time() + self.settings.cache_ttl_seconds
+        self._memory[key] = (expires_at, time.time(), payload)
 
     def build_key(self, symbol: str, interval: str, limit: int) -> str:
         return f'market:candles:{symbol}:{interval}:{limit}'

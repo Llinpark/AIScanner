@@ -1,51 +1,78 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { marketDataApi } from '../../services/api';
+import {
+  defaultApiInterval,
+  isChartTimeframeAllowed
+} from '../../constants/chartTimeframes';
+import { getTimeframesForTier } from '../../constants/subscriptionLimits';
+import { useAuth } from '../../context/AuthContext';
+import useMarketCandles from '../../hooks/useMarketCandles';
 import { findLatestEntrySignal } from '../../utils/chartLevels';
+import ChartTimeframeToolbar from './ChartTimeframeToolbar';
 import KachingLightweightChart from './KachingLightweightChart';
 
 export default function MarketChartPanel({
   symbol,
-  interval,
+  interval: controlledInterval,
+  onIntervalChange,
+  allowedTimeframes: allowedTimeframesProp,
+  allowedSymbols = [],
+  onSymbolChange,
   overlaySignals = [],
   subscribed = true,
   liveEnabled = true,
-  height = 420
+  height = 600
 }) {
-  const [candles, setCandles] = useState([]);
-  const [provider, setProvider] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const overlaySignal = useMemo(
-    () => findLatestEntrySignal(overlaySignals, symbol),
-    [overlaySignals, symbol]
-  );
-
-  const loadCandles = useCallback(async () => {
-    if (!subscribed || !symbol) return;
-    setLoading(true);
-    setError('');
-    try {
-      const response = await marketDataApi.getCandles(symbol, { interval, limit: 200 });
-      setCandles(response.data.candles || []);
-      setProvider(response.data.provider || null);
-    } catch (err) {
-      setCandles([]);
-      setProvider(null);
-      const data = err.response?.data;
-      const apiMessage =
-        (typeof data === 'object' && (data?.message || data?.detail)) ||
-        (typeof data === 'string' && data.includes('Cannot GET') ? 'Chart API not found — restart the backend server.' : null) ||
-        err.message;
-      setError(apiMessage || 'Failed to load chart data.');
-    } finally {
-      setLoading(false);
-    }
-  }, [subscribed, symbol, interval]);
+  const SYMBOL_DEBOUNCE_MS = 400;
+  const { subscription } = useAuth();
+  const tier = subscription?.tier || 'basic';
+  const [debouncedSymbol, setDebouncedSymbol] = useState(symbol);
 
   useEffect(() => {
-    loadCandles();
-  }, [loadCandles]);
+    const timer = setTimeout(() => setDebouncedSymbol(symbol), SYMBOL_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [symbol]);
+
+  const allowedTimeframes = useMemo(() => {
+    if (Array.isArray(allowedTimeframesProp) && allowedTimeframesProp.length > 0) {
+      return allowedTimeframesProp;
+    }
+    return getTimeframesForTier(tier);
+  }, [allowedTimeframesProp, tier]);
+
+  const isControlled = controlledInterval !== undefined;
+  const [internalInterval, setInternalInterval] = useState(() =>
+    defaultApiInterval(allowedTimeframes)
+  );
+
+  const interval = isControlled ? controlledInterval : internalInterval;
+
+  useEffect(() => {
+    if (isControlled) return;
+    if (!isChartTimeframeAllowed(internalInterval, allowedTimeframes)) {
+      setInternalInterval(defaultApiInterval(allowedTimeframes));
+    }
+  }, [allowedTimeframes, internalInterval, isControlled]);
+
+  const loadCandles = useCallback(
+    nextInterval => {
+      if (!isChartTimeframeAllowed(nextInterval, allowedTimeframes)) return;
+      if (isControlled) {
+        onIntervalChange?.(nextInterval);
+      } else {
+        setInternalInterval(nextInterval);
+      }
+    },
+    [allowedTimeframes, isControlled, onIntervalChange]
+  );
+
+  const overlaySignal = findLatestEntrySignal(overlaySignals, debouncedSymbol);
+  const { candles, provider, loading, error, liveStatus } = useMarketCandles({
+    symbol: debouncedSymbol,
+    interval,
+    limit: 200,
+    subscribed,
+    liveEnabled
+  });
 
   if (!subscribed) {
     return <div className="empty-state">Subscribe to view live Kaching charts.</div>;
@@ -53,21 +80,32 @@ export default function MarketChartPanel({
 
   return (
     <div className="market-chart-panel">
+      <ChartTimeframeToolbar
+        symbol={symbol}
+        allowedSymbols={allowedSymbols}
+        onSymbolChange={onSymbolChange}
+        activeInterval={interval}
+        allowedTimeframes={allowedTimeframes}
+        onTimeframeChange={loadCandles}
+        loading={loading}
+      />
+
       {loading && candles.length === 0 && <div className="loading-state">Loading chart data…</div>}
       {error && <div className="feature-lock">{error}</div>}
       {candles.length > 0 && (
         <KachingLightweightChart
           candles={candles}
           overlaySignal={overlaySignal}
-          symbol={symbol}
+          symbol={debouncedSymbol}
           interval={interval}
           liveEnabled={liveEnabled}
+          liveStatus={liveStatus}
           provider={provider}
           height={height}
         />
       )}
       {!loading && !error && candles.length === 0 && (
-        <div className="empty-state">No candle data available for {symbol}.</div>
+        <div className="empty-state">No candle data available for {debouncedSymbol}.</div>
       )}
     </div>
   );

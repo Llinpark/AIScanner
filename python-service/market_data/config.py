@@ -15,6 +15,7 @@ class MarketDataSettings:
     eodhd_api_key: str
     eodhd_base_url: str
     cache_ttl_seconds: int
+    stale_cache_seconds: int
     redis_url: str
     redis_enabled: bool
     stream_enabled: bool
@@ -30,7 +31,8 @@ def load_settings() -> MarketDataSettings:
         twelve_data_base_url=os.getenv('TWELVE_DATA_BASE_URL', 'https://api.twelvedata.com').strip(),
         eodhd_api_key=os.getenv('EODHD_API_KEY', '').strip(),
         eodhd_base_url=os.getenv('EODHD_BASE_URL', 'https://eodhd.com/api').strip(),
-        cache_ttl_seconds=max(1, int(os.getenv('MARKET_DATA_CACHE_TTL_SECONDS', '60') or 60)),
+        cache_ttl_seconds=max(60, int(os.getenv('MARKET_DATA_CACHE_TTL_SECONDS', '300') or 300)),
+        stale_cache_seconds=max(120, int(os.getenv('MARKET_DATA_STALE_CACHE_SECONDS', '900') or 900)),
         redis_url=redis_url,
         redis_enabled=redis_flag in {'1', 'true', 'yes', 'on'},
         stream_enabled=os.getenv('MARKET_DATA_STREAM_ENABLED', 'true').strip().lower() in {'1', 'true', 'yes', 'on'},

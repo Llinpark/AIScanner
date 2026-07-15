@@ -1,4 +1,13 @@
 const { normalizeSymbol } = require('../config/symbols');
+const { normalizeInterval } = require('./marketIntervals');
+const {
+  DEFAULT_TTL_MS,
+  dedupeFetch,
+  getFresh,
+  getStale,
+  isRateLimitError,
+  set
+} = require('./marketDataCache');
 
 const TWELVE_DATA_SYMBOL_MAP = {
   US30: 'DJI',
@@ -6,19 +15,17 @@ const TWELVE_DATA_SYMBOL_MAP = {
   'USD/BTC': 'BTC/USD'
 };
 
-const INTERVAL_MAP = {
+const TWELVE_DATA_INTERVAL_MAP = {
   '1m': '1min',
   '5m': '5min',
   '15m': '15min',
   '30m': '30min',
   '1h': '1h',
   '4h': '4h',
-  '1D': '1day',
-  '1W': '1week'
+  '1d': '1day',
+  '1w': '1week',
+  '1M': '1month'
 };
-
-const cache = new Map();
-const DEFAULT_CACHE_TTL_MS = Number(process.env.TWELVE_DATA_CACHE_TTL_MS || 60000);
 
 function toTwelveDataSymbol(symbol) {
   const normalized = normalizeSymbol(symbol);
@@ -26,8 +33,8 @@ function toTwelveDataSymbol(symbol) {
 }
 
 function toTwelveDataInterval(interval) {
-  const key = String(interval || '1h').trim();
-  return INTERVAL_MAP[key] || key;
+  const canonical = normalizeInterval(interval);
+  return TWELVE_DATA_INTERVAL_MAP[canonical] || canonical;
 }
 
 function parseTwelveDataDatetime(value) {
@@ -51,20 +58,6 @@ function normalizeTwelveDataCandles(values = []) {
     .sort((a, b) => a.time - b.time);
 }
 
-function getCachedSeries(cacheKey) {
-  const entry = cache.get(cacheKey);
-  if (!entry) return null;
-  if (Date.now() - entry.storedAt > entry.ttlMs) {
-    cache.delete(cacheKey);
-    return null;
-  }
-  return entry.data;
-}
-
-function setCachedSeries(cacheKey, data, ttlMs = DEFAULT_CACHE_TTL_MS) {
-  cache.set(cacheKey, { data, storedAt: Date.now(), ttlMs });
-}
-
 async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl }) {
   if (!apiKey) {
     throw new Error('Twelve Data API key not configured');
@@ -73,36 +66,53 @@ async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl 
   const tdSymbol = toTwelveDataSymbol(symbol);
   const tdInterval = toTwelveDataInterval(interval);
   const outputsize = Math.min(Math.max(Number(limit) || 100, 1), 5000);
-  const cacheKey = `${tdSymbol}:${tdInterval}:${outputsize}`;
-  const cached = getCachedSeries(cacheKey);
+  const cacheKey = `twelve:${tdSymbol}:${tdInterval}:${outputsize}`;
+
+  const cached = getFresh(cacheKey);
   if (cached) return cached;
 
-  const url = new URL(`${baseUrl}/time_series`);
-  url.searchParams.set('symbol', tdSymbol);
-  url.searchParams.set('interval', tdInterval);
-  url.searchParams.set('outputsize', String(outputsize));
-  url.searchParams.set('order', 'asc');
-  url.searchParams.set('timezone', 'UTC');
-  url.searchParams.set('apikey', apiKey);
+  return dedupeFetch(cacheKey, async () => {
+    const freshCached = getFresh(cacheKey);
+    if (freshCached) return freshCached;
 
-  const response = await fetch(url);
-  const payload = await response.json();
+    const url = new URL(`${baseUrl}/time_series`);
+    url.searchParams.set('symbol', tdSymbol);
+    url.searchParams.set('interval', tdInterval);
+    url.searchParams.set('outputsize', String(outputsize));
+    url.searchParams.set('order', 'asc');
+    url.searchParams.set('timezone', 'UTC');
+    url.searchParams.set('apikey', apiKey);
 
-  if (!response.ok) {
-    throw new Error(payload?.message || `Twelve Data HTTP ${response.status}`);
-  }
+    try {
+      const response = await fetch(url);
+      const payload = await response.json();
 
-  if (payload.status === 'error') {
-    throw new Error(payload.message || 'Twelve Data API error');
-  }
+      if (!response.ok) {
+        throw new Error(payload?.message || `Twelve Data HTTP ${response.status}`);
+      }
 
-  const candles = normalizeTwelveDataCandles(payload.values || []);
-  if (!candles.length) {
-    throw new Error(`Twelve Data returned no candles for ${tdSymbol}`);
-  }
+      if (payload.status === 'error') {
+        throw new Error(payload.message || 'Twelve Data API error');
+      }
 
-  setCachedSeries(cacheKey, candles);
-  return candles;
+      const candles = normalizeTwelveDataCandles(payload.values || []);
+      if (!candles.length) {
+        throw new Error(`Twelve Data returned no candles for ${tdSymbol}`);
+      }
+
+      set(cacheKey, candles, DEFAULT_TTL_MS);
+      return candles;
+    } catch (error) {
+      if (isRateLimitError(error.message)) {
+        const stale = getStale(cacheKey);
+        if (stale) {
+          console.warn(`[TwelveData] Rate limited for ${tdSymbol}, serving stale cache`);
+          return stale;
+        }
+      }
+      throw error;
+    }
+  });
 }
 
 module.exports = {

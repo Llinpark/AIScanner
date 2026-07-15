@@ -36,6 +36,7 @@ const {
   validateKachingEntrySignal
 } = require('./utils/kachingSignalLevels');
 const MarketScannerService = require('./services/MarketScannerService');
+const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
 const SignalEnrichmentService = require('./services/SignalEnrichmentService');
 const SignalOutcomeService = require('./services/SignalOutcomeService');
 const createAnalyticsRouter = require('./routes/analytics');
@@ -64,71 +65,14 @@ const {
   filterSignalsForTier,
   isCurrencyPairAllowed,
   isTimeframeAllowed,
-  getAllowedCurrencyPairs
+  getAllowedCurrencyPairs,
+  getAllowedTimeframes
 } = require('./utils/subscriptionAccess');
 const { verifyToken, sanitizeUser } = require('./utils/auth');
 const { normalizeSymbol } = require('./config/symbols');
-const { TRADINGVIEW_CONFIG } = require('./config/tradingview');
-const { fetchHistoricalData } = require('./utils/marketData');
+const { normalizeInterval } = require('./utils/marketIntervals');
 
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
-const PYTHON_SERVICE_URL = (process.env.PYTHON_SERVICE_URL || 'http://localhost:8001').replace(/\/$/, '');
-
-async function fetchCandlesFromPython(symbol, interval, limit) {
-  const url = new URL(`${PYTHON_SERVICE_URL}/market-data/candles`);
-  url.searchParams.set('symbol', String(symbol));
-  url.searchParams.set('interval', String(interval));
-  url.searchParams.set('limit', String(limit));
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    const payload = await response.json();
-    if (!response.ok) {
-      const error = new Error(payload.detail || payload.message || `FastAPI HTTP ${response.status}`);
-      error.status = response.status;
-      error.payload = payload;
-      throw error;
-    }
-    return payload;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function fetchCandlesFromNode(symbol, interval, limit) {
-  const normalized = normalizeSymbol(symbol);
-  const parsedLimit = parseInt(limit, 10) || 200;
-  const candles = await fetchHistoricalData(TRADINGVIEW_CONFIG, normalized, interval, parsedLimit);
-  return {
-    provider: TRADINGVIEW_CONFIG.primaryProvider || 'twelve_data',
-    symbol: normalized,
-    provider_symbol: normalized,
-    interval,
-    requested_limit: parsedLimit,
-    count: candles.length,
-    fallback_used: true,
-    source: 'node',
-    candles: candles.map(candle => ({
-      timestamp: new Date(candle.time).toISOString(),
-      open: candle.open,
-      high: candle.high,
-      low: candle.low,
-      close: candle.close,
-      volume: candle.volume || 0
-    }))
-  };
-}
-
-async function fetchMarketCandles(symbol, interval, limit) {
-  try {
-    return await fetchCandlesFromPython(symbol, interval, limit);
-  } catch (pythonError) {
-    console.warn('[MarketData] FastAPI unavailable, using Node Twelve Data fallback:', pythonError.message);
-    return fetchCandlesFromNode(symbol, interval, limit);
-  }
-}
 
 const devUserStore = require('./utils/devUserStore');
 
@@ -194,6 +138,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   }
 });
+initMarketDataHub(io);
 
 function captureRawBody(req, res, buf) {
   if (buf?.length) {
@@ -597,7 +542,8 @@ app.get('/api/subscription/me', requireAuth, (req, res) => {
     user: sanitizeUser(req.user),
     tierFeatures: getTierFeatures(req.user.subscription),
     tierDisplayName: getTierDisplayName(tier),
-    allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
+    allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription),
+    allowedTimeframes: getAllowedTimeframes(req.user.subscription)
   });
 });
 
@@ -1073,7 +1019,8 @@ app.get('/api/tradingview/alerts', requireAuth, requireSubscription, async (req,
 app.get('/api/tradingview/history/:symbol', requireAuth, requireSubscription, async (req, res) => {
   try {
     const { symbol } = req.params;
-    const { interval = '1h', limit = 100 } = req.query;
+    const { interval: rawInterval = '1h', limit = 100 } = req.query;
+    const interval = normalizeInterval(rawInterval);
     const features = getTierFeatures(req.user.subscription);
 
     if (!isCurrencyPairAllowed(symbol, req.user.subscription)) {
@@ -1106,7 +1053,8 @@ app.get('/api/tradingview/history/:symbol', requireAuth, requireSubscription, as
 
 app.get('/api/market-data/candles', requireAuth, requireSubscription, async (req, res) => {
   try {
-    const { symbol, interval = '1h', limit = 200 } = req.query;
+    const { symbol, interval: rawInterval = '1h', limit = 200 } = req.query;
+    const interval = normalizeInterval(rawInterval);
     if (!symbol) {
       return res.status(400).json({ message: 'symbol query parameter is required' });
     }
@@ -1125,7 +1073,18 @@ app.get('/api/market-data/candles', requireAuth, requireSubscription, async (req
       });
     }
 
-    const payload = await fetchMarketCandles(symbol, interval, parseInt(limit, 10) || 200);
+    const hub = getMarketDataHub();
+    const parsedLimit = parseInt(limit, 10) || 200;
+    let payload = await hub.getCandles(symbol, interval, parsedLimit, { cacheOnly: true });
+    if (!payload) {
+      payload = await hub.getCandles(symbol, interval, parsedLimit, { allowProviderFetch: true });
+    } else if (!hub.isFresh(payload, interval) && hub.canFetchFromProvider()) {
+      try {
+        payload = await hub.getCandles(symbol, interval, parsedLimit, { allowProviderFetch: true });
+      } catch (refreshError) {
+        payload = { ...payload, stale: true, refreshError: refreshError.message };
+      }
+    }
     res.json(payload);
   } catch (error) {
     console.error('Market data proxy error:', error);
@@ -1138,15 +1097,23 @@ app.get('/api/market-data/candles', requireAuth, requireSubscription, async (req
 
 app.get('/api/market-data/status', requireAuth, requireSubscription, async (req, res) => {
   try {
-    const response = await fetch(`${PYTHON_SERVICE_URL}/market-data/status`);
-    const payload = await response.json();
-    if (!response.ok) {
-      return res.status(response.status).json(payload);
-    }
-    res.json(payload);
+    const hub = getMarketDataHub();
+    const redis = await require('./utils/redisClient').getRedisClient();
+    res.json({
+      status: 'ok',
+      cacheBackend: redis ? 'redis' : 'memory',
+      hub: hub.status(),
+      providers: {
+        primary: process.env.MARKET_DATA_PRIMARY || 'twelve_data',
+        fallback: process.env.MARKET_DATA_FALLBACK || 'eodhd',
+        twelve_data: Boolean(process.env.TWELVE_DATA_API_KEY),
+        eodhd: Boolean(process.env.EODHD_API_KEY)
+      },
+      note: 'Twelve Data is used on-demand per viewed symbol+timeframe; one fetch broadcasts to all viewers.'
+    });
   } catch (error) {
-    console.error('Market data status proxy error:', error);
-    res.status(502).json({ message: 'Unable to reach FastAPI market data service', error: error.message });
+    console.error('Market data status error:', error);
+    res.status(500).json({ message: 'Unable to load market data status', error: error.message });
   }
 });
 
@@ -1271,6 +1238,7 @@ io.use(async (socket, next) => {
 });
 
 io.on('connection', socket => {
+  socket.marketStreams = new Set();
 
   console.log('Subscriber connected:', socket.id, socket.userId);
   socket.emit('subscriber:ready', { userId: socket.userId });
@@ -1300,7 +1268,89 @@ io.on('connection', socket => {
     }
   });
 
+  socket.on('market:subscribe', async ({ symbol, interval: rawInterval = '1h', limit = 200 } = {}) => {
+    try {
+      if (!symbol) return;
+      const interval = normalizeInterval(rawInterval);
+      const features = getTierFeatures(socket.user.subscription);
+      if (!isCurrencyPairAllowed(symbol, socket.user.subscription)) {
+        socket.emit('market:error', { message: `Currency pair ${symbol} is not included in your plan.` });
+        return;
+      }
+      if (!isTimeframeAllowed(interval, socket.user.subscription)) {
+        socket.emit('market:error', {
+          message: `Timeframe ${interval} is not included in your plan.`,
+          allowedTimeframes: features.timeframes
+        });
+        return;
+      }
+
+      const hub = getMarketDataHub();
+      const parsedLimit = parseInt(limit, 10) || 200;
+      const { stream } = hub.watch(symbol, interval, parsedLimit);
+      socket.marketStreams.add(hub.streamKey(symbol, interval));
+      socket.join(hub.roomKey(symbol, interval));
+
+      let payload = await hub.getCandles(symbol, interval, parsedLimit, { cacheOnly: true });
+
+      if (payload) {
+        socket.emit('market:candles', {
+          ...payload,
+          viewers: stream.viewers,
+          stale: payload.stale || !hub.isFresh(payload, interval)
+        });
+      }
+
+      const needsRefresh = !payload || !hub.isFresh(payload, interval);
+      if (needsRefresh && hub.canFetchFromProvider()) {
+        try {
+          payload = await hub.refreshStream(stream);
+          socket.emit('market:candles', {
+            ...payload,
+            viewers: stream.viewers,
+            stale: Boolean(payload.stale)
+          });
+        } catch (refreshError) {
+          if (!payload) {
+            throw refreshError;
+          }
+        }
+        return;
+      }
+
+      if (payload) {
+        return;
+      }
+
+      socket.emit('market:error', {
+        message: hub.providerThrottleStatus().blockedUntil
+          ? 'Market data temporarily rate limited. Please wait a moment and try again.'
+          : 'Unable to load chart data for this symbol.'
+      });
+    } catch (error) {
+      socket.emit('market:error', { message: error.message || 'Unable to subscribe to market data' });
+    }
+  });
+
+  socket.on('market:unsubscribe', ({ symbol, interval = '1h' } = {}) => {
+    if (!symbol) return;
+    const hub = getMarketDataHub();
+    const streamKey = hub.streamKey(symbol, interval);
+    hub.unwatch(symbol, interval);
+    socket.marketStreams.delete(streamKey);
+    socket.leave(hub.roomKey(symbol, interval));
+  });
+
   socket.on('disconnect', () => {
+    const hub = getMarketDataHub();
+    for (const streamKey of socket.marketStreams || []) {
+      const splitAt = streamKey.lastIndexOf(':');
+      if (splitAt <= 0) continue;
+      const symbol = streamKey.slice(0, splitAt);
+      const interval = streamKey.slice(splitAt + 1);
+      hub.unwatch(symbol, interval);
+    }
+    socket.marketStreams.clear();
     console.log('Client disconnected:', socket.id);
   });
 });

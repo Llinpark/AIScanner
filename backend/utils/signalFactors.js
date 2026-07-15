@@ -22,7 +22,7 @@ function normalizeCandles(candles = []) {
 function detectFvgFactor(signal, candles) {
   const long = isLongDirection(signal.direction);
 
-  if (signal.pattern === 'perfect_fvg') {
+  if (signal.pattern === 'perfect_fvg' || signal.pattern === 'smc_pipeline') {
     return {
       key: 'fvg',
       confirmed: true,

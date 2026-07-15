@@ -1,15 +1,17 @@
-const TradingViewService = require('./TradingViewService');
 const TradingViewAlertService = require('./TradingViewAlertService');
 const SignalEnrichmentService = require('./SignalEnrichmentService');
 const PatternDetectionService = require('./PatternDetectionService');
+const TradingPipelineService = require('./TradingPipelineService');
+const { getMarketDataHub } = require('./MarketDataHubService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { normalizeSymbol } = require('../config/symbols');
 
 const candleBuffers = new Map();
 const lastEmittedBar = new Map();
-
+const pendingSetups = new Map();
 let autoScanTimer = null;
 let ioRef = null;
+let scanRotationIndex = 0;
 
 function bufferKey(symbol) {
   return String(symbol).toUpperCase();
@@ -71,6 +73,12 @@ async function publishEntrySignal(io, symbol, detection) {
       patternLabel: detection.patternLabel,
       gapTop: detection.gapTop,
       gapBottom: detection.gapBottom,
+      pipelineSteps: detection.pipelineSteps,
+      pipelineVersion: detection.pipelineVersion,
+      pipelineScore: detection.pipelineScore,
+      pipelineScoreBreakdown: detection.pipelineScoreBreakdown,
+      signalQuality: detection.signalQuality,
+      isPremiumSignal: detection.isPremiumSignal,
       source: 'pattern_scanner',
       broadcast: true,
       timeframe: '1h'
@@ -91,26 +99,102 @@ async function publishEntrySignal(io, symbol, detection) {
 
   await TradingViewAlertService.broadcastToSubscribers(io, payload);
 
-  console.log(`[Scanner] ENTRY ${detection.pattern} ${normalizedSymbol} ${detection.direction} @ ${detection.entry}`);
+  console.log(
+    `[Scanner] PREMIUM ENTRY ${detection.pattern} ${normalizedSymbol} ${detection.direction} @ ${detection.entry} (score ${detection.pipelineScore}%)`
+  );
   return saved;
 }
 
-function processCandles(symbol, candles, io) {
+async function fetchHtfCandles(symbol) {
+  if (!PATTERN_SCANNER_CONFIG.pipeline?.enabled) return [];
+
+  const htfTimeframe = PATTERN_SCANNER_CONFIG.pipeline.htf?.timeframe || '4h';
+  try {
+    const hub = getMarketDataHub();
+    let payload = await hub.getCandles(symbol, htfTimeframe, 60, { cacheOnly: true });
+    if (!payload?.candles?.length) {
+      payload = await hub.getCandles(symbol, htfTimeframe, 60, { allowProviderFetch: true });
+    }
+    return (payload.candles || [])
+      .map(c =>
+        PatternDetectionService.normalizeCandle({
+          time: Date.parse(c.timestamp),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+          volume: c.volume
+        })
+      )
+      .sort((a, b) => a.time - b.time);
+  } catch {
+    return [];
+  }
+}
+
+async function processCandles(symbol, candles, io) {
   if (candles.length < 3) {
     return { processed: false, reason: 'insufficient_candles' };
   }
 
+  const key = bufferKey(symbol);
+  const normalizedSymbol = normalizeSymbol(symbol);
   const c3 = candles[candles.length - 1];
-  const result = PatternDetectionService.scanLastCandles(candles, undefined, symbol);
+  const htfCandles = await fetchHtfCandles(normalizedSymbol);
+
+  const pending = pendingSetups.get(key);
+  if (pending) {
+    const pendingResult = TradingPipelineService.checkPendingRetracement(candles, pending, {
+      symbol: normalizedSymbol,
+      htfCandles
+    });
+
+    if (pendingResult.expired) {
+      pendingSetups.delete(key);
+    } else if (pendingResult.passed && pendingResult.stage === 'entry' && shouldEmit(symbol, c3.time)) {
+      pendingSetups.delete(key);
+      await publishEntrySignal(io, normalizedSymbol, pendingResult.entry);
+      return { processed: true, pattern: pendingResult.entry.pattern, stage: 'entry', via: 'pending_retrace' };
+    } else if (pendingResult.stage === 'below_premium_threshold') {
+      pendingSetups.delete(key);
+      return {
+        processed: false,
+        stage: 'below_premium_threshold',
+        pipelineScore: pendingResult.pipelineScore
+      };
+    }
+  }
+
+  const result = PatternDetectionService.scanLastCandles(candles, undefined, normalizedSymbol, {
+    htfCandles
+  });
+
+  if (result.pending) {
+    pendingSetups.set(key, { ...result.pending, symbol: normalizedSymbol });
+  } else if (!result.entry) {
+    pendingSetups.delete(key);
+  }
 
   if (result.entry && shouldEmit(symbol, c3.time)) {
-    publishEntrySignal(io, symbol, result.entry);
+    await publishEntrySignal(io, normalizedSymbol, result.entry);
+    pendingSetups.delete(key);
     return { processed: true, pattern: result.entry.pattern, stage: 'entry' };
+  }
+
+  if (result.pipeline?.stage === 'below_premium_threshold' || result.stage === 'below_premium_threshold') {
+    return {
+      processed: false,
+      stage: 'below_premium_threshold',
+      pipelineScore: result.pipelineScore ?? result.pipeline?.pipelineScore
+    };
+  }
+
+  if (result.pending) {
+    return { processed: false, stage: 'pending_retrace', pattern: 'smc_pipeline' };
   }
 
   return { processed: false };
 }
-
 async function ingestCandle(io, { symbol, ...ohlc }) {
   if (!symbol) {
     throw new Error('symbol is required');
@@ -121,9 +205,17 @@ async function ingestCandle(io, { symbol, ...ohlc }) {
 }
 
 async function scanSymbol(io, symbol) {
-  const historical = await TradingViewService.getHistoricalData(symbol, '1h', 100);
-  const normalized = historical
-    .map(c => PatternDetectionService.normalizeCandle(c))
+  const hub = getMarketDataHub();
+  const payload = await hub.getCandles(symbol, '1h', 100, { allowProviderFetch: true });
+  const normalized = (payload.candles || [])
+    .map(c => PatternDetectionService.normalizeCandle({
+      time: Date.parse(c.timestamp),
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume
+    }))
     .sort((a, b) => a.time - b.time);
 
   candleBuffers.set(bufferKey(symbol), normalized);
@@ -131,8 +223,17 @@ async function scanSymbol(io, symbol) {
 }
 
 async function runFullScan(io) {
+  const symbols = PATTERN_SCANNER_CONFIG.symbols;
+  const batchSize = PATTERN_SCANNER_CONFIG.scanBatchSize || 2;
+  const batch = [];
+
+  for (let i = 0; i < batchSize; i += 1) {
+    batch.push(symbols[(scanRotationIndex + i) % symbols.length]);
+  }
+  scanRotationIndex = (scanRotationIndex + batchSize) % symbols.length;
+
   const results = [];
-  for (const symbol of PATTERN_SCANNER_CONFIG.symbols) {
+  for (const symbol of batch) {
     try {
       const result = await scanSymbol(io, symbol);
       results.push({ symbol, ...result });
@@ -167,12 +268,20 @@ function getScannerStatus() {
   return {
     autoScanEnabled: PATTERN_SCANNER_CONFIG.autoScanEnabled,
     autoScanIntervalMs: PATTERN_SCANNER_CONFIG.autoScanIntervalMs,
+    scanBatchSize: PATTERN_SCANNER_CONFIG.scanBatchSize,
     symbols: PATTERN_SCANNER_CONFIG.symbols,
     buffers: PATTERN_SCANNER_CONFIG.symbols.map(symbol => ({
       symbol,
-      candles: getCandles(symbol).length
+      candles: getCandles(symbol).length,
+      pendingRetrace: pendingSetups.has(bufferKey(symbol))
     })),
-    patterns: ['perfect_fvg', 'breakaway_gap']
+    pipeline: {
+      enabled: PATTERN_SCANNER_CONFIG.pipeline?.enabled !== false,
+      steps: TradingPipelineService.PIPELINE_STEPS,
+      htfTimeframe: PATTERN_SCANNER_CONFIG.pipeline?.htf?.timeframe || '4h',
+      premiumThreshold: PATTERN_SCANNER_CONFIG.pipeline?.scoring?.premiumThreshold || 85
+    },
+    patterns: ['smc_pipeline']
   };
 }
 

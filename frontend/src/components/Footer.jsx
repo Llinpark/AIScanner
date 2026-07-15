@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import SocialLinks from './SocialLinks';
-import { APP_NAME, CONTACT_EMAIL, SITE_URL } from '../config/appUrls';
+import { APP_NAME, APP_TAGLINE, CONTACT_EMAIL, SITE_URL } from '../config/appUrls';
 
 const RISK_DISMISSED_KEY = 'kachingfx_risk_bar_dismissed';
 
@@ -25,7 +25,7 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
     <footer className="site-footer">
       <div className="footer-inner">
         <div className="footer-brand">
-          <p>AI-powered Forex signals with TradingView alert integration.</p>
+          <p>{APP_TAGLINE}</p>
           <div className="footer-contact">
             <p>
               <strong>Phone:</strong>{' '}

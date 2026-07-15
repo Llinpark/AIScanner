@@ -73,6 +73,11 @@ class MarketDataService:
             except (MarketDataProviderError, Exception) as exc:
                 errors.append(f'{provider.name}: {exc}')
 
+        stale = self.cache.get_stale(cache_key)
+        if stale:
+            meta = {**stale['meta'], 'stale': True}
+            return pd.DataFrame(stale['candles']).reset_index(drop=True), meta
+
         raise MarketDataUnavailableError(' | '.join(errors) or 'No market data providers configured')
 
     def get_candles_payload(self, symbol: str, interval: str = '1h', limit: int = 100) -> dict[str, Any]:

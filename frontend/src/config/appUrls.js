@@ -15,3 +15,10 @@ export const SOCKET_URL = BACKEND_URL;
 export const CONTACT_EMAIL = `enquiries@${APP_DOMAIN}`;
 
 export const APP_NAME = 'KachingScanner';
+
+export const APP_TAGLINE = 'AI Trading Intelligence Platform';
+
+export const APP_PAGE_TITLE = `${APP_NAME} — ${APP_TAGLINE}`;
+
+export const APP_DESCRIPTION =
+  'KachingScanner is an AI Trading Intelligence Platform — smart market analysis, premium SMC signals, live charts, TradingView alerts, and optional automated execution.';

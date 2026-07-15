@@ -1,26 +1,10 @@
 const { fetchTimeSeries: fetchTwelveDataSeries } = require('./twelveData');
-const { fetchIntradaySeries: fetchEodhdSeries } = require('./eodhd');
-
-const memoryCache = new Map();
-const DEFAULT_CACHE_TTL_MS = Number(process.env.MARKET_DATA_CACHE_TTL_MS || process.env.TWELVE_DATA_CACHE_TTL_MS || 60000);
-
-function getCache(key) {
-  const entry = memoryCache.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.storedAt > entry.ttlMs) {
-    memoryCache.delete(key);
-    return null;
-  }
-  return entry.data;
-}
-
-function setCache(key, data, ttlMs = DEFAULT_CACHE_TTL_MS) {
-  memoryCache.set(key, { data, storedAt: Date.now(), ttlMs });
-}
+const { fetchHistoricalSeries: fetchEodhdSeries } = require('./eodhd');
+const { DEFAULT_TTL_MS, getFresh, getStale, isRateLimitError, set } = require('./marketDataCache');
 
 async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100) {
-  const cacheKey = `${symbol}:${interval}:${limit}`;
-  const cached = getCache(cacheKey);
+  const cacheKey = `market:${symbol}:${interval}:${limit}`;
+  const cached = getFresh(cacheKey);
   if (cached) return cached;
 
   const primary = process.env.MARKET_DATA_PRIMARY || process.env.DATA_PROVIDER || 'twelve_data';
@@ -42,7 +26,7 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100)
     },
     {
       name: 'eodhd',
-      enabled: primary === 'eodhd' || fallback === 'eodhd',
+      enabled: (primary === 'eodhd' || fallback === 'eodhd') && Boolean(config.providers.eodhd.apiKey),
       run: () =>
         fetchEodhdSeries({
           apiKey: config.providers.eodhd.apiKey,
@@ -61,14 +45,27 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100)
   for (const attempt of ordered) {
     try {
       const candles = await attempt.run();
-      setCache(cacheKey, candles);
+      set(cacheKey, candles, DEFAULT_TTL_MS);
       if (attempt.name !== primary) {
         console.warn(`[MarketData] Used fallback provider ${attempt.name} for ${symbol}`);
       }
       return candles;
     } catch (error) {
       errors.push(`${attempt.name}: ${error.message}`);
+      if (isRateLimitError(error.message)) {
+        break;
+      }
     }
+  }
+
+  const stale = getStale(cacheKey);
+  if (stale) {
+    console.warn(`[MarketData] Providers failed for ${symbol}, serving stale cache`);
+    return stale;
+  }
+
+  if (errors.some(entry => isRateLimitError(entry))) {
+    throw new Error(`${errors.join(' | ')} (cached data unavailable — wait one minute or upgrade Twelve Data)`);
   }
 
   throw new Error(errors.join(' | ') || 'No market data providers configured');

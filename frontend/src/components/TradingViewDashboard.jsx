@@ -474,27 +474,12 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
             <div className="history-section">
               <h3>Kaching Live Chart</h3>
               <p className="chart-subtitle">
-                Historical and live candles from Twelve Data (via FastAPI), with Kaching Entry, SL, TP, and pattern overlays.
+                Historical and live candles with Kaching Entry, SL, TP, and pattern overlays.
               </p>
-              <div className="controls">
-                <select value={chartSymbol} onChange={e => setChartSymbol(e.target.value)}>
-                  {symbols.map(symbol => (
-                    <option key={symbol} value={symbol}>
-                      {symbol}
-                    </option>
-                  ))}
-                </select>
-                <select value={selectedTimeframe} onChange={e => setSelectedTimeframe(e.target.value)}>
-                  {timeframes.map(tf => (
-                    <option key={tf} value={tf}>
-                      {tf}
-                    </option>
-                  ))}
-                </select>
-              </div>
               <MarketChartPanel
                 symbol={chartSymbol}
-                interval={selectedTimeframe}
+                allowedSymbols={symbols}
+                onSymbolChange={setChartSymbol}
                 overlaySignals={[...liveAlerts, ...alerts]}
                 subscribed={subscribed}
                 liveEnabled

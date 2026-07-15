@@ -77,7 +77,8 @@ export const tradingviewApi = {
 export const marketDataApi = {
   getCandles: (symbol, options = {}) =>
     api.get('/api/market-data/candles', {
-      params: { symbol, interval: options.interval || '1h', limit: options.limit || 200 }
+      params: { symbol, interval: options.interval || '1h', limit: options.limit || 200 },
+      timeout: options.timeout || 25000
     }),
   getStatus: () => api.get('/api/market-data/status')
 };

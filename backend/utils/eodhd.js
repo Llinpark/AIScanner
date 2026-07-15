@@ -1,4 +1,5 @@
 const { normalizeSymbol } = require('../config/symbols');
+const { normalizeInterval } = require('./marketIntervals');
 
 const EODHD_SYMBOL_MAP = {
   'EUR/USD': 'EURUSD.FOREX',
@@ -18,18 +19,19 @@ const EODHD_SYMBOL_MAP = {
   'USD/BTC': 'BTC-USD.CC'
 };
 
-const EODHD_INTERVAL_MAP = {
+const EODHD_INTRADAY_INTERVAL_MAP = {
   '1m': '1m',
-  '1min': '1m',
   '5m': '5m',
-  '5min': '5m',
   '15m': '5m',
-  '15min': '5m',
   '30m': '5m',
-  '30min': '5m',
   '1h': '1h',
-  '60min': '1h',
   '4h': '1h'
+};
+
+const EODHD_PERIOD_MAP = {
+  '1d': 'd',
+  '1w': 'w',
+  '1M': 'm'
 };
 
 function toEodhdSymbol(symbol) {
@@ -39,9 +41,14 @@ function toEodhdSymbol(symbol) {
   return `${compact}.FOREX`;
 }
 
-function toEodhdInterval(interval) {
-  const key = String(interval || '1h').trim();
-  return EODHD_INTERVAL_MAP[key] || '1h';
+function toEodhdIntradayInterval(interval) {
+  const canonical = normalizeInterval(interval);
+  return EODHD_INTRADAY_INTERVAL_MAP[canonical] || '1h';
+}
+
+function isEodhdEodInterval(interval) {
+  const canonical = normalizeInterval(interval);
+  return Boolean(EODHD_PERIOD_MAP[canonical]);
 }
 
 function parseEodhdDatetime(value) {
@@ -49,7 +56,7 @@ function parseEodhdDatetime(value) {
   if (typeof value === 'number') return value * 1000;
   const raw = String(value).trim();
   if (/^\d+$/.test(raw)) return Number(raw) * 1000;
-  const parsed = Date.parse(`${raw.replace(' ', 'T')}Z`);
+  const parsed = Date.parse(raw.includes('T') ? raw : `${raw}T00:00:00Z`);
   return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
@@ -67,31 +74,92 @@ function normalizeEodhdCandles(rows = []) {
     .sort((a, b) => a.time - b.time);
 }
 
+async function parseEodhdResponse(response) {
+  const text = await response.text();
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    throw new Error(
+      typeof text === 'string' && text.length
+        ? text.trim().slice(0, 160)
+        : `EODHD HTTP ${response.status}`
+    );
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      typeof payload === 'string'
+        ? payload
+        : payload?.message || payload?.error || `EODHD HTTP ${response.status}`
+    );
+  }
+
+  return payload;
+}
+
+async function fetchEodSeries({ apiKey, symbol, interval, limit = 100, baseUrl }) {
+  if (!apiKey) throw new Error('EODHD API key not configured');
+
+  const canonical = normalizeInterval(interval);
+  const period = EODHD_PERIOD_MAP[canonical];
+  if (!period) {
+    throw new Error(`EODHD EOD endpoint does not support interval ${interval}`);
+  }
+
+  const ticker = toEodhdSymbol(symbol);
+  const url = new URL(`${baseUrl.replace(/\/$/, '')}/eod/${ticker}`);
+  url.searchParams.set('api_token', apiKey);
+  url.searchParams.set('fmt', 'json');
+  url.searchParams.set('period', period);
+  url.searchParams.set('order', 'a');
+
+  const response = await fetch(url);
+  const payload = await parseEodhdResponse(response);
+  const rows = Array.isArray(payload) ? payload : payload?.data || [];
+  const candles = normalizeEodhdCandles(rows).slice(-limit);
+
+  if (!candles.length) {
+    throw new Error(`EODHD returned no ${canonical} candles for ${ticker}`);
+  }
+
+  return candles;
+}
+
 async function fetchIntradaySeries({ apiKey, symbol, interval, limit = 100, baseUrl }) {
   if (!apiKey) throw new Error('EODHD API key not configured');
 
   const ticker = toEodhdSymbol(symbol);
-  const eodInterval = toEodhdInterval(interval);
+  const eodInterval = toEodhdIntradayInterval(interval);
   const url = new URL(`${baseUrl.replace(/\/$/, '')}/intraday/${ticker}`);
   url.searchParams.set('api_token', apiKey);
   url.searchParams.set('fmt', 'json');
   url.searchParams.set('interval', eodInterval);
 
   const response = await fetch(url);
-  const payload = await response.json();
-  if (!response.ok) {
-    throw new Error(typeof payload === 'string' ? payload : payload?.message || `EODHD HTTP ${response.status}`);
-  }
-
+  const payload = await parseEodhdResponse(response);
   const rows = Array.isArray(payload) ? payload : payload?.data || [];
   const candles = normalizeEodhdCandles(rows).slice(-limit);
-  if (!candles.length) throw new Error(`EODHD returned no candles for ${ticker}`);
+
+  if (!candles.length) {
+    throw new Error(`EODHD returned no intraday candles for ${ticker}`);
+  }
+
   return candles;
+}
+
+async function fetchHistoricalSeries(params) {
+  if (isEodhdEodInterval(params.interval)) {
+    return fetchEodSeries(params);
+  }
+  return fetchIntradaySeries(params);
 }
 
 module.exports = {
   toEodhdSymbol,
-  toEodhdInterval,
+  toEodhdIntradayInterval,
   normalizeEodhdCandles,
-  fetchIntradaySeries
+  fetchIntradaySeries,
+  fetchEodSeries,
+  fetchHistoricalSeries
 };

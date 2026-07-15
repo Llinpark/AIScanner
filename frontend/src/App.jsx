@@ -6,11 +6,14 @@ import AuthForm from './components/AuthForm';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import Hero from './components/Hero';
+import TradingEcosystem from './components/TradingEcosystem';
+import AiIntelligenceSection from './components/AiIntelligenceSection';
 import RiskDisclosure from './components/RiskDisclosure';
 import Contact from './components/Contact';
 import InsightsHub from './components/InsightsHub';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
+import { APP_DESCRIPTION, APP_PAGE_TITLE } from './config/appUrls';
 
 function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
@@ -37,6 +40,14 @@ function AppContent() {
     logout();
     setCurrentPage('home');
   };
+
+  useEffect(() => {
+    document.title = APP_PAGE_TITLE;
+    const meta = document.querySelector('meta[name="description"]');
+    if (meta) {
+      meta.setAttribute('content', APP_DESCRIPTION);
+    }
+  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -88,10 +99,17 @@ function AppContent() {
 
     if (currentPage === 'home') {
       return (
-        <Hero
-          onViewPricing={() => setCurrentPage('pricing')}
-          onSignUp={() => setCurrentPage('signup')}
-        />
+        <>
+          <Hero
+            onViewPricing={() => setCurrentPage('pricing')}
+            onSignUp={() => setCurrentPage('signup')}
+          />
+          <TradingEcosystem />
+          <AiIntelligenceSection
+            onViewPricing={() => setCurrentPage('pricing')}
+            onSignUp={() => setCurrentPage('signup')}
+          />
+        </>
       );
     }
 

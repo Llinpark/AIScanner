@@ -42,7 +42,6 @@ export default function SignalDashboard({ initialSignals, subscription }) {
   const [accountBalance, setAccountBalance] = useState(10000);
   const [expandedId, setExpandedId] = useState(null);
   const [chartSymbol, setChartSymbol] = useState('EUR/USD');
-  const chartInterval = tierLimits.timeframes?.[0] || '1h';
 
   useEffect(() => {
     if (allowedPairs.length && !allowedPairs.includes(chartSymbol)) {
@@ -109,25 +108,14 @@ export default function SignalDashboard({ initialSignals, subscription }) {
 
       {hasAccess && (
         <div className="dashboard-chart-section">
-          <div className="controls">
-            <label>
-              Chart symbol
-              <select value={chartSymbol} onChange={e => setChartSymbol(e.target.value)}>
-                {allowedPairs.map(pair => (
-                  <option key={pair} value={pair}>
-                    {pair}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
           <MarketChartPanel
             symbol={chartSymbol}
-            interval={chartInterval}
+            allowedSymbols={allowedPairs}
+            onSymbolChange={setChartSymbol}
             overlaySignals={signals}
             subscribed={hasAccess}
             liveEnabled
-            height={380}
+            height={600}
           />
         </div>
       )}
