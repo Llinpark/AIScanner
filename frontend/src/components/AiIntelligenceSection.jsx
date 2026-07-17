@@ -1,4 +1,12 @@
-const SHOWCASE_ITEMS = [
+import { useEffect, useMemo, useState } from 'react';
+import { scannerApi } from '../services/api';
+import {
+  DEFAULT_PREMIUM_SIGNAL_THRESHOLD,
+  formatPremiumThresholdLabel,
+  premiumSignalsScoredCopy
+} from '../constants/scannerConfig';
+
+const SHOWCASE_TEMPLATE = [
   {
     id: 'scan',
     image: '/images/ai-showcase-scan.png',
@@ -6,11 +14,7 @@ const SHOWCASE_ITEMS = [
     title: 'Your AI never sleeps. Your edge never fades.',
     body:
       'While you focus on strategy and risk, KachingScanner AI watches dozens of markets around the clock—hunting liquidity sweeps, fair value gaps, and institutional footprints the moment they form. No manual chart scrolling. No missed setups. Just relentless, precision-driven opportunity detection.',
-    highlights: [
-      'Continuous multi-market surveillance',
-      'Institutional Smart Money Concepts engine',
-      'Premium signals scored at 85%+ confidence'
-    ],
+    highlights: ['Continuous multi-market surveillance', 'Institutional Smart Money Concepts engine'],
     reverse: false
   },
   {
@@ -43,14 +47,49 @@ const SHOWCASE_ITEMS = [
   }
 ];
 
-const STATS = [
-  { value: '24/7', label: 'AI market scanning' },
-  { value: '10', label: 'Step SMC validation pipeline' },
-  { value: '85%+', label: 'Premium signal threshold' },
-  { value: '6', label: 'Weighted quality factors' }
-];
-
 export default function AiIntelligenceSection({ onViewPricing, onSignUp }) {
+  const [premiumThreshold, setPremiumThreshold] = useState(DEFAULT_PREMIUM_SIGNAL_THRESHOLD);
+
+  useEffect(() => {
+    scannerApi
+      .getStatus()
+      .then(res => {
+        const threshold = Number(res.data?.pipeline?.premiumThreshold);
+        if (Number.isFinite(threshold) && threshold > 0) {
+          setPremiumThreshold(threshold);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const thresholdLabel = formatPremiumThresholdLabel(premiumThreshold);
+
+  const showcaseItems = useMemo(
+    () =>
+      SHOWCASE_TEMPLATE.map(item =>
+        item.id === 'scan'
+          ? {
+              ...item,
+              highlights: [
+                ...item.highlights,
+                premiumSignalsScoredCopy(premiumThreshold)
+              ]
+            }
+          : item
+      ),
+    [premiumThreshold]
+  );
+
+  const stats = useMemo(
+    () => [
+      { value: '24/7', label: 'AI market scanning' },
+      { value: '10', label: 'Step SMC validation pipeline' },
+      { value: thresholdLabel, label: 'Premium signal threshold' },
+      { value: '6', label: 'Weighted quality factors' }
+    ],
+    [thresholdLabel]
+  );
+
   return (
     <section className="ai-intelligence-section" aria-labelledby="ai-intelligence-title">
       <div className="ai-intelligence-intro">
@@ -67,7 +106,7 @@ export default function AiIntelligenceSection({ onViewPricing, onSignUp }) {
       </div>
 
       <div className="ai-intelligence-stats" aria-label="Platform highlights">
-        {STATS.map(stat => (
+        {stats.map(stat => (
           <div key={stat.label} className="ai-stat-card">
             <strong className="ai-stat-value">{stat.value}</strong>
             <span className="ai-stat-label">{stat.label}</span>
@@ -76,7 +115,7 @@ export default function AiIntelligenceSection({ onViewPricing, onSignUp }) {
       </div>
 
       <div className="ai-showcase-list">
-        {SHOWCASE_ITEMS.map(item => (
+        {showcaseItems.map(item => (
           <article
             key={item.id}
             className={`ai-showcase-panel${item.reverse ? ' ai-showcase-panel-reverse' : ''}`}

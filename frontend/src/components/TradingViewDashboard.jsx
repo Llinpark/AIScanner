@@ -374,7 +374,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 <p className="premium-feature-hint">Trailing stop automation is included.</p>
               )}
               {tierLimits.breakEvenAutomation && (
-                <p className="premium-feature-hint">Break-even automation is active for Premium trades.</p>
+                <p className="premium-feature-hint">Break-even automation is active on your plan.</p>
               )}
               {tierLimits.autoLotSizing && (
                 <p className="premium-feature-hint">Auto lot sizing adjusts position size from your MT5 account balance.</p>

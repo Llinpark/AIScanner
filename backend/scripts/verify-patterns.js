@@ -104,8 +104,10 @@ if (!pipelineResult.entry || pipelineResult.entry.pattern !== 'smc_pipeline') {
   process.exit(1);
 }
 
-if ((pipelineResult.entry.pipelineScore || 0) < 85) {
-  console.error('FAIL: expected premium score >= 85%, got', pipelineResult.entry.pipelineScore);
+const premiumThreshold = PATTERN_SCANNER_CONFIG.pipeline?.scoring?.premiumThreshold || 90;
+
+if ((pipelineResult.entry.pipelineScore || 0) < premiumThreshold) {
+  console.error(`FAIL: expected premium score >= ${premiumThreshold}%, got`, pipelineResult.entry.pipelineScore);
   console.error('Breakdown:', pipelineResult.entry.pipelineScoreBreakdown);
   process.exit(1);
 }

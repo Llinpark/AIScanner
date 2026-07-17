@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
-export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated, onNavigateDashboard }) {
+export default function Checkout({ tier, tierData, billingCycle = 'monthly', onBack, onSubscriptionUpdated, onNavigateDashboard }) {
   const { user, updateUser } = useAuth();
   const [provider, setProvider] = useState('mpesa');
   const [phone, setPhone] = useState(user?.phone || '');
@@ -14,6 +14,13 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
   const [isMockMode, setIsMockMode] = useState(false);
   const [error, setError] = useState('');
   const pollRef = useRef(null);
+
+  const pricing = tierData?.pricing?.[billingCycle] || tierData?.pricing?.monthly || {
+    price: tierData?.price || 0,
+    priceCents: tierData?.priceCents || 0,
+    periodLabel: billingCycle === 'weekly' ? 'week' : 'month'
+  };
+  const periodLabel = pricing.periodLabel || (billingCycle === 'weekly' ? 'week' : 'month');
 
   useEffect(() => {
     return () => {
@@ -61,6 +68,7 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
       const response = await subscriptionApi.subscribe({
         tier,
         provider,
+        billingCycle,
         phone: provider === 'mpesa' ? phone : undefined
       });
 
@@ -101,7 +109,8 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
       setLoading(true);
       const response = await subscriptionApi.confirmMockPayment({
         paymentId: mockPaymentId,
-        tier
+        tier,
+        billingCycle
       });
 
       updateUser(response.data.user);
@@ -120,7 +129,8 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
       setLoading(true);
       const response = await subscriptionApi.confirmMpesaMock({
         checkoutRequestId,
-        tier
+        tier,
+        billingCycle
       });
 
       updateUser(response.data.user);
@@ -139,7 +149,8 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
       setLoading(true);
       const response = await subscriptionApi.confirmPaypalMock({
         orderId: paypalOrderId,
-        tier
+        tier,
+        billingCycle
       });
 
       updateUser(response.data.user);
@@ -166,11 +177,11 @@ export default function Checkout({ tier, tierData, onBack, onSubscriptionUpdated
             <strong>Plan:</strong> {tierData.name}
           </p>
           <p>
-            <strong>Price:</strong> KES {tierData.price}/month
+            <strong>Price:</strong> KES {pricing.price.toLocaleString()}/{periodLabel}
           </p>
           {provider === 'paypal' && (
             <p>
-              <strong>PayPal/Card:</strong> USD {(tierData.priceCents / 100).toFixed(2)}/month
+              <strong>PayPal/Card:</strong> USD {(pricing.priceCents / 100).toFixed(2)}/{periodLabel}
             </p>
           )}
         </div>

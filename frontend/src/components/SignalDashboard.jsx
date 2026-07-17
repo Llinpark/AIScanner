@@ -21,9 +21,9 @@ const FEATURE_LABELS = [
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', minTier: 'Premium' },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', minTier: 'Premium' },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', minTier: 'Premium' },
-  { key: 'mt5Execution', label: 'One-click MT5 Execution', minTier: 'Premium' },
-  { key: 'trailingStop', label: 'Trailing Stop', minTier: 'Premium' },
-  { key: 'breakEvenAutomation', label: 'Break-even Automation', minTier: 'Premium' },
+  { key: 'mt5Execution', label: 'One-click MT5 Execution', minTier: 'Pro' },
+  { key: 'trailingStop', label: 'Trailing Stop', minTier: 'Pro' },
+  { key: 'breakEvenAutomation', label: 'Break-even Automation', minTier: 'Pro' },
   { key: 'autoLotSizing', label: 'Auto Lot Sizing', minTier: 'Premium' }
 ];
 

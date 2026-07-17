@@ -154,7 +154,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
         {status && (
           <>
             <p>
-              <strong>Bot:</strong> @{status.botUsername}
+              <strong>AI:</strong> @{status.botUsername}
             </p>
             <p>
               <strong>Linked:</strong> {status.linked ? `yes (@${status.username || 'chat'})` : 'no'}
@@ -280,9 +280,9 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
         </div>
       ) : (
         <div className="feature-lock">
-          One-click MT5 execution is available on Premium.{' '}
+          One-click MT5 execution is available on Pro and Premium.{' '}
           <button type="button" className="link-btn" onClick={onNavigatePricing}>
-            Upgrade to Premium
+            Upgrade
           </button>
         </div>
       )}
@@ -292,7 +292,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
         <ol>
           <li>AI scanner or TradingView sends an entry signal with Kaching Entry, SL, and TP levels.</li>
           <li>The signal is stored and pushed to Telegram.</li>
-          <li>Premium users tap <strong>Execute on MT5</strong> — no manual entry, SL, TP, or lot size.</li>
+          <li>Pro and Premium users tap <strong>Execute on MT5</strong> — no manual entry, SL, TP, or lot size.</li>
           <li>The MT5 EA picks up the queued trade and places it on your account.</li>
         </ol>
       </div>

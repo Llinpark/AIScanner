@@ -11,14 +11,21 @@ function isDbReady() {
   return mongoose.connection.readyState === 1;
 }
 
-async function activateSubscription(userId, { tier, provider, providerOrderId, providerCustomerId }, io) {
-  const periodEnd = new Date(Date.now() + SUBSCRIPTION_PERIOD_DAYS * 24 * 60 * 60 * 1000);
+async function activateSubscription(
+  userId,
+  { tier, provider, providerOrderId, providerCustomerId, billingCycle = 'monthly', periodDays },
+  io
+) {
+  const normalizedCycle = billingCycle === 'weekly' ? 'weekly' : 'monthly';
+  const days = periodDays || (normalizedCycle === 'weekly' ? 7 : SUBSCRIPTION_PERIOD_DAYS);
+  const periodEnd = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   const subscription = {
     tier,
     status: 'active',
     provider,
     providerOrderId,
     providerCustomerId: providerCustomerId || undefined,
+    billingCycle: normalizedCycle,
     current_period_end: periodEnd,
     updatedAt: new Date()
   };

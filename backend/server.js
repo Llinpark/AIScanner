@@ -12,7 +12,21 @@ dotenv.config();
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
-const { TIERS, PAYMENT_CONFIG, getPublicTiers, FEATURE_MATRIX } = require('./config/subscriptions');
+const { TIERS, PAYMENT_CONFIG, getPublicTiers, getTierPricing, FEATURE_MATRIX } = require('./config/subscriptions');
+
+function buildActivationOptions(user, { tier, provider, providerOrderId, providerCustomerId, billingCycle } = {}) {
+  const cycle = billingCycle || user?.subscription?.billingCycle || 'monthly';
+  const pricing = getTierPricing(tier, cycle);
+  return {
+    tier,
+    provider,
+    providerOrderId,
+    providerCustomerId,
+    billingCycle: pricing.billingCycle,
+    periodDays: pricing.periodDays
+  };
+}
+
 const {
   APP_DOMAIN,
   FRONTEND_URL,
@@ -48,6 +62,7 @@ const TelegramService = require('./services/TelegramService');
 const { buildAnalytics } = require('./utils/signalOutcome');
 const { verifyTradingViewWebhook } = require('./utils/webhookSecurity');
 const authRoutes = require('./routes/auth');
+const createAdminRouter = require('./routes/admin');
 const requireAuth = require('./middleware/requireAuth');
 const { resolveUserById } = require('./middleware/requireAuth');
 const requireSubscription = require('./middleware/requireSubscription');
@@ -169,6 +184,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
+app.use('/api/admin', createAdminRouter({ io }));
 
 const inMemorySignals = [];
 
@@ -195,11 +211,16 @@ app.post('/api/signals', async (req, res) => {
     const saved = await signal.save();
     io.emit('signal:update', saved);
 
-    await TradingViewAlertService.broadcastToSubscribers(io, {
-      ...payload,
-      source: payload.source || 'scanner',
-      alertType: TradingViewAlertService.normalizeAlertType(payload.alertType || 'signal')
-    });
+    await TradingViewAlertService.broadcastToSubscribers(
+      io,
+      {
+        ...payload,
+        source: payload.source || 'scanner',
+        alertType: TradingViewAlertService.normalizeAlertType(payload.alertType || 'signal')
+      },
+      inMemorySignals,
+      { existingSaved: saved }
+    );
 
     return res.status(201).json(saved);
   } catch (error) {
@@ -335,8 +356,15 @@ app.get('/api/tiers', (req, res) => {
 
 app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, async (req, res) => {
   try {
-    const { tier, provider, phone } = req.body;
+    const { tier, provider, phone, billingCycle = 'monthly' } = req.body;
     const userId = req.userId;
+    const pricing = getTierPricing(tier, billingCycle);
+    const pendingSubscription = {
+      tier,
+      status: 'pending',
+      provider,
+      billingCycle: pricing.billingCycle
+    };
 
     let user = await UserConfig.findByIdAndUpdate(
       userId,
@@ -359,8 +387,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         {
           phone: phone || user.phone,
           subscription: {
-            tier,
-            status: 'pending',
+            ...pendingSubscription,
             provider: 'mock',
             providerOrderId: mockPaymentId
           },
@@ -373,8 +400,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         user = devUserStore.upsertUser(userId, {
           phone: phone || req.user.phone,
           subscription: {
-            tier,
-            status: 'pending',
+            ...pendingSubscription,
             provider: 'mock',
             providerOrderId: mockPaymentId
           }
@@ -406,9 +432,9 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       } else {
         stkResult = await MpesaService.initiateStkPush({
           phone,
-          amount: tierConfig.price,
+          amount: pricing.price,
           accountReference: userId,
-          description: `KachingFx ${tierConfig.name}`
+          description: `KachingFx ${tierConfig.name} (${pricing.periodLabel})`
         });
       }
 
@@ -416,8 +442,8 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         userId,
         tier,
         provider: 'mpesa',
-        amount: tierConfig.price,
-        currency: tierConfig.currency,
+        amount: pricing.price,
+        currency: pricing.currency,
         providerReference: stkResult.checkoutRequestId,
         merchantRequestId: stkResult.merchantRequestId
       });
@@ -427,8 +453,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         {
           phone,
           subscription: {
-            tier,
-            status: 'pending',
+            ...pendingSubscription,
             provider: 'mpesa',
             providerOrderId: stkResult.checkoutRequestId
           },
@@ -441,8 +466,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         user = devUserStore.upsertUser(userId, {
           phone,
           subscription: {
-            tier,
-            status: 'pending',
+            ...pendingSubscription,
             provider: 'mpesa',
             providerOrderId: stkResult.checkoutRequestId
           }
@@ -455,7 +479,8 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         user: sanitizeUser(user),
         stkRequestId: stkResult.checkoutRequestId,
         checkoutRequestId: stkResult.checkoutRequestId,
-        amount: tierConfig.price,
+        amount: pricing.price,
+        billingCycle: pricing.billingCycle,
         tillNumber: PAYMENT_CONFIG.mpesa.shortcode,
         mockMode: PAYMENT_CONFIG.mode === 'mock' || !MpesaService.isConfigured()
       });
@@ -464,7 +489,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
     if (provider === 'paypal') {
       const tierConfig = TIERS[tier];
       const frontendUrl = FRONTEND_URL;
-      const returnUrl = `${PUBLIC_BACKEND_URL}/api/payments/paypal/return?tier=${tier}`;
+      const returnUrl = `${PUBLIC_BACKEND_URL}/api/payments/paypal/return?tier=${tier}&billingCycle=${pricing.billingCycle}`;
       const cancelUrl = `${frontendUrl}?paypal=cancelled`;
 
       let orderResult;
@@ -473,14 +498,15 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         const mockOrderId = `paypal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         orderResult = {
           orderId: mockOrderId,
-          approveUrl: `${frontendUrl}?paypal=mock&orderId=${mockOrderId}&tier=${tier}`
+          approveUrl: `${frontendUrl}?paypal=mock&orderId=${mockOrderId}&tier=${tier}&billingCycle=${pricing.billingCycle}`
         };
       } else {
         orderResult = await PayPalService.createOrder({
           tier,
           userId: userId.toString(),
           returnUrl,
-          cancelUrl
+          cancelUrl,
+          billingCycle: pricing.billingCycle
         });
       }
 
@@ -488,8 +514,8 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         userId,
         tier,
         provider: 'paypal',
-        amount: tierConfig.priceCents / 100,
-        currency: tierConfig.currencyPayPal,
+        amount: pricing.priceCents / 100,
+        currency: pricing.currencyPayPal,
         providerReference: orderResult.orderId
       });
 
@@ -497,8 +523,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         userId,
         {
           subscription: {
-            tier,
-            status: 'pending',
+            ...pendingSubscription,
             provider: 'paypal',
             providerOrderId: orderResult.orderId
           },
@@ -510,8 +535,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       if (!user && !isDbReady()) {
         user = devUserStore.upsertUser(userId, {
           subscription: {
-            tier,
-            status: 'pending',
+            ...pendingSubscription,
             provider: 'paypal',
             providerOrderId: orderResult.orderId
           }
@@ -524,8 +548,9 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         user: sanitizeUser(user),
         checkoutId: orderResult.orderId,
         checkoutUrl: orderResult.approveUrl,
-        amount: tierConfig.priceCents / 100,
-        currency: tierConfig.currencyPayPal,
+        amount: pricing.priceCents / 100,
+        currency: pricing.currencyPayPal,
+        billingCycle: pricing.billingCycle,
         mockMode: PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()
       });
     }
@@ -549,7 +574,7 @@ app.get('/api/subscription/me', requireAuth, (req, res) => {
 
 app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
   try {
-    const { paymentId, tier } = req.body;
+    const { paymentId, tier, billingCycle } = req.body;
 
     if (!paymentId || !tier) {
       return res.status(400).json({ message: 'paymentId and tier are required' });
@@ -559,7 +584,12 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
 
     const user = await activateSubscription(
       req.userId,
-      { tier, provider: 'mock', providerOrderId: paymentId },
+      buildActivationOptions(req.user, {
+        tier,
+        provider: 'mock',
+        providerOrderId: paymentId,
+        billingCycle
+      }),
       io
     );
 
@@ -597,7 +627,7 @@ app.get('/api/payments/mpesa/status/:checkoutRequestId', requireAuth, async (req
 
 app.post('/api/payments/mpesa/mock-complete', requireAuth, async (req, res) => {
   try {
-    const { checkoutRequestId, tier } = req.body;
+    const { checkoutRequestId, tier, billingCycle } = req.body;
 
     if (!checkoutRequestId || !tier) {
       return res.status(400).json({ message: 'checkoutRequestId and tier are required' });
@@ -612,7 +642,12 @@ app.post('/api/payments/mpesa/mock-complete', requireAuth, async (req, res) => {
 
     const user = await activateSubscription(
       req.userId,
-      { tier, provider: 'mpesa', providerOrderId: checkoutRequestId },
+      buildActivationOptions(req.user, {
+        tier,
+        provider: 'mpesa',
+        providerOrderId: checkoutRequestId,
+        billingCycle
+      }),
       io
     );
 
@@ -631,7 +666,7 @@ app.get('/api/payments/paypal/return', async (req, res) => {
   const frontendUrl = FRONTEND_URL;
 
   try {
-    const { token: orderId, tier } = req.query;
+    const { token: orderId, tier, billingCycle } = req.query;
 
     if (!orderId) {
       return res.redirect(`${frontendUrl}?paypal=error&message=missing_order`);
@@ -640,15 +675,22 @@ app.get('/api/payments/paypal/return', async (req, res) => {
     const captureResult = await PayPalService.captureOrder(orderId);
     const customId = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id
       || captureResult.purchase_units?.[0]?.custom_id;
-    const [userId, capturedTier] = (customId || '').split(':');
+    const [userId, capturedTier, capturedBillingCycle] = (customId || '').split(':');
     const resolvedTier = tier || capturedTier || 'basic';
+    const resolvedBillingCycle = billingCycle || capturedBillingCycle || 'monthly';
 
     await completePaymentTransaction(orderId, 'paypal', { rawPayload: captureResult });
 
     if (userId) {
+      const payer = await UserConfig.findById(userId);
       await activateSubscription(
         userId,
-        { tier: resolvedTier, provider: 'paypal', providerOrderId: orderId },
+        buildActivationOptions(payer, {
+          tier: resolvedTier,
+          provider: 'paypal',
+          providerOrderId: orderId,
+          billingCycle: resolvedBillingCycle
+        }),
         io
       );
     }
@@ -662,7 +704,7 @@ app.get('/api/payments/paypal/return', async (req, res) => {
 
 app.post('/api/payments/paypal/mock-complete', requireAuth, async (req, res) => {
   try {
-    const { orderId, tier } = req.body;
+    const { orderId, tier, billingCycle } = req.body;
 
     if (!orderId || !tier) {
       return res.status(400).json({ message: 'orderId and tier are required' });
@@ -677,7 +719,12 @@ app.post('/api/payments/paypal/mock-complete', requireAuth, async (req, res) => 
 
     const user = await activateSubscription(
       req.userId,
-      { tier, provider: 'paypal', providerOrderId: orderId },
+      buildActivationOptions(req.user, {
+        tier,
+        provider: 'paypal',
+        providerOrderId: orderId,
+        billingCycle
+      }),
       io
     );
 
@@ -732,14 +779,15 @@ app.post('/api/webhook/mpesa', async (req, res) => {
 
     if (callback.resultCode === 0) {
       await completePaymentTransaction(callback.checkoutRequestId, 'mpesa', { rawPayload: callback });
+      const payer = await UserConfig.findById(transaction.userId);
       await activateSubscription(
         transaction.userId,
-        {
+        buildActivationOptions(payer, {
           tier: transaction.tier,
           provider: 'mpesa',
           providerOrderId: callback.checkoutRequestId,
           providerCustomerId: callback.mpesaReceiptNumber
-        },
+        }),
         io
       );
     } else {
@@ -762,7 +810,7 @@ app.post('/api/webhook/paypal', async (req, res) => {
     const { eventType, customId, orderId } = PayPalService.parseWebhookEvent(req.body);
 
     if (eventType === 'PAYMENT.CAPTURE.COMPLETED' || eventType === 'CHECKOUT.ORDER.APPROVED') {
-      const [userId, tier] = (customId || '').split(':');
+      const [userId, tier, billingCycle] = (customId || '').split(':');
 
       if (userId && orderId) {
         const existing = await getPaymentStatus(orderId, 'paypal');
@@ -776,9 +824,15 @@ app.post('/api/webhook/paypal', async (req, res) => {
           }
 
           await completePaymentTransaction(orderId, 'paypal', { rawPayload: req.body });
+          const payer = await UserConfig.findById(userId);
           await activateSubscription(
             userId,
-            { tier: tier || existing.tier, provider: 'paypal', providerOrderId: orderId },
+            buildActivationOptions(payer, {
+              tier: tier || existing.tier,
+              provider: 'paypal',
+              providerOrderId: orderId,
+              billingCycle
+            }),
             io
           );
         }

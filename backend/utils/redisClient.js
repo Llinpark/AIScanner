@@ -23,8 +23,9 @@ async function getRedisClient() {
       const nextClient = createClient({
         url: process.env.REDIS_URL || 'redis://127.0.0.1:6379/0',
         socket: {
-          connectTimeout: 2000,
-          reconnectStrategy: false
+          connectTimeout: 10000,
+          reconnectStrategy: false,
+          tls: String(process.env.REDIS_URL || '').startsWith('rediss://') || undefined
         }
       });
 

@@ -11,6 +11,7 @@ import AiIntelligenceSection from './components/AiIntelligenceSection';
 import RiskDisclosure from './components/RiskDisclosure';
 import Contact from './components/Contact';
 import InsightsHub from './components/InsightsHub';
+import AdminHub from './admin/AdminHub';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
 import { APP_DESCRIPTION, APP_PAGE_TITLE } from './config/appUrls';
@@ -163,6 +164,21 @@ function AppContent() {
           onSuccess={() => setCurrentPage('tradingview')}
         />
       );
+    }
+
+    if (currentPage === 'admin') {
+      if (!isAuthenticated) {
+        return <AuthForm initialMode="login" onSuccess={() => setCurrentPage('admin')} />;
+      }
+      if (!user?.isAdmin) {
+        return (
+          <div className="dashboard-card">
+            <h2>Admin access required</h2>
+            <p>Your account does not have admin privileges. Add your email to ADMIN_EMAILS in backend/.env or set role=admin in MongoDB.</p>
+          </div>
+        );
+      }
+      return <AdminHub initialTab={pageOptions.tab || 'dashboard'} />;
     }
 
     return (

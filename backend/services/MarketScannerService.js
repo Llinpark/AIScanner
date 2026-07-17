@@ -86,7 +86,7 @@ async function publishEntrySignal(io, symbol, detection) {
     { candles, timeframe: '1h' }
   );
 
-  const saved = await TradingViewAlertService.saveSignal(payload);
+  const saved = await TradingViewAlertService.saveSignal({ ...payload, isBroadcast: true });
 
   io.emit('signal:update', saved);
   io.emit('scanner:entry', {
@@ -97,7 +97,7 @@ async function publishEntrySignal(io, symbol, detection) {
     ...payload
   });
 
-  await TradingViewAlertService.broadcastToSubscribers(io, payload);
+  await TradingViewAlertService.broadcastToSubscribers(io, payload, [], { existingSaved: saved });
 
   console.log(
     `[Scanner] PREMIUM ENTRY ${detection.pattern} ${normalizedSymbol} ${detection.direction} @ ${detection.entry} (score ${detection.pipelineScore}%)`
@@ -279,7 +279,7 @@ function getScannerStatus() {
       enabled: PATTERN_SCANNER_CONFIG.pipeline?.enabled !== false,
       steps: TradingPipelineService.PIPELINE_STEPS,
       htfTimeframe: PATTERN_SCANNER_CONFIG.pipeline?.htf?.timeframe || '4h',
-      premiumThreshold: PATTERN_SCANNER_CONFIG.pipeline?.scoring?.premiumThreshold || 85
+      premiumThreshold: PATTERN_SCANNER_CONFIG.pipeline?.scoring?.premiumThreshold || 90
     },
     patterns: ['smc_pipeline']
   };

@@ -8,9 +8,22 @@ function isActiveSubscription(subscription) {
   return subscription.status === 'active';
 }
 
+function getTierPrice(tier, billingCycle) {
+  const pricing = tier?.pricing?.[billingCycle] || tier?.pricing?.monthly;
+  if (pricing) {
+    return pricing;
+  }
+  return {
+    price: tier?.price || 0,
+    priceCents: tier?.priceCents || 0,
+    periodLabel: billingCycle === 'weekly' ? 'week' : 'month'
+  };
+}
+
 export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, onSignIn }) {
   const { isAuthenticated, user, subscription } = useAuth();
   const [tiers, setTiers] = useState({});
+  const [billingCycle, setBillingCycle] = useState('monthly');
   const [loading, setLoading] = useState(true);
   const [selectedTier, setSelectedTier] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
@@ -48,6 +61,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
 
   const currentTier = subscription?.tier || 'basic';
   const hasAccess = isAuthenticated && isActiveSubscription(subscription);
+  const periodLabel = billingCycle === 'weekly' ? 'week' : 'month';
 
   return (
     <div className="pricing-container">
@@ -70,6 +84,23 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
             <>Browse plans below. Login or register when you are ready to subscribe.</>
           )}
         </p>
+
+        <div className="billing-toggle" role="group" aria-label="Billing cycle">
+          <button
+            type="button"
+            className={`billing-toggle-btn ${billingCycle === 'weekly' ? 'active' : ''}`}
+            onClick={() => setBillingCycle('weekly')}
+          >
+            Weekly
+          </button>
+          <button
+            type="button"
+            className={`billing-toggle-btn ${billingCycle === 'monthly' ? 'active' : ''}`}
+            onClick={() => setBillingCycle('monthly')}
+          >
+            Monthly
+          </button>
+        </div>
       </div>
 
       {!showCheckout ? (
@@ -78,6 +109,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
             {Object.entries(tiers).map(([key, tier]) => {
               const isCurrent = key === currentTier && hasAccess;
               const limits = tier.limits || {};
+              const pricing = getTierPrice(tier, billingCycle);
 
               return (
                 <div key={key} className={`pricing-card ${key} ${isCurrent ? 'current-plan' : ''}`}>
@@ -88,8 +120,8 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
                     <h2>{tier.name}</h2>
                     <p className="description">{tier.description}</p>
                     <div className="price">
-                      <span className="amount">KES {tier.price.toLocaleString()}</span>
-                      <span className="period">/month</span>
+                      <span className="amount">KES {pricing.price.toLocaleString()}</span>
+                      <span className="period">/{periodLabel}</span>
                     </div>
                     {limits.currencyPairs && (
                       <p className="tier-meta">
@@ -138,6 +170,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
         <Checkout
           tier={selectedTier}
           tierData={tiers[selectedTier]}
+          billingCycle={billingCycle}
           onBack={() => setShowCheckout(false)}
           onSubscriptionUpdated={onSubscriptionUpdated}
           onNavigateDashboard={onNavigateDashboard}

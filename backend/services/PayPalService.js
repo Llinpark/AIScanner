@@ -1,4 +1,4 @@
-const { PAYMENT_CONFIG, TIERS } = require('../config/subscriptions');
+const { PAYMENT_CONFIG, getTierPricing } = require('../config/subscriptions');
 
 function getBaseUrl() {
   return PAYMENT_CONFIG.paypal.mode === 'live'
@@ -33,17 +33,18 @@ async function getAccessToken() {
   return data.access_token;
 }
 
-async function createOrder({ tier, userId, returnUrl, cancelUrl }) {
+async function createOrder({ tier, userId, returnUrl, cancelUrl, billingCycle = 'monthly' }) {
   if (!isConfigured()) {
     throw new Error('PayPal is not configured. Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in .env');
   }
 
-  const tierConfig = TIERS[tier];
+  const pricing = getTierPricing(tier, billingCycle);
+  const tierConfig = require('../config/subscriptions').TIERS[tier];
   if (!tierConfig) {
     throw new Error('Invalid subscription tier');
   }
 
-  const amount = (tierConfig.priceCents / 100).toFixed(2);
+  const amount = (pricing.priceCents / 100).toFixed(2);
   const token = await getAccessToken();
 
   const payload = {
@@ -51,10 +52,10 @@ async function createOrder({ tier, userId, returnUrl, cancelUrl }) {
     purchase_units: [
       {
         reference_id: userId,
-        description: `KachingFx ${tierConfig.name} Subscription`,
-        custom_id: `${userId}:${tier}`,
+        description: `KachingFx ${tierConfig.name} (${pricing.periodLabel})`,
+        custom_id: `${userId}:${tier}:${pricing.billingCycle}`,
         amount: {
-          currency_code: tierConfig.currencyPayPal || 'USD',
+          currency_code: pricing.currencyPayPal || 'USD',
           value: amount
         }
       }

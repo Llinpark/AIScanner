@@ -64,14 +64,14 @@ const PATTERN_SCANNER_CONFIG = {
       slBufferPips: 5
     },
     scoring: {
-      premiumThreshold: Number(process.env.SCANNER_PREMIUM_THRESHOLD || 85),
+      premiumThreshold: Number(process.env.SCANNER_PREMIUM_THRESHOLD || 90),
       expansionIdealBodyRatio: 0.82,
       weights: {
-        liquiditySweep: 0.3,
-        fvgRule: 0.2,
-        expansionCandle: 0.1,
-        htfBias: 0.2,
-        fvgUnmitigated: 0.1,
+        liquiditySweep: 0.28,
+        fvgRule: 0.18,
+        expansionCandle: 0.06,
+        htfBias: 0.24,
+        fvgUnmitigated: 0.14,
         marketStructureShift: 0.1
       }
     }

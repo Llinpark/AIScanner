@@ -47,7 +47,11 @@ const subscribeValidators = [
     .if(body('provider').equals('mpesa'))
     .trim()
     .matches(/^\+?[0-9]{9,15}$/)
-    .withMessage('A valid phone number is required for M-Pesa.')
+    .withMessage('A valid phone number is required for M-Pesa.'),
+  body('billingCycle')
+    .optional()
+    .isIn(['weekly', 'monthly'])
+    .withMessage('billingCycle must be weekly or monthly.')
 ];
 
 module.exports = {

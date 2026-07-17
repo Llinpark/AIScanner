@@ -7,28 +7,30 @@ const ALL_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W'];
 const TIERS = {
   basic: {
     name: 'Basic',
-    price: 5000,
+    weeklyPrice: 1500,
+    weeklyPriceCents: 1650,
+    monthlyPrice: 5000,
     priceCents: 5500,
     currency: 'KES',
     currencyPayPal: 'USD',
-    duration: 'monthly',
     description: 'Essential AI and TradingView alerts',
     features: [
       'AI Alerts',
       'TradingView Alerts',
-      '3 markets (EUR/USD, GBP/USD, XAU/USD)',
+      '5 markets (EUR/USD, GBP/USD, XAU/USD, USD/BTC, USD/JPY)',
       '2 timeframes (1m, 1h)',
       '7-day signal history'
     ]
   },
   professional: {
     name: 'Pro',
-    price: 12000,
+    weeklyPrice: 4000,
+    weeklyPriceCents: 4627,
+    monthlyPrice: 12000,
     priceCents: 13882,
     currency: 'KES',
     currencyPayPal: 'USD',
-    duration: 'monthly',
-    description: 'Advanced alerts with confidence and performance tools',
+    description: 'Advanced alerts with confidence, Telegram copier, and trade automation',
     features: [
       'Everything in Basic',
       'Most major markets (9 symbols incl. gold & indices)',
@@ -39,16 +41,20 @@ const TIERS = {
       'Trade journal',
       'Risk analysis (R:R, position sizing)',
       'Telegram alerts',
+      'One-click MT5 execution via Telegram',
+      'Trailing stop',
+      'Break-even automation',
       '30-day signal history'
     ]
   },
   premium: {
     name: 'Premium',
-    price: 50000,
+    weeklyPrice: 13000,
+    weeklyPriceCents: 16250,
+    monthlyPrice: 50000,
     priceCents: 62500,
     currency: 'KES',
     currencyPayPal: 'USD',
-    duration: 'monthly',
     description: 'Full multi-market scanner with MT5 automation and SMC',
     features: [
       'Everything in Pro',
@@ -59,10 +65,7 @@ const TIERS = {
       'Trade management alerts',
       'AI trade explanation',
       'Advanced analytics',
-      'One-click MT5 execution via Telegram',
       'Telegram trade copier (auto entry, SL, TP, lot)',
-      'Trailing stop',
-      'Break-even automation',
       'Auto lot sizing based on account balance',
       '90-day signal history'
     ]
@@ -74,7 +77,7 @@ const TIER_FEATURES = {
   basic: {
     aiAlerts: true,
     tradingViewAlerts: true,
-    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD'],
+    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'USD/BTC', 'USD/JPY'],
     timeframes: ['1m', '1h'],
     showConfidence: false,
     newsFilter: false,
@@ -118,9 +121,9 @@ const TIER_FEATURES = {
     smartMoneyConcepts: false,
     tradeManagementAlerts: false,
     aiTradeExplanation: false,
-    mt5Execution: false,
-    trailingStop: false,
-    breakEvenAutomation: false,
+    mt5Execution: true,
+    trailingStop: true,
+    breakEvenAutomation: true,
     autoLotSizing: false,
     historyDays: 30,
     maxSignals: 100
@@ -164,9 +167,9 @@ const FEATURE_MATRIX = [
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', basic: false, professional: false, premium: true },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', basic: false, professional: false, premium: true },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', basic: false, professional: false, premium: true },
-  { key: 'mt5Execution', label: 'One-click MT5 Execution', basic: false, professional: false, premium: true },
-  { key: 'trailingStop', label: 'Trailing Stop', basic: false, professional: false, premium: true },
-  { key: 'breakEvenAutomation', label: 'Break-even Automation', basic: false, professional: false, premium: true },
+  { key: 'mt5Execution', label: 'One-click MT5 Execution', basic: false, professional: true, premium: true },
+  { key: 'trailingStop', label: 'Trailing Stop', basic: false, professional: true, premium: true },
+  { key: 'breakEvenAutomation', label: 'Break-even Automation', basic: false, professional: true, premium: true },
   { key: 'autoLotSizing', label: 'Auto Lot Sizing', basic: false, professional: false, premium: true }
 ];
 
@@ -197,11 +200,59 @@ const PAYMENT_CONFIG = {
   }
 };
 
+function normalizeBillingCycle(billingCycle) {
+  return billingCycle === 'weekly' ? 'weekly' : 'monthly';
+}
+
+function getTierPricing(tierKey, billingCycle = 'monthly') {
+  const tier = TIERS[tierKey];
+  if (!tier) {
+    throw new Error(`Invalid tier: ${tierKey}`);
+  }
+
+  const cycle = normalizeBillingCycle(billingCycle);
+  if (cycle === 'weekly') {
+    return {
+      price: tier.weeklyPrice,
+      priceCents: tier.weeklyPriceCents,
+      currency: tier.currency,
+      currencyPayPal: tier.currencyPayPal,
+      periodDays: 7,
+      billingCycle: 'weekly',
+      periodLabel: 'week'
+    };
+  }
+
+  return {
+    price: tier.monthlyPrice,
+    priceCents: tier.priceCents,
+    currency: tier.currency,
+    currencyPayPal: tier.currencyPayPal,
+    periodDays: 30,
+    billingCycle: 'monthly',
+    periodLabel: 'month'
+  };
+}
+
 function getPublicTiers() {
   const publicTiers = {};
   for (const [key, tier] of Object.entries(TIERS)) {
+    const weekly = getTierPricing(key, 'weekly');
+    const monthly = getTierPricing(key, 'monthly');
     publicTiers[key] = {
-      ...tier,
+      name: tier.name,
+      description: tier.description,
+      features: tier.features,
+      currency: tier.currency,
+      currencyPayPal: tier.currencyPayPal,
+      pricing: {
+        weekly,
+        monthly
+      },
+      // Default display price (monthly) for backward compatibility
+      price: monthly.price,
+      priceCents: monthly.priceCents,
+      duration: monthly.billingCycle,
       limits: TIER_FEATURES[key] || TIER_FEATURES.basic
     };
   }
@@ -217,5 +268,7 @@ module.exports = {
   ALL_CURRENCY_PAIRS,
   ALL_TIMEFRAMES,
   PAYMENT_CONFIG,
+  normalizeBillingCycle,
+  getTierPricing,
   getPublicTiers
 };

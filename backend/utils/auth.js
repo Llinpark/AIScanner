@@ -31,14 +31,19 @@ function normalizeSubscription(subscription) {
   return rest;
 }
 
+const { isAdmin } = require('./adminAccess');
+
 function sanitizeUser(user) {
   const obj = user.toObject ? user.toObject() : { ...user };
   delete obj.passwordHash;
+  const role = obj.role || 'user';
   return {
     id: obj._id?.toString() || obj.id,
     email: obj.email,
     displayName: obj.displayName,
     phone: obj.phone,
+    role,
+    isAdmin: isAdmin(obj),
     subscription: normalizeSubscription(obj.subscription),
     createdAt: obj.createdAt
   };

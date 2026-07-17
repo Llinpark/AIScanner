@@ -22,7 +22,8 @@ export default function Navbar({
     { id: 'insights', label: 'Insights' },
     { id: 'tradingview', label: 'TradingView Setup' },
     { id: 'pricing', label: 'Pricing' },
-    { id: 'contact', label: 'Contact' }
+    { id: 'contact', label: 'Contact' },
+    ...(user?.isAdmin ? [{ id: 'admin', label: 'Admin' }] : [])
   ];
 
   useEffect(() => {

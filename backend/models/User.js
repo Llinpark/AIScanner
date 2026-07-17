@@ -36,9 +36,11 @@ const UserConfigSchema = new mongoose.Schema({
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },
     current_period_end: { type: Date },
+    billingCycle: { type: String, enum: ['weekly', 'monthly'], default: 'monthly' },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
   },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

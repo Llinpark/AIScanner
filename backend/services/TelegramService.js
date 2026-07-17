@@ -15,7 +15,7 @@ let pollingOffset = 0;
 function getConfig() {
   return {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'KachingFxBot').replace(/^@/, ''),
+    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'KachingFx_Official').replace(/^@/, ''),
     usePolling: process.env.TELEGRAM_USE_POLLING === 'true',
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || ''
   };

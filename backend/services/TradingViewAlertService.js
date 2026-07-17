@@ -175,8 +175,30 @@ async function deliverLiveAlert(io, signalDoc, subscriber = null) {
   return payload;
 }
 
-async function broadcastToSubscribers(io, signalData, inMemorySignals) {
+async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
+  const results = [];
+
+  if (subscribers.length === 0) {
+    await deliverLiveAlert(io, savedSignal);
+    return { delivered: 0, subscribers: [] };
+  }
+
+  for (const subscriber of subscribers) {
+    await deliverLiveAlert(io, savedSignal, subscriber);
+    results.push({ userId: subscriber.id, email: subscriber.email });
+  }
+
+  return { delivered: results.length, subscribers: results };
+}
+
+async function broadcastToSubscribers(io, signalData, inMemorySignals = [], options = {}) {
   const subscribers = await findActiveSubscribers();
+
+  if (options.existingSaved) {
+    const delivery = await deliverBroadcastToSubscribers(io, options.existingSaved, subscribers);
+    return { ...delivery, broadcastSaved: false, reusedExisting: true };
+  }
+
   const results = [];
 
   if (subscribers.length === 0) {
@@ -205,7 +227,7 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals) {
     results.push({ userId: subscriber.id, email: subscriber.email });
   }
 
-  return { delivered: results.length, subscribers: results };
+  return { delivered: results.length, subscribers: results, broadcastSaved: true };
 }
 
 function buildSignalData(body) {

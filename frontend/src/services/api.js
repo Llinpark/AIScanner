@@ -88,3 +88,19 @@ export const scannerApi = {
   getPatterns: () => api.get('/api/scanner/patterns'),
   runScan: (symbol) => api.post('/api/scanner/run', symbol ? { symbol } : {})
 };
+
+export const adminApi = {
+  getStats: () => api.get('/api/admin/stats'),
+  getUsers: (params = {}) => api.get('/api/admin/users', { params }),
+  getUser: (id) => api.get(`/api/admin/users/${id}`),
+  updateUserSubscription: (id, payload) => api.patch(`/api/admin/users/${id}/subscription`, payload),
+  getSignals: (params = {}) => api.get('/api/admin/signals', { params }),
+  getSignalDuplicates: (params = {}) => api.get('/api/admin/signals/duplicates', { params }),
+  dedupeSignals: (payload) => api.post('/api/admin/signals/dedupe', payload),
+  closeStaleSignals: (payload) => api.post('/api/admin/signals/close-stale', payload),
+  updateSignalOutcome: (id, payload) => api.patch(`/api/admin/signals/${id}/outcome`, payload),
+  getPayments: (params = {}) => api.get('/api/admin/payments', { params }),
+  getAuditLog: (params = {}) => api.get('/api/admin/audit-log', { params }),
+  getScannerConfig: () => api.get('/api/admin/scanner/config'),
+  updateScannerConfig: (payload) => api.patch('/api/admin/scanner/config', payload)
+};
