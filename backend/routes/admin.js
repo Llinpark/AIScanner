@@ -20,6 +20,7 @@ const MarketScannerService = require('../services/MarketScannerService');
 const { activateSubscription, SUBSCRIPTION_PERIOD_DAYS } = require('../services/SubscriptionService');
 const ReferralService = require('../services/ReferralService');
 const { getScannerConfig, applyScannerConfig } = require('../utils/scannerRuntimeConfig');
+const WeightLearningService = require('../services/WeightLearningService');
 const { parseAdminEmails } = require('../utils/adminAccess');
 
 const SUBSCRIPTION_TIERS = new Set(['basic', 'professional', 'premium']);
@@ -358,6 +359,12 @@ function createAdminRouter({ io } = {}) {
       Object.assign(signal, update);
       await signal.save();
 
+      try {
+        WeightLearningService.scheduleRetrainOnOutcome(outcome);
+      } catch (error) {
+        console.error('Admin outcome learning schedule error:', error.message);
+      }
+
       await logAdminAction(req, {
         action: 'signal.outcome.update',
         targetType: 'signal',
@@ -507,6 +514,67 @@ function createAdminRouter({ io } = {}) {
     } catch (error) {
       console.error('Admin scanner config error:', error);
       res.status(500).json({ message: 'Unable to update scanner config', error: error.message });
+    }
+  });
+
+  router.get('/learning/status', async (req, res) => {
+    try {
+      const status = await WeightLearningService.getCurrentWeights();
+      res.json({ status });
+    } catch (error) {
+      console.error('Admin learning status error:', error);
+      res.status(500).json({ message: 'Unable to load learning status', error: error.message });
+    }
+  });
+
+  router.get('/learning/weights', async (req, res) => {
+    try {
+      const status = await WeightLearningService.getCurrentWeights();
+      res.json({
+        pipeline: status.active?.pipeline,
+        aiFactors: status.active?.aiFactors,
+        defaults: status.defaults,
+        history: status.history || [],
+        lastRunAt: status.lastRunAt,
+        lastResult: status.lastResult
+      });
+    } catch (error) {
+      console.error('Admin learning weights error:', error);
+      res.status(500).json({ message: 'Unable to load learned weights', error: error.message });
+    }
+  });
+
+  router.post('/learning/retrain', async (req, res) => {
+    try {
+      const result = await WeightLearningService.retrain({
+        limit: req.body?.limit ? Number(req.body.limit) : undefined
+      });
+
+      await logAdminAction(req, {
+        action: 'learning.retrain',
+        targetType: 'learning',
+        summary: result.skipped
+          ? `Weight retrain skipped (${result.pipeline?.reason || result.reason || 'insufficient data'})`
+          : 'Retrained scoring weights from closed signal outcomes',
+        metadata: {
+          ok: result.ok,
+          skipped: result.skipped,
+          pipelineSampleCount: result.pipeline?.sampleCount,
+          aiFactorsSampleCount: result.aiFactors?.sampleCount,
+          pipelineVersion: result.pipeline?.version,
+          aiFactorsVersion: result.aiFactors?.version
+        }
+      });
+
+      res.json({
+        message: result.skipped
+          ? 'Retrain completed with no weight updates (insufficient samples or already in flight).'
+          : 'Retrain completed and weights applied where sample size allowed.',
+        result
+      });
+    } catch (error) {
+      console.error('Admin learning retrain error:', error);
+      res.status(500).json({ message: 'Unable to retrain weights', error: error.message });
     }
   });
 

@@ -1,5 +1,6 @@
 const { detectPerfectFVG, candleMetrics } = require('../services/PatternDetectionService');
 const { computeRsi, sma } = require('./technicalIndicators');
+const { getAiFactorWeights } = require('../services/WeightLearningService');
 
 function isLongDirection(direction) {
   const d = String(direction || '').toLowerCase();
@@ -208,13 +209,18 @@ function detectTrendAlignment(candles, direction, timeframe = '1h') {
 }
 
 function computeAiConfidence(items, baseConfidence = 0.5) {
-  const weights = {
-    fvg: 0.22,
-    liquiditySweep: 0.18,
-    engulfing: 0.15,
-    rsi: 0.15,
-    trendAlignment: 0.15
-  };
+  let weights;
+  try {
+    weights = getAiFactorWeights();
+  } catch {
+    weights = {
+      fvg: 0.22,
+      liquiditySweep: 0.18,
+      engulfing: 0.15,
+      rsi: 0.15,
+      trendAlignment: 0.15
+    };
+  }
 
   let score = Number(baseConfidence || 0.5) * 0.15;
   for (const item of items) {

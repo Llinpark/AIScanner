@@ -62,6 +62,7 @@ const MarketScannerService = require('./services/MarketScannerService');
 const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
 const SignalEnrichmentService = require('./services/SignalEnrichmentService');
 const SignalOutcomeService = require('./services/SignalOutcomeService');
+const WeightLearningService = require('./services/WeightLearningService');
 const createAnalyticsRouter = require('./routes/analytics');
 const createJournalRouter = require('./routes/journal');
 const createTelegramRouter = require('./routes/telegram');
@@ -1938,6 +1939,9 @@ server.on('listening', () => {
   console.log(`Backend listening on http://${host}:${activePort}`);
   console.log(`Domain: ${APP_DOMAIN} | API: ${PUBLIC_BACKEND_URL} | Frontend: ${FRONTEND_URL}`);
   MarketScannerService.startAutoScanner(io);
+  WeightLearningService.initWeightLearning().catch(err => {
+    console.error('[WeightLearning] Boot init error (scanner continues):', err.message);
+  });
   if (TelegramService.isConfigured()) {
     TelegramService.startPolling();
     if (!process.env.TELEGRAM_USE_POLLING) {

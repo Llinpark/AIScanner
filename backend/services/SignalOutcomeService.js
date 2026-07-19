@@ -8,6 +8,7 @@ const {
   normalizeSymbol
 } = require('../utils/signalOutcome');
 const { enrichSignal } = require('../services/SignalEnrichmentService');
+const { scheduleRetrainOnOutcome } = require('./WeightLearningService');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -40,19 +41,25 @@ async function updateEntryOutcome(entry, alertType, inMemorySignals) {
     closedAt: updated.closedAt
   };
 
+  let saved = null;
   if (isDbConnected() && entryId) {
-    return Signal.findByIdAndUpdate(entryId, update, { new: true });
-  }
-
-  if (inMemorySignals && entryId) {
+    saved = await Signal.findByIdAndUpdate(entryId, update, { new: true });
+  } else if (inMemorySignals && entryId) {
     const idx = inMemorySignals.findIndex(s => String(s._id) === String(entryId));
     if (idx >= 0) {
       Object.assign(inMemorySignals[idx], update);
-      return inMemorySignals[idx];
+      saved = inMemorySignals[idx];
     }
   }
 
-  return null;
+  // Debounced weight retrain on TP1/TP2/TP3 or SL close (never throws into scanner path).
+  try {
+    if (saved?.outcome) scheduleRetrainOnOutcome(saved.outcome);
+  } catch (error) {
+    console.error('[SignalOutcome] scheduleRetrainOnOutcome error:', error.message);
+  }
+
+  return saved;
 }
 
 async function processSignalLifecycle(rawSignalData, inMemorySignals = []) {

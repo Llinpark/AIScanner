@@ -144,5 +144,6 @@ module.exports = {
   applyOutcomeUpdate,
   enrichEntrySignal,
   buildAnalytics,
-  OUTCOME_R
+  OUTCOME_R,
+  WIN_OUTCOMES
 };
