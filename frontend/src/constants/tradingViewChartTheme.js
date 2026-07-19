@@ -19,9 +19,22 @@ export const TRADINGVIEW_CHART_THEME = {
   accent: '#2962ff',
   bullish: '#2962ff',
   bearish: '#ef5350',
+  volumeBullish: 'rgba(41, 98, 255, 0.5)',
+  volumeBearish: 'rgba(239, 83, 80, 0.5)',
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', 'Segoe UI', Roboto, Ubuntu, sans-serif",
   fontSize: 12
 };
+
+/** Bottom time-range presets (visible range on timeScale). */
+export const CHART_RANGE_PRESETS = [
+  { id: '1D', label: '1D', seconds: 86400 },
+  { id: '5D', label: '5D', seconds: 5 * 86400 },
+  { id: '1M', label: '1M', seconds: 30 * 86400 },
+  { id: '3M', label: '3M', seconds: 90 * 86400 },
+  { id: '6M', label: '6M', seconds: 180 * 86400 },
+  { id: '1Y', label: '1Y', seconds: 365 * 86400 },
+  { id: 'All', label: 'All', seconds: null }
+];
 
 export function getTradingViewChartOptions(height, scaleOptions) {
   const theme = TRADINGVIEW_CHART_THEME;
@@ -65,7 +78,7 @@ export function getTradingViewChartOptions(height, scaleOptions) {
       borderColor: theme.border,
       textColor: theme.textMuted,
       autoScale: true,
-      scaleMargins: { top: 0.08, bottom: 0.08 }
+      scaleMargins: { top: 0.08, bottom: 0.22 }
     }
   };
 }
@@ -87,5 +100,24 @@ export function getTradingViewCandlestickOptions() {
     priceLineStyle: LineStyle.Dashed,
     crosshairMarkerVisible: true,
     crosshairMarkerRadius: 4
+  };
+}
+
+export function getTradingViewVolumeSeriesOptions() {
+  const theme = TRADINGVIEW_CHART_THEME;
+
+  return {
+    color: theme.volumeBullish,
+    priceFormat: { type: 'volume' },
+    priceScaleId: 'volume',
+    lastValueVisible: false,
+    priceLineVisible: false
+  };
+}
+
+export function getTradingViewVolumeScaleOptions() {
+  return {
+    scaleMargins: { top: 0.82, bottom: 0 },
+    borderVisible: false
   };
 }

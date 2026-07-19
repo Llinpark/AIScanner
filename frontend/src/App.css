@@ -4111,11 +4111,46 @@ h1, h2, h3, h4, h5, h6,
   color: #ef5350;
 }
 
+.kaching-chart-stage {
+  position: relative;
+  width: 100%;
+  background: #131722;
+}
+
 .kaching-chart-container {
   width: 100%;
   min-height: 320px;
   background: #131722;
   cursor: crosshair;
+}
+
+.kaching-chart-ohlc {
+  position: absolute;
+  top: 8px;
+  left: 10px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  max-width: calc(100% - 20px);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(19, 23, 34, 0.78);
+  color: #d1d4dc;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.kaching-chart-ohlc .ohlc-symbol {
+  color: #f0f3fa;
+  font-weight: 700;
+}
+
+.kaching-chart-ohlc strong {
+  color: #f0f3fa;
+  font-weight: 600;
 }
 
 .kaching-chart-legend {
@@ -4127,6 +4162,64 @@ h1, h2, h3, h4, h5, h6,
   border-top: 1px solid #363a45;
   background: #131722;
   color: #787b86;
+}
+
+.kaching-chart-ranges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px 8px;
+  border-top: 1px solid #363a45;
+  background: #131722;
+}
+
+.chart-range-btn {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #787b86;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.chart-range-btn:hover {
+  color: #d1d4dc;
+  background: #2a2e39;
+  border-color: #363a45;
+}
+
+.chart-range-btn.active {
+  color: #f0f3fa;
+  background: #2a2e39;
+  border-color: #485c7b;
+}
+
+@media (max-width: 640px) {
+  .kaching-chart-ohlc {
+    top: 6px;
+    left: 6px;
+    gap: 4px 8px;
+    padding: 3px 6px;
+    font-size: 0.68rem;
+  }
+
+  .kaching-chart-ranges {
+    gap: 2px;
+    padding: 6px 6px 8px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .chart-range-btn {
+    flex: 0 0 auto;
+    min-height: 32px;
+    padding: 4px 9px;
+  }
 }
 
 .kaching-chart-legend .pattern-tag {

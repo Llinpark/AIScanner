@@ -4,6 +4,7 @@ import {
   CandlestickSeries,
   createChart,
   createSeriesMarkers,
+  HistogramSeries,
   LineStyle
 } from 'lightweight-charts';
 import {
@@ -13,8 +14,11 @@ import {
 } from '../../utils/chartLevels';
 import { timeframeLabel } from '../../constants/chartTimeframes';
 import {
+  CHART_RANGE_PRESETS,
   getTradingViewCandlestickOptions,
   getTradingViewChartOptions,
+  getTradingViewVolumeScaleOptions,
+  getTradingViewVolumeSeriesOptions,
   TRADINGVIEW_CHART_THEME
 } from '../../constants/tradingViewChartTheme';
 import {
@@ -56,6 +60,77 @@ function applyDefaultChartView(chart, barCount, interval = '1h') {
   } else {
     chart.timeScale().fitContent();
   }
+}
+
+function applyRangePreset(chart, candles, presetId) {
+  if (!chart || !candles.length) return;
+  const preset = CHART_RANGE_PRESETS.find(item => item.id === presetId);
+  if (!preset || preset.seconds == null) {
+    chart.timeScale().fitContent();
+    return;
+  }
+
+  const lastTime = candles[candles.length - 1].time;
+  const firstTime = candles[0].time;
+  const from = Math.max(firstTime, lastTime - preset.seconds);
+  try {
+    chart.timeScale().setVisibleRange({ from, to: lastTime });
+  } catch {
+    chart.timeScale().fitContent();
+  }
+}
+
+function toCandleSeriesData(rows) {
+  return rows.map(({ time, open, high, low, close }) => ({ time, open, high, low, close }));
+}
+
+function toVolumeSeriesData(rows) {
+  const theme = TRADINGVIEW_CHART_THEME;
+  return rows.map(candle => ({
+    time: candle.time,
+    value: candle.volume || 0,
+    color: candle.close >= candle.open ? theme.volumeBullish : theme.volumeBearish
+  }));
+}
+
+function toVolumePoint(candle) {
+  if (!candle) return null;
+  const theme = TRADINGVIEW_CHART_THEME;
+  return {
+    time: candle.time,
+    value: candle.volume || 0,
+    color: candle.close >= candle.open ? theme.volumeBullish : theme.volumeBearish
+  };
+}
+
+function formatVolume(value) {
+  if (!Number.isFinite(value) || value <= 0) return '—';
+  if (value >= 1e9) return `${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `${(value / 1e6).toFixed(2)}M`;
+  if (value >= 1e3) return `${(value / 1e3).toFixed(2)}K`;
+  return String(Math.round(value));
+}
+
+function buildOhlcLegend(candles, index, symbol) {
+  if (!candles.length || index < 0 || index >= candles.length) return null;
+  const candle = candles[index];
+  const prev = index > 0 ? candles[index - 1] : null;
+  const changeBase = prev ? prev.close : candle.open;
+  const change = candle.close - changeBase;
+  const changePct = changeBase !== 0 ? (change / changeBase) * 100 : 0;
+  const bullish = candle.close >= candle.open;
+
+  return {
+    symbol,
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume || 0,
+    change,
+    changePct,
+    bullish
+  };
 }
 
 const LEVEL_COLORS = {
@@ -218,13 +293,20 @@ export default function KachingLightweightChart({
   const containerRef = useRef(null);
   const chartRef = useRef(null);
   const seriesRef = useRef(null);
+  const volumeSeriesRef = useRef(null);
   const markersRef = useRef(null);
   const zoneSeriesRef = useRef([]);
   const priceLinesRef = useRef([]);
   const candlesRef = useRef([]);
+  const symbolRef = useRef(symbol);
   const viewKeyRef = useRef('');
   const resetViewRef = useRef(() => {});
+  const applyRangeRef = useRef(() => {});
   const [chartReady, setChartReady] = useState(false);
+  const [activeRange, setActiveRange] = useState(null);
+  const [ohlcLegend, setOhlcLegend] = useState(null);
+
+  symbolRef.current = symbol;
 
   const overlay = useMemo(
     () => buildChartOverlay(overlaySignal, candles, interval),
@@ -262,18 +344,45 @@ export default function KachingLightweightChart({
     });
 
     const series = chart.addSeries(CandlestickSeries, getTradingViewCandlestickOptions());
+    const volumeSeries = chart.addSeries(HistogramSeries, getTradingViewVolumeSeriesOptions());
+    chart.priceScale('volume').applyOptions(getTradingViewVolumeScaleOptions());
     const seriesMarkers = createSeriesMarkers(series, []);
 
     chartRef.current = chart;
     seriesRef.current = series;
+    volumeSeriesRef.current = volumeSeries;
     markersRef.current = seriesMarkers;
     setChartReady(true);
 
     const handleDoubleClick = () => {
+      setActiveRange(null);
       applyDefaultChartView(chart, candlesRef.current.length, interval);
     };
 
+    const handleCrosshairMove = param => {
+      const rows = candlesRef.current;
+      if (!rows.length) {
+        setOhlcLegend(null);
+        return;
+      }
+
+      let index = rows.length - 1;
+      if (param?.time != null) {
+        const time = typeof param.time === 'number' ? param.time : null;
+        if (time != null) {
+          const found = rows.findIndex(row => row.time === time);
+          if (found >= 0) index = found;
+        } else if (param.logical != null) {
+          const logical = Math.round(param.logical);
+          if (logical >= 0 && logical < rows.length) index = logical;
+        }
+      }
+
+      setOhlcLegend(buildOhlcLegend(rows, index, symbolRef.current));
+    };
+
     chart.subscribeDblClick(handleDoubleClick);
+    chart.subscribeCrosshairMove(handleCrosshairMove);
 
     const resizeObserver = new ResizeObserver(entries => {
       const entry = entries[0];
@@ -284,13 +393,16 @@ export default function KachingLightweightChart({
 
     return () => {
       chart.unsubscribeDblClick(handleDoubleClick);
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      volumeSeriesRef.current = null;
       markersRef.current = null;
       zoneSeriesRef.current = [];
       setChartReady(false);
+      setOhlcLegend(null);
     };
   }, [height, interval]);
 
@@ -311,6 +423,7 @@ export default function KachingLightweightChart({
   useEffect(() => {
     const chart = chartRef.current;
     const series = seriesRef.current;
+    const volumeSeries = volumeSeriesRef.current;
     const seriesMarkers = markersRef.current;
     if (!chartReady || !series || !chart) return;
 
@@ -320,6 +433,7 @@ export default function KachingLightweightChart({
     const shouldResetView = viewKeyRef.current !== currentViewKey;
     if (shouldResetView) {
       viewKeyRef.current = currentViewKey;
+      setActiveRange(null);
     }
 
     const applyLivePriceLine = rows => {
@@ -343,11 +457,22 @@ export default function KachingLightweightChart({
       left.open === right.open &&
       left.high === right.high &&
       left.low === right.low &&
-      left.close === right.close;
+      left.close === right.close &&
+      (left.volume || 0) === (right.volume || 0);
+
+    const syncLegend = rows => {
+      if (!rows.length) {
+        setOhlcLegend(null);
+        return;
+      }
+      setOhlcLegend(buildOhlcLegend(rows, rows.length - 1, symbol));
+    };
 
     if (!normalized.length) {
       candlesRef.current = [];
       series.setData([]);
+      volumeSeries?.setData([]);
+      setOhlcLegend(null);
       return;
     }
 
@@ -357,9 +482,12 @@ export default function KachingLightweightChart({
       const nextLast = normalized[normalized.length - 1];
 
       if (normalized.length === prev.length && nextLast.time === prevLast.time && !sameBar(nextLast, prevLast)) {
-        series.update(nextLast);
+        series.update(toCandleSeriesData([nextLast])[0]);
+        const volumePoint = toVolumePoint(nextLast);
+        if (volumePoint) volumeSeries?.update(volumePoint);
         candlesRef.current = normalized;
         applyLivePriceLine(normalized);
+        syncLegend(normalized);
         return;
       }
 
@@ -368,19 +496,28 @@ export default function KachingLightweightChart({
         sameBar(normalized[prev.length - 1], prevLast) &&
         nextLast.time !== prevLast.time
       ) {
-        series.update(nextLast);
+        series.update(toCandleSeriesData([nextLast])[0]);
+        const volumePoint = toVolumePoint(nextLast);
+        if (volumePoint) volumeSeries?.update(volumePoint);
         candlesRef.current = normalized;
         applyLivePriceLine(normalized);
+        syncLegend(normalized);
         return;
       }
     }
 
     candlesRef.current = normalized;
-    series.setData(normalized);
+    series.setData(toCandleSeriesData(normalized));
+    volumeSeries?.setData(toVolumeSeriesData(normalized));
 
-    resetViewRef.current = () => applyDefaultChartView(chart, normalized.length, interval);
+    resetViewRef.current = () => {
+      setActiveRange(null);
+      applyDefaultChartView(chart, normalized.length, interval);
+    };
+    applyRangeRef.current = presetId => applyRangePreset(chart, normalized, presetId);
 
     applyLivePriceLine(normalized);
+    syncLegend(normalized);
 
     priceLinesRef.current.forEach(line => {
       try {
@@ -464,8 +601,16 @@ export default function KachingLightweightChart({
 
   const handleResetView = () => resetViewRef.current();
 
+  const handleRangePreset = presetId => {
+    setActiveRange(presetId);
+    applyRangeRef.current(presetId);
+  };
+
   const displayLiveStatus = liveEnabled ? liveStatus : 'off';
   const formatLevel = value => formatInstrumentPrice(value, symbol);
+  const changeColor = ohlcLegend?.bullish
+    ? TRADINGVIEW_CHART_THEME.bullish
+    : TRADINGVIEW_CHART_THEME.bearish;
 
   return (
     <div className="kaching-chart-wrap">
@@ -483,7 +628,34 @@ export default function KachingLightweightChart({
           </span>
         </span>
       </div>
-      <div ref={containerRef} className="kaching-chart-container" />
+      <div className="kaching-chart-stage">
+        {ohlcLegend && (
+          <div className="kaching-chart-ohlc" aria-live="polite">
+            <span className="ohlc-symbol">{ohlcLegend.symbol}</span>
+            <span>
+              O <strong>{formatInstrumentPrice(ohlcLegend.open, symbol)}</strong>
+            </span>
+            <span>
+              H <strong>{formatInstrumentPrice(ohlcLegend.high, symbol)}</strong>
+            </span>
+            <span>
+              L <strong>{formatInstrumentPrice(ohlcLegend.low, symbol)}</strong>
+            </span>
+            <span>
+              C <strong style={{ color: changeColor }}>{formatInstrumentPrice(ohlcLegend.close, symbol)}</strong>
+            </span>
+            <span style={{ color: changeColor }}>
+              {ohlcLegend.change >= 0 ? '+' : ''}
+              {formatInstrumentPrice(ohlcLegend.change, symbol)} ({ohlcLegend.changePct >= 0 ? '+' : ''}
+              {ohlcLegend.changePct.toFixed(2)}%)
+            </span>
+            <span>
+              Vol <strong>{formatVolume(ohlcLegend.volume)}</strong>
+            </span>
+          </div>
+        )}
+        <div ref={containerRef} className="kaching-chart-container" />
+      </div>
       {overlay && (
         <div className="kaching-chart-legend">
           <span style={{ color: LEVEL_COLORS.entry }}>Entry {formatLevel(overlay.entry)}</span>
@@ -499,6 +671,18 @@ export default function KachingLightweightChart({
           )}
         </div>
       )}
+      <div className="kaching-chart-ranges" role="group" aria-label="Chart time range">
+        {CHART_RANGE_PRESETS.map(preset => (
+          <button
+            key={preset.id}
+            type="button"
+            className={`chart-range-btn${activeRange === preset.id ? ' active' : ''}`}
+            onClick={() => handleRangePreset(preset.id)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

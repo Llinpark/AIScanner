@@ -18,7 +18,9 @@ export function normalizeCandles(candles = []) {
     const low = Number(candle.low);
     const close = Number(candle.close);
     if (![open, high, low, close].every(Number.isFinite)) continue;
-    byTime.set(time, { time, open, high, low, close });
+    const rawVolume = Number(candle.volume ?? candle.v ?? 0);
+    const volume = Number.isFinite(rawVolume) && rawVolume > 0 ? rawVolume : 0;
+    byTime.set(time, { time, open, high, low, close, volume });
   }
 
   return [...byTime.values()].sort((a, b) => a.time - b.time);
