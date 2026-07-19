@@ -17,7 +17,7 @@ export const TRADINGVIEW_CHART_THEME = {
   crosshair: '#758696',
   crosshairLabel: '#363a45',
   accent: '#2962ff',
-  bullish: '#26a69a',
+  bullish: '#2962ff',
   bearish: '#ef5350',
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', 'Segoe UI', Roboto, Ubuntu, sans-serif",
   fontSize: 12

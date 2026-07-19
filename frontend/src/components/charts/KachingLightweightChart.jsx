@@ -25,15 +25,15 @@ import {
 function getChartScaleOptions(interval) {
   const canonical = normalizeInterval(interval);
   const presets = {
-    '1m': { visibleBars: 120, barSpacing: 8, minBarSpacing: 3, secondsVisible: true },
-    '5m': { visibleBars: 100, barSpacing: 9, minBarSpacing: 3, secondsVisible: true },
-    '15m': { visibleBars: 90, barSpacing: 10, minBarSpacing: 4, secondsVisible: false },
-    '30m': { visibleBars: 80, barSpacing: 10, minBarSpacing: 4, secondsVisible: false },
-    '1h': { visibleBars: 72, barSpacing: 12, minBarSpacing: 5, secondsVisible: false },
-    '4h': { visibleBars: 64, barSpacing: 12, minBarSpacing: 5, secondsVisible: false },
-    '1d': { visibleBars: 56, barSpacing: 14, minBarSpacing: 6, secondsVisible: false },
-    '1w': { visibleBars: 48, barSpacing: 14, minBarSpacing: 6, secondsVisible: false },
-    '1M': { visibleBars: 36, barSpacing: 16, minBarSpacing: 6, secondsVisible: false }
+    '1m': { visibleBars: 100, barSpacing: 12, minBarSpacing: 5, secondsVisible: true },
+    '5m': { visibleBars: 84, barSpacing: 13, minBarSpacing: 5, secondsVisible: true },
+    '15m': { visibleBars: 72, barSpacing: 14, minBarSpacing: 6, secondsVisible: false },
+    '30m': { visibleBars: 64, barSpacing: 15, minBarSpacing: 6, secondsVisible: false },
+    '1h': { visibleBars: 56, barSpacing: 16, minBarSpacing: 7, secondsVisible: false },
+    '4h': { visibleBars: 48, barSpacing: 17, minBarSpacing: 7, secondsVisible: false },
+    '1d': { visibleBars: 42, barSpacing: 18, minBarSpacing: 8, secondsVisible: false },
+    '1w': { visibleBars: 36, barSpacing: 18, minBarSpacing: 8, secondsVisible: false },
+    '1M': { visibleBars: 28, barSpacing: 20, minBarSpacing: 8, secondsVisible: false }
   };
 
   return presets[canonical] || presets['1h'];
