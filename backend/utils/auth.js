@@ -44,6 +44,7 @@ function sanitizeUser(user) {
     phone: obj.phone,
     role,
     isAdmin: isAdmin(obj),
+    emailVerified: obj.emailVerified !== false,
     subscription: normalizeSubscription(obj.subscription),
     createdAt: obj.createdAt
   };

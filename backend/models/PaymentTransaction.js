@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const PaymentTransactionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'UserConfig', required: true, index: true },
   tier: { type: String, enum: ['basic', 'professional', 'premium'], required: true },
-  provider: { type: String, enum: ['mpesa', 'paypal', 'mock'], required: true },
+  provider: { type: String, enum: ['mpesa', 'paypal', 'mock', 'binance', 'sasapay'], required: true },
   amount: { type: Number, required: true },
   currency: { type: String, required: true },
   providerReference: { type: String, index: true },

@@ -1,40 +1,37 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { authApi, subscriptionApi, setAuthToken } from '../services/api';
+import { authApi, subscriptionApi, setUnauthorizedHandler } from '../services/api';
 
 const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('token') || '');
   const [loading, setLoading] = useState(true);
 
-  const applySession = useCallback((nextToken, nextUser) => {
-    setToken(nextToken || '');
-    setUser(nextUser || null);
-    setAuthToken(nextToken || null);
-    if (nextToken) {
-      localStorage.setItem('token', nextToken);
-    } else {
-      localStorage.removeItem('token');
-    }
+  const clearSession = useCallback(() => {
+    setUser(null);
   }, []);
 
   const refreshUser = useCallback(async () => {
-    if (!token) {
-      setUser(null);
-      setLoading(false);
-      return;
-    }
     try {
-      setAuthToken(token);
       const response = await authApi.me();
       setUser(response.data.user);
     } catch {
-      applySession('', null);
+      clearSession();
     } finally {
       setLoading(false);
     }
-  }, [token, applySession]);
+  }, [clearSession]);
+
+  useEffect(() => {
+    localStorage.removeItem('token');
+  }, []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      clearSession();
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [clearSession]);
 
   useEffect(() => {
     refreshUser();
@@ -42,21 +39,31 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password) => {
     const response = await authApi.login({ email, password });
-    applySession(response.data.token, response.data.user);
+    setUser(response.data.user);
     return response.data;
   };
 
-  const register = async (payload) => {
+  const register = async payload => {
     const response = await authApi.register(payload);
-    applySession(response.data.token, response.data.user);
+    if (response.data.user) {
+      setUser(response.data.user);
+    }
     return response.data;
   };
 
-  const logout = () => {
-    applySession('', null);
+  const logout = async () => {
+    try {
+      await authApi.logout();
+    } finally {
+      clearSession();
+    }
   };
 
-  const updateUser = (nextUser) => {
+  const applySession = (_token, nextUser) => {
+    setUser(nextUser || null);
+  };
+
+  const updateUser = nextUser => {
     setUser(nextUser);
   };
 
@@ -70,13 +77,14 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider
       value={{
         user,
-        token,
+        token: null,
         loading,
-        isAuthenticated: Boolean(user && token),
+        isAuthenticated: Boolean(user),
         subscription: user?.subscription || null,
         login,
         register,
         logout,
+        applySession,
         updateUser,
         refreshSubscription
       }}

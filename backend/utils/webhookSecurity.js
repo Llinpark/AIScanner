@@ -4,12 +4,10 @@ const { isSubscriptionActive } = require('./subscriptionAccess');
 const LICENSE_PREFIX = 'kls_v1';
 
 function getSigningSecret() {
-  return (
-    process.env.WEBHOOK_SIGNING_SECRET ||
-    process.env.TRADINGVIEW_WEBHOOK_SECRET ||
-    process.env.JWT_SECRET ||
-    ''
-  );
+  const secret = process.env.WEBHOOK_SIGNING_SECRET || process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
+  if (secret) return secret;
+  if (process.env.NODE_ENV === 'production') return '';
+  return process.env.JWT_SECRET || '';
 }
 
 function timingSafeEqualString(a, b) {
@@ -97,9 +95,16 @@ function verifyGlobalWebhookSecret(req, body) {
   const globalSecret = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
   if (!globalSecret) return false;
 
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_LEGACY_WEBHOOK_SECRET !== 'true') {
+    return false;
+  }
+
   const headerSecret = req.headers['x-tradingview-secret'];
   const bodySecret = body.secret;
-  return headerSecret === globalSecret || bodySecret === globalSecret;
+  return (
+    timingSafeEqualString(String(headerSecret || ''), globalSecret) ||
+    timingSafeEqualString(String(bodySecret || ''), globalSecret)
+  );
 }
 
 async function verifyTradingViewWebhook(req, resolveUserById) {

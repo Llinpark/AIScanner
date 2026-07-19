@@ -11,6 +11,7 @@ const {
   getTierFeatures
 } = require('../utils/subscriptionAccess');
 const { buildAnalytics } = require('../utils/signalOutcome');
+const { escapeRegex } = require('../utils/security');
 
 function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
   const router = express.Router();
@@ -70,8 +71,8 @@ function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
       const features = getTierFeatures(req.user.subscription);
 
       const filter = { createdAt: { $gte: cutoff } };
-      if (symbol) filter.symbol = new RegExp(String(symbol).replace('/', ''), 'i');
-      if (direction) filter.direction = new RegExp(String(direction), 'i');
+      if (symbol) filter.symbol = new RegExp(escapeRegex(String(symbol).replace('/', '')), 'i');
+      if (direction) filter.direction = new RegExp(`^${escapeRegex(String(direction))}$`, 'i');
       if (outcome) filter.outcome = outcome;
       if (alertType) filter.alertType = alertType;
       if (pattern) filter.pattern = pattern;

@@ -128,9 +128,67 @@ function parseWebhookEvent(body) {
   return { eventType, resource };
 }
 
+function normalizeHeader(headers, name) {
+  return headers[name] || headers[name.toLowerCase()] || headers[name.toUpperCase()];
+}
+
+async function verifyWebhookSignature(req) {
+  if (!isConfigured()) {
+    return { ok: false, reason: 'paypal_not_configured' };
+  }
+
+  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+  if (!webhookId) {
+    return { ok: false, reason: 'paypal_webhook_id_missing' };
+  }
+
+  const headers = Object.fromEntries(
+    Object.entries(req.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
+  );
+
+  const transmissionId = headers['paypal-transmission-id'];
+  const transmissionTime = headers['paypal-transmission-time'];
+  const transmissionSig = headers['paypal-transmission-sig'];
+  const certUrl = headers['paypal-cert-url'];
+  const authAlgo = headers['paypal-auth-algo'];
+
+  if (!transmissionId || !transmissionTime || !transmissionSig || !certUrl || !authAlgo) {
+    return { ok: false, reason: 'missing_paypal_headers' };
+  }
+
+  const accessToken = await getAccessToken();
+  const payload = {
+    auth_algo: authAlgo,
+    cert_url: certUrl,
+    transmission_id: transmissionId,
+    transmission_sig: transmissionSig,
+    transmission_time: transmissionTime,
+    webhook_id: webhookId,
+    webhook_event: req.body
+  };
+
+  const response = await fetch(`${getBaseUrl()}/v1/notifications/verify-webhook-signature`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    return { ok: false, reason: 'paypal_verify_request_failed', detail: data };
+  }
+
+  const verified = String(data.verification_status || '').toUpperCase() === 'SUCCESS';
+  return verified ? { ok: true } : { ok: false, reason: 'paypal_signature_invalid', detail: data };
+}
+
 module.exports = {
   isConfigured,
   createOrder,
   captureOrder,
-  parseWebhookEvent
+  parseWebhookEvent,
+  verifyWebhookSignature
 };

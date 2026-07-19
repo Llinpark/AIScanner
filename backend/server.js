@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
@@ -9,10 +10,16 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
+const { assertProductionSecurityConfig, sanitizeMongoInput, safeErrorMessage, verifyPaymentWebhookSecret } = require('./utils/security');
+const { globalApiLimiter, authLimiter, webhookLimiter, scannerLimiter } = require('./middleware/rateLimit');
+const requireMockPayments = require('./middleware/requireMockPayments');
+
+assertProductionSecurityConfig();
+
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
-const { TIERS, PAYMENT_CONFIG, getPublicTiers, getTierPricing, FEATURE_MATRIX } = require('./config/subscriptions');
+const { TIERS, PAYMENT_CONFIG, getPublicTiers, getTierPricing, FEATURE_MATRIX, getPublicPaymentMethods } = require('./config/subscriptions');
 
 function buildActivationOptions(user, { tier, provider, providerOrderId, providerCustomerId, billingCycle } = {}) {
   const cycle = billingCycle || user?.subscription?.billingCycle || 'monthly';
@@ -36,6 +43,8 @@ const {
 } = require('./config/appUrls');
 const MpesaService = require('./services/MpesaService');
 const PayPalService = require('./services/PayPalService');
+const BinanceService = require('./services/BinanceService');
+const SasaPayService = require('./services/SasaPayService');
 const {
   activateSubscription,
   createPaymentTransaction,
@@ -62,6 +71,7 @@ const TelegramService = require('./services/TelegramService');
 const { buildAnalytics } = require('./utils/signalOutcome');
 const { verifyTradingViewWebhook } = require('./utils/webhookSecurity');
 const authRoutes = require('./routes/auth');
+const referralRoutes = require('./routes/referrals');
 const createAdminRouter = require('./routes/admin');
 const requireAuth = require('./middleware/requireAuth');
 const { resolveUserById } = require('./middleware/requireAuth');
@@ -84,6 +94,8 @@ const {
   getAllowedTimeframes
 } = require('./utils/subscriptionAccess');
 const { verifyToken, sanitizeUser } = require('./utils/auth');
+const { extractAuthTokenFromSocket } = require('./utils/sessionCookies');
+const { isAdmin } = require('./utils/adminAccess');
 const { normalizeSymbol } = require('./config/symbols');
 const { normalizeInterval } = require('./utils/marketIntervals');
 
@@ -150,7 +162,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: CORS_ORIGINS,
-    methods: ['GET', 'POST']
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 initMarketDataHub(io);
@@ -162,8 +175,23 @@ function captureRawBody(req, res, buf) {
 }
 
 app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
+app.use(cookieParser());
+app.use(globalApiLimiter);
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  next();
+});
 app.use(express.json({ limit: '1mb', verify: captureRawBody }));
 app.use(express.text({ type: ['text/*', 'application/x-www-form-urlencoded'], verify: captureRawBody }));
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    req.body = sanitizeMongoInput(req.body);
+  }
+  next();
+});
 
 const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/kachingscanner';
 mongoose.connect(mongoUri, {
@@ -183,7 +211,8 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/referrals', referralRoutes);
 app.use('/api/admin', createAdminRouter({ io }));
 
 const inMemorySignals = [];
@@ -193,10 +222,12 @@ app.use('/api/journal', createJournalRouter());
 app.use('/api/telegram', createTelegramRouter());
 app.use('/api/mt5', createMt5Router());
 
-app.post('/api/signals', async (req, res) => {
+app.post('/api/signals', webhookLimiter, async (req, res) => {
   try {
-    const payload = req.body;
-    validateKachingEntrySignal(payload);
+    const auth = await assertTradingViewWebhook(req, res);
+    if (!auth) return;
+
+    const payload = parseTradingViewPayload(auth.body || req.body);
 
     if (!isDbReady()) {
       const enriched = await SignalEnrichmentService.enrichSignal(payload);
@@ -225,10 +256,7 @@ app.post('/api/signals', async (req, res) => {
     return res.status(201).json(saved);
   } catch (error) {
     console.error('Error saving signal:', error);
-    const fallback = Object.assign({}, req.body, { createdAt: new Date(), _id: null });
-    inMemorySignals.unshift(fallback);
-    io.emit('signal:update', fallback);
-    return res.status(201).json({ fallback: true, signal: fallback, error: String(error) });
+    return res.status(400).json({ message: safeErrorMessage(error, 'Unable to save signal.') });
   }
 });
 
@@ -245,7 +273,7 @@ app.post('/api/webhook/telegram', async (req, res) => {
   }
 });
 
-app.post('/api/webhook/tradingview', async (req, res) => {
+app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
   try {
     const auth = await assertTradingViewWebhook(req, res);
     if (!auth) return;
@@ -351,7 +379,11 @@ app.get('/api/v1/signals', requireAuth, requireSubscription, requireTierFeature(
 // ===== SUBSCRIPTION ENDPOINTS =====
 
 app.get('/api/tiers', (req, res) => {
-  res.json({ tiers: getPublicTiers(), featureMatrix: FEATURE_MATRIX });
+  res.json({
+    tiers: getPublicTiers(),
+    featureMatrix: FEATURE_MATRIX,
+    paymentMethods: getPublicPaymentMethods()
+  });
 });
 
 app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, async (req, res) => {
@@ -554,6 +586,146 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         mockMode: PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()
       });
     }
+
+    if (provider === 'binance') {
+      const tierConfig = TIERS[tier];
+      let orderResult;
+
+      if (PAYMENT_CONFIG.mode === 'mock' || !BinanceService.isConfigured()) {
+        const mockTradeNo = `binance_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`.slice(0, 32);
+        orderResult = {
+          merchantTradeNo: mockTradeNo,
+          prepayId: mockTradeNo,
+          checkoutUrl: `${FRONTEND_URL}?binance=mock&merchantTradeNo=${mockTradeNo}&tier=${tier}&billingCycle=${pricing.billingCycle}`,
+          amount: pricing.priceCents / 100,
+          currency: pricing.currencyBinance || 'USDT'
+        };
+      } else {
+        orderResult = await BinanceService.createOrder({
+          tier,
+          userId: userId.toString(),
+          billingCycle: pricing.billingCycle
+        });
+      }
+
+      await createPaymentTransaction({
+        userId,
+        tier,
+        provider: 'binance',
+        amount: orderResult.amount,
+        currency: orderResult.currency,
+        providerReference: orderResult.merchantTradeNo,
+        merchantRequestId: orderResult.prepayId
+      });
+
+      user = await UserConfig.findByIdAndUpdate(
+        userId,
+        {
+          subscription: {
+            ...pendingSubscription,
+            provider: 'binance',
+            providerOrderId: orderResult.merchantTradeNo
+          },
+          updatedAt: new Date()
+        },
+        { new: true }
+      );
+
+      if (!user && !isDbReady()) {
+        user = devUserStore.upsertUser(userId, {
+          subscription: {
+            ...pendingSubscription,
+            provider: 'binance',
+            providerOrderId: orderResult.merchantTradeNo
+          }
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Binance Pay checkout created',
+        user: sanitizeUser(user),
+        checkoutId: orderResult.merchantTradeNo,
+        merchantTradeNo: orderResult.merchantTradeNo,
+        checkoutUrl: orderResult.checkoutUrl,
+        amount: orderResult.amount,
+        currency: orderResult.currency,
+        billingCycle: pricing.billingCycle,
+        mockMode: PAYMENT_CONFIG.mode === 'mock' || !BinanceService.isConfigured(),
+        merchantId: PAYMENT_CONFIG.binance.merchantId || null
+      });
+    }
+
+    if (provider === 'sasapay') {
+      if (!phone) {
+        return res.status(400).json({ message: 'Phone number is required for SasaPay payment' });
+      }
+
+      const tierConfig = TIERS[tier];
+      let paymentResult;
+
+      if (PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured()) {
+        paymentResult = {
+          checkoutRequestId: `sasa_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          merchantRequestId: `sasa_mr_${Date.now()}`,
+          customerMessage: 'Mock SasaPay request — configure SasaPay credentials for live payments'
+        };
+      } else {
+        paymentResult = await SasaPayService.initiateRequestPayment({
+          phone,
+          amount: pricing.price,
+          accountReference: userId,
+          description: `KachingFx ${tierConfig.name} (${pricing.periodLabel})`
+        });
+      }
+
+      await createPaymentTransaction({
+        userId,
+        tier,
+        provider: 'sasapay',
+        amount: pricing.price,
+        currency: pricing.currency,
+        providerReference: paymentResult.checkoutRequestId,
+        merchantRequestId: paymentResult.merchantRequestId
+      });
+
+      user = await UserConfig.findByIdAndUpdate(
+        userId,
+        {
+          phone,
+          subscription: {
+            ...pendingSubscription,
+            provider: 'sasapay',
+            providerOrderId: paymentResult.checkoutRequestId
+          },
+          updatedAt: new Date()
+        },
+        { new: true }
+      );
+
+      if (!user && !isDbReady()) {
+        user = devUserStore.upsertUser(userId, {
+          phone,
+          subscription: {
+            ...pendingSubscription,
+            provider: 'sasapay',
+            providerOrderId: paymentResult.checkoutRequestId
+          }
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: paymentResult.customerMessage || 'SasaPay payment request sent. Check your phone to approve.',
+        user: sanitizeUser(user),
+        checkoutRequestId: paymentResult.checkoutRequestId,
+        amount: pricing.price,
+        billingCycle: pricing.billingCycle,
+        mockMode: PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured()
+      });
+    }
+
+    return res.status(400).json({ message: 'Unsupported payment provider.' });
   } catch (error) {
     console.error('Subscribe error:', error);
     res.status(500).json({ message: 'Unable to initiate subscription', error: error.message });
@@ -572,7 +744,7 @@ app.get('/api/subscription/me', requireAuth, (req, res) => {
   });
 });
 
-app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
+app.post('/api/payments/mock/confirm', requireAuth, requireMockPayments, async (req, res) => {
   try {
     const { paymentId, tier, billingCycle } = req.body;
 
@@ -580,27 +752,35 @@ app.post('/api/payments/mock/confirm', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'paymentId and tier are required' });
     }
 
-    await completePaymentTransaction(paymentId, 'mock', { rawPayload: { mock: true } });
+    const transaction = await getPaymentStatus(paymentId, 'mock', req.userId);
+    if (!transaction || transaction.status !== 'pending') {
+      return res.status(400).json({ message: 'No pending mock payment found for this account.' });
+    }
+
+    const completed = await completePaymentTransaction(paymentId, 'mock', { rawPayload: { mock: true } });
+    if (!completed || completed.status !== 'completed') {
+      return res.status(400).json({ message: 'Unable to complete mock payment.' });
+    }
 
     const user = await activateSubscription(
       req.userId,
       buildActivationOptions(req.user, {
-        tier,
+        tier: transaction.tier || tier,
         provider: 'mock',
         providerOrderId: paymentId,
-        billingCycle
+        billingCycle: billingCycle || transaction.billingCycle
       }),
       io
     );
 
     res.json({
       success: true,
-      message: 'Subscription activated! Open TradingView for live Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 alerts.',
+      message: 'Subscription activated.',
       user: sanitizeUser(user)
     });
   } catch (error) {
     console.error('Mock payment confirm error:', error);
-    res.status(500).json({ message: 'Unable to confirm mock payment', error: error.message });
+    res.status(500).json({ message: safeErrorMessage(error, 'Unable to confirm mock payment.') });
   }
 });
 
@@ -625,7 +805,7 @@ app.get('/api/payments/mpesa/status/:checkoutRequestId', requireAuth, async (req
   }
 });
 
-app.post('/api/payments/mpesa/mock-complete', requireAuth, async (req, res) => {
+app.post('/api/payments/mpesa/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
   try {
     const { checkoutRequestId, tier, billingCycle } = req.body;
 
@@ -698,11 +878,11 @@ app.get('/api/payments/paypal/return', async (req, res) => {
     return res.redirect(`${frontendUrl}?paypal=success&tier=${resolvedTier}`);
   } catch (error) {
     console.error('PayPal return error:', error);
-    return res.redirect(`${frontendUrl}?paypal=error&message=${encodeURIComponent(error.message)}`);
+    return res.redirect(`${frontendUrl}?paypal=error&message=payment_failed`);
   }
 });
 
-app.post('/api/payments/paypal/mock-complete', requireAuth, async (req, res) => {
+app.post('/api/payments/paypal/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
   try {
     const { orderId, tier, billingCycle } = req.body;
 
@@ -739,7 +919,167 @@ app.post('/api/payments/paypal/mock-complete', requireAuth, async (req, res) => 
   }
 });
 
-app.get('/api/subscription/:username', async (req, res) => {
+app.get('/api/payments/binance/status/:merchantTradeNo', requireAuth, async (req, res) => {
+  try {
+    const { merchantTradeNo } = req.params;
+    const transaction = await getPaymentStatus(merchantTradeNo, 'binance', req.userId);
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    res.json({
+      status: transaction.status,
+      tier: transaction.tier,
+      failureReason: transaction.failureReason,
+      subscriptionActive: req.user.subscription?.status === 'active'
+    });
+  } catch (error) {
+    console.error('Binance status error:', error);
+    res.status(500).json({ message: 'Unable to check payment status', error: error.message });
+  }
+});
+
+app.get('/api/payments/binance/return', async (req, res) => {
+  const frontendUrl = FRONTEND_URL;
+
+  try {
+    const { merchantTradeNo } = req.query;
+    if (!merchantTradeNo) {
+      return res.redirect(`${frontendUrl}?binance=error&message=missing_order`);
+    }
+
+    const transaction = await findPaymentByReference(String(merchantTradeNo), 'binance');
+    if (!transaction) {
+      return res.redirect(`${frontendUrl}?binance=error&message=unknown_order`);
+    }
+
+    if (transaction.status === 'completed') {
+      return res.redirect(`${frontendUrl}?binance=success&tier=${transaction.tier}`);
+    }
+
+    if (BinanceService.isConfigured() && PAYMENT_CONFIG.mode !== 'mock') {
+      const orderData = await BinanceService.queryOrder(String(merchantTradeNo));
+      if (BinanceService.isPaidStatus(orderData)) {
+        await completePaymentTransaction(String(merchantTradeNo), 'binance', { rawPayload: orderData });
+        const payer = await UserConfig.findById(transaction.userId);
+        await activateSubscription(
+          transaction.userId,
+          buildActivationOptions(payer, {
+            tier: transaction.tier,
+            provider: 'binance',
+            providerOrderId: String(merchantTradeNo),
+            billingCycle: payer?.subscription?.billingCycle
+          }),
+          io
+        );
+        return res.redirect(`${frontendUrl}?binance=success&tier=${transaction.tier}`);
+      }
+    }
+
+    return res.redirect(`${frontendUrl}?binance=pending&merchantTradeNo=${encodeURIComponent(String(merchantTradeNo))}`);
+  } catch (error) {
+    console.error('Binance return error:', error);
+    return res.redirect(`${frontendUrl}?binance=error&message=${encodeURIComponent(error.message)}`);
+  }
+});
+
+app.post('/api/payments/binance/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
+  try {
+    const { merchantTradeNo, tier, billingCycle } = req.body;
+
+    if (!merchantTradeNo || !tier) {
+      return res.status(400).json({ message: 'merchantTradeNo and tier are required' });
+    }
+
+    const transaction = await getPaymentStatus(merchantTradeNo, 'binance', req.userId);
+    if (!transaction || transaction.status !== 'pending') {
+      return res.status(400).json({ message: 'No pending Binance Pay payment found' });
+    }
+
+    await completePaymentTransaction(merchantTradeNo, 'binance', { rawPayload: { mock: true } });
+
+    const user = await activateSubscription(
+      req.userId,
+      buildActivationOptions(req.user, {
+        tier,
+        provider: 'binance',
+        providerOrderId: merchantTradeNo,
+        billingCycle
+      }),
+      io
+    );
+
+    res.json({
+      success: true,
+      message: 'Binance Pay payment confirmed (mock mode)',
+      user: sanitizeUser(user)
+    });
+  } catch (error) {
+    console.error('Binance mock complete error:', error);
+    res.status(500).json({ message: 'Unable to confirm Binance Pay payment', error: error.message });
+  }
+});
+
+app.get('/api/payments/sasapay/status/:checkoutRequestId', requireAuth, async (req, res) => {
+  try {
+    const { checkoutRequestId } = req.params;
+    const transaction = await getPaymentStatus(checkoutRequestId, 'sasapay', req.userId);
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    res.json({
+      status: transaction.status,
+      tier: transaction.tier,
+      failureReason: transaction.failureReason,
+      subscriptionActive: req.user.subscription?.status === 'active'
+    });
+  } catch (error) {
+    console.error('SasaPay status error:', error);
+    res.status(500).json({ message: 'Unable to check payment status', error: error.message });
+  }
+});
+
+app.post('/api/payments/sasapay/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
+  try {
+    const { checkoutRequestId, tier, billingCycle } = req.body;
+
+    if (!checkoutRequestId || !tier) {
+      return res.status(400).json({ message: 'checkoutRequestId and tier are required' });
+    }
+
+    const transaction = await getPaymentStatus(checkoutRequestId, 'sasapay', req.userId);
+    if (!transaction || transaction.status !== 'pending') {
+      return res.status(400).json({ message: 'No pending SasaPay payment found' });
+    }
+
+    await completePaymentTransaction(checkoutRequestId, 'sasapay', { rawPayload: { mock: true } });
+
+    const user = await activateSubscription(
+      req.userId,
+      buildActivationOptions(req.user, {
+        tier,
+        provider: 'sasapay',
+        providerOrderId: checkoutRequestId,
+        billingCycle
+      }),
+      io
+    );
+
+    res.json({
+      success: true,
+      message: 'SasaPay payment confirmed (mock mode)',
+      user: sanitizeUser(user)
+    });
+  } catch (error) {
+    console.error('SasaPay mock complete error:', error);
+    res.status(500).json({ message: 'Unable to confirm SasaPay payment', error: error.message });
+  }
+});
+
+app.get('/api/subscription/:username', requireAuth, async (req, res) => {
   try {
     const { username } = req.params;
     const user = await resolveUser(username);
@@ -748,15 +1088,19 @@ app.get('/api/subscription/:username', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const requesterId = String(req.userId);
+    const ownerId = String(user._id || user.id);
+    if (requesterId !== ownerId && !isAdmin(req.user)) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
     res.json({
       username,
-      subscription: user.subscription || { status: 'inactive', tier: 'basic' },
-      email: user.email,
-      phone: user.phone
+      subscription: user.subscription || { status: 'inactive', tier: 'basic' }
     });
   } catch (error) {
     console.error('Get subscription error:', error);
-    res.status(500).json({ message: 'Unable to fetch subscription', error: error.message });
+    res.status(500).json({ message: safeErrorMessage(error, 'Unable to fetch subscription.') });
   }
 });
 
@@ -804,8 +1148,16 @@ app.post('/api/webhook/mpesa', async (req, res) => {
   }
 });
 
-app.post('/api/webhook/paypal', async (req, res) => {
+app.post('/api/webhook/paypal', webhookLimiter, async (req, res) => {
   try {
+    const verification = await PayPalService.verifyWebhookSignature(req);
+    if (!verification.ok) {
+      console.warn('PayPal webhook rejected:', verification.reason);
+      return res.status(verification.reason === 'paypal_not_configured' ? 503 : 401).json({
+        message: 'Invalid PayPal webhook signature'
+      });
+    }
+
     console.log('PayPal webhook received:', req.body?.event_type);
     const { eventType, customId, orderId } = PayPalService.parseWebhookEvent(req.body);
 
@@ -846,48 +1198,156 @@ app.post('/api/webhook/paypal', async (req, res) => {
   }
 });
 
-app.post('/api/webhook/payments', async (req, res) => {
+app.post('/api/webhook/binance', async (req, res) => {
   try {
+    const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(req.body);
+    const headers = Object.fromEntries(
+      Object.entries(req.headers).map(([key, value]) => [key.toLowerCase(), value])
+    );
+
+    if (!BinanceService.isConfigured()) {
+      console.warn('Binance Pay webhook rejected: provider not configured');
+      return res.status(503).json({ returnCode: 'FAIL', returnMessage: 'Provider not configured' });
+    }
+
+    if (!BinanceService.verifyWebhookSignature(rawBody, headers)) {
+      console.warn('Binance Pay webhook signature verification failed');
+      return res.status(401).json({ returnCode: 'FAIL', returnMessage: 'Invalid signature' });
+    }
+
+    const event = BinanceService.parseWebhookEvent(req.body);
+    console.log('Binance Pay webhook received:', event.bizStatus, event.merchantTradeNo);
+
+    if (event.bizStatus === 'PAY_SUCCESS' && event.merchantTradeNo) {
+      const transaction = await findPaymentByReference(event.merchantTradeNo, 'binance');
+      if (transaction && transaction.status === 'pending') {
+        await completePaymentTransaction(event.merchantTradeNo, 'binance', { rawPayload: req.body });
+        const payer = await UserConfig.findById(transaction.userId);
+        const passThrough = String(event.passThroughInfo || '').split(':');
+        await activateSubscription(
+          transaction.userId,
+          buildActivationOptions(payer, {
+            tier: passThrough[1] || transaction.tier,
+            provider: 'binance',
+            providerOrderId: event.merchantTradeNo,
+            providerCustomerId: event.transactionId,
+            billingCycle: passThrough[2] || payer?.subscription?.billingCycle
+          }),
+          io
+        );
+      }
+    } else if (event.bizStatus === 'PAY_CLOSED' && event.merchantTradeNo) {
+      await completePaymentTransaction(event.merchantTradeNo, 'binance', {
+        rawPayload: req.body,
+        failureReason: 'Payment closed without completion'
+      });
+    }
+
+    res.status(200).json({ returnCode: 'SUCCESS', returnMessage: null });
+  } catch (error) {
+    console.error('Binance Pay webhook error:', error);
+    res.status(500).json({ returnCode: 'FAIL', returnMessage: error.message });
+  }
+});
+
+app.post('/api/webhook/sasapay', async (req, res) => {
+  try {
+    console.log('SasaPay webhook received:', JSON.stringify(req.body));
+    const callback = SasaPayService.parseCallback(req.body);
+
+    if (!callback?.checkoutRequestId) {
+      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    }
+
+    const transaction = await findPaymentByReference(callback.checkoutRequestId, 'sasapay');
+    if (!transaction) {
+      console.warn('SasaPay callback for unknown transaction:', callback.checkoutRequestId);
+      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+    }
+
+    if (callback.success) {
+      await completePaymentTransaction(callback.checkoutRequestId, 'sasapay', { rawPayload: callback });
+      const payer = await UserConfig.findById(transaction.userId);
+      await activateSubscription(
+        transaction.userId,
+        buildActivationOptions(payer, {
+          tier: transaction.tier,
+          provider: 'sasapay',
+          providerOrderId: callback.checkoutRequestId,
+          providerCustomerId: callback.transactionCode
+        }),
+        io
+      );
+    } else {
+      await completePaymentTransaction(callback.checkoutRequestId, 'sasapay', {
+        rawPayload: callback,
+        failureReason: callback.resultDesc || 'SasaPay payment failed'
+      });
+    }
+
+    res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
+  } catch (error) {
+    console.error('SasaPay webhook error:', error);
+    res.status(200).json({ ResultCode: 1, ResultDesc: 'Error' });
+  }
+});
+
+app.post('/api/webhook/payments', webhookLimiter, async (req, res) => {
+  try {
+    if (!verifyPaymentWebhookSecret(req)) {
+      return res.status(401).json({ message: 'Invalid payment webhook authentication' });
+    }
+
     const { event, provider, userId, tier, status } = req.body;
 
     if (!userId || !provider) {
       return res.status(400).json({ message: 'userId and provider are required' });
     }
 
+    const PaymentTransaction = require('./models/PaymentTransaction');
+    const providerReference = req.body.providerReference || req.body.paymentId || req.body.orderId;
+    if (!providerReference) {
+      return res.status(400).json({ message: 'providerReference is required' });
+    }
+
+    const transaction = await findPaymentByReference(providerReference, provider);
+    if (!transaction || String(transaction.userId) !== String(userId)) {
+      return res.status(404).json({ message: 'Payment transaction not found' });
+    }
+
     if (status === 'success' || event === 'payment.completed') {
-      const user = await UserConfig.findByIdAndUpdate(
+      if (transaction.status !== 'pending') {
+        return res.json({ success: true, message: 'Payment already processed' });
+      }
+
+      await completePaymentTransaction(providerReference, provider, { rawPayload: req.body });
+      const payer = await UserConfig.findById(userId);
+      const user = await activateSubscription(
         userId,
-        {
-          subscription: {
-            tier: tier || 'basic',
-            status: 'active',
-            provider,
-            current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-            updatedAt: new Date()
-          }
-        },
-        { new: true }
+        buildActivationOptions(payer, {
+          tier: tier || transaction.tier || 'basic',
+          provider,
+          providerOrderId: providerReference
+        }),
+        io
       );
 
       io.emit('subscription:updated', { userId, subscription: user.subscription });
-      return res.json({ success: true, message: 'Subscription activated', user: sanitizeUser(user) });
+      return res.json({ success: true, message: 'Subscription activated' });
     }
 
     if (status === 'cancelled' || event === 'payment.cancelled') {
-      const user = await UserConfig.findByIdAndUpdate(
-        userId,
-        { 'subscription.status': 'cancelled' },
-        { new: true }
-      );
-
-      io.emit('subscription:updated', { userId, subscription: user.subscription });
-      return res.json({ success: true, message: 'Subscription cancelled', user: sanitizeUser(user) });
+      await completePaymentTransaction(providerReference, provider, {
+        rawPayload: req.body,
+        failureReason: 'Payment cancelled'
+      });
+      return res.json({ success: true, message: 'Payment cancelled' });
     }
 
     res.json({ message: 'Event processed' });
   } catch (error) {
     console.error('Payment webhook error:', error);
-    res.status(500).json({ message: 'Webhook processing error', error: error.message });
+    res.status(500).json({ message: safeErrorMessage(error, 'Webhook processing error.') });
   }
 });
 
@@ -900,7 +1360,8 @@ app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) =
     subscription: req.user.subscription,
     instructions: [
       'Open TradingView and add the KachingFx Structural Scanner indicator to your chart.',
-      'Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3.',
+      'Entry, SL, and TP1–TP3 lines are drawn automatically on your chart when a pattern fires.',
+      'Create one alert with condition "Any alert() function call" and enable Webhook URL notifications.',
       'Enable TradingView push/email notifications so alerts reach you in real time.',
       'Live signals from KachingFx are also delivered to this dashboard while your subscription is active.'
     ]
@@ -954,47 +1415,46 @@ app.get('/api/tradingview/oauth-callback', async (req, res) => {
 });
 
 // Link TradingView account by username (username-based, no OAuth)
-app.post('/api/tradingview/link', requireTradingViewAccess, async (req, res) => {
+app.post('/api/tradingview/link', requireAuth, requireSubscription, async (req, res) => {
   try {
-    const { username, tradingviewUsername } = req.body;
+    const { tradingviewUsername } = req.body;
 
-    if (!username || !tradingviewUsername) {
-      return res.status(400).json({ message: 'Both username and tradingviewUsername are required' });
+    if (!tradingviewUsername) {
+      return res.status(400).json({ message: 'tradingviewUsername is required' });
     }
 
     const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
     const existing = await UserConfig.findOne({
       tradingviewUsername: { $regex: new RegExp(`^${normalizedTv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
-      username: { $ne: username }
+      _id: { $ne: req.userId }
     });
 
     if (existing) {
       return res.status(409).json({ message: 'This TradingView username is already linked to another account.' });
     }
 
-    const user = await UserConfig.findOneAndUpdate(
-      { username },
+    const user = await UserConfig.findByIdAndUpdate(
+      req.userId,
       {
         tradingviewUsername: normalizedTv,
         updatedAt: new Date()
       },
-      { upsert: true, new: true }
+      { new: true }
     );
 
     res.json({
       success: true,
-      message: 'TradingView account linked. Live entry, stop loss, and take profit alerts are enabled.',
-      user,
+      message: 'TradingView account linked.',
       tradingviewUsername: user.tradingviewUsername
     });
   } catch (error) {
     console.error('TradingView link error:', error);
-    res.status(500).json({ message: 'Unable to link TradingView account', error: error.message });
+    res.status(500).json({ message: safeErrorMessage(error, 'Unable to link TradingView account.') });
   }
 });
 
 // Get user's TradingView linked accounts
-app.get('/api/tradingview/accounts/:username', async (req, res) => {
+app.get('/api/tradingview/accounts/:username', requireAuth, requireSubscription, async (req, res) => {
   try {
     const { username } = req.params;
     const user = await resolveUser(username);
@@ -1003,21 +1463,21 @@ app.get('/api/tradingview/accounts/:username', async (req, res) => {
       return res.status(404).json({ message: 'User not found' });
     }
 
+    const requesterId = String(req.userId);
+    const ownerId = String(user._id || user.id);
+    if (requesterId !== ownerId) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
+
     res.json({
       username,
       tradingviewUsername: user.tradingviewUsername,
       liveAlertsEnabled: canAccessTradingViewAlerts(user.subscription),
-      subscription: user.subscription,
-      tradingview: {
-        isOAuthLinked: user.tradingview?.isOAuthLinked || false,
-        userId: user.tradingview?.userId,
-        linkedAt: user.tradingview?.linkedAt,
-        apiAccessLevel: user.tradingview?.apiAccessLevel || 'basic'
-      }
+      subscription: user.subscription
     });
   } catch (error) {
     console.error('Get TradingView accounts error:', error);
-    res.status(500).json({ message: 'Unable to fetch TradingView accounts', error: error.message });
+    res.status(500).json({ message: safeErrorMessage(error, 'Unable to fetch TradingView accounts.') });
   }
 });
 
@@ -1132,7 +1592,7 @@ app.get('/api/market-data/candles', requireAuth, requireSubscription, async (req
     let payload = await hub.getCandles(symbol, interval, parsedLimit, { cacheOnly: true });
     if (!payload) {
       payload = await hub.getCandles(symbol, interval, parsedLimit, { allowProviderFetch: true });
-    } else if (!hub.isFresh(payload, interval) && hub.canFetchFromProvider()) {
+    } else if (!hub.isFresh(payload, interval) && hub.canFetchFromProvider({ bypassGap: true })) {
       try {
         payload = await hub.getCandles(symbol, interval, parsedLimit, { allowProviderFetch: true });
       } catch (refreshError) {
@@ -1242,6 +1702,30 @@ app.post('/api/scanner/candle', async (req, res) => {
   }
 });
 
+app.get('/api/scanner/analyze', scannerLimiter, requireAuth, requireSubscription, async (req, res) => {
+  try {
+    const symbol = req.query.symbol;
+    const interval = req.query.interval || '1h';
+
+    if (!symbol) {
+      return res.status(400).json({ message: 'symbol query parameter is required' });
+    }
+
+    if (!isCurrencyPairAllowed(symbol, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Currency pair ${symbol} is not included in your plan.`,
+        allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
+      });
+    }
+
+    const result = await MarketScannerService.analyzeSymbol(symbol, interval);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    console.error('Scanner analyze error:', error);
+    return res.status(500).json({ message: 'Scanner analyze failed', error: error.message });
+  }
+});
+
 app.post('/api/scanner/run', requireAuth, requireSubscription, requireTierFeature('multiMarketScanner'), async (req, res) => {
   try {
     const { symbol } = req.body;
@@ -1266,7 +1750,7 @@ app.post('/api/scanner/run', requireAuth, requireSubscription, requireTierFeatur
 
 io.use(async (socket, next) => {
   try {
-    const token = socket.handshake.auth?.token;
+    const token = extractAuthTokenFromSocket(socket.handshake);
     if (!token) {
       return next(new Error('Authentication required'));
     }
@@ -1306,19 +1790,24 @@ io.on('connection', socket => {
       }
 
       const user = await resolveUser(appUsername);
+      const userId = String(user?._id || user?.id || '');
+      if (!user || userId !== String(socket.userId)) {
+        socket.emit('tv:subscribe-error', { message: 'Unable to subscribe to live alerts for this account.' });
+        return;
+      }
+
       const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
       const linkedTv = TradingViewAlertService.normalizeTradingViewUsername(user?.tradingviewUsername);
 
-      if (!user || linkedTv !== normalizedTv || !canAccessTradingViewAlerts(user.subscription)) {
+      if (linkedTv !== normalizedTv || !canAccessTradingViewAlerts(user.subscription)) {
         socket.emit('tv:subscribe-error', { message: 'Unable to subscribe to live alerts for this TradingView username.' });
         return;
       }
 
       socket.join(`tv:${normalizedTv}`);
-      socket.join(`user:${appUsername}`);
       socket.emit('tv:subscribed', { tradingviewUsername: normalizedTv, appUsername });
     } catch (error) {
-      socket.emit('tv:subscribe-error', { message: error.message });
+      socket.emit('tv:subscribe-error', { message: 'Unable to subscribe to live alerts.' });
     }
   });
 
@@ -1356,7 +1845,7 @@ io.on('connection', socket => {
       }
 
       const needsRefresh = !payload || !hub.isFresh(payload, interval);
-      if (needsRefresh && hub.canFetchFromProvider()) {
+      if (needsRefresh && hub.canFetchFromProvider({ bypassGap: true })) {
         try {
           payload = await hub.refreshStream(stream);
           socket.emit('market:candles', {
@@ -1409,6 +1898,14 @@ io.on('connection', socket => {
   });
 });
 
+app.use((err, req, res, next) => {
+  console.error('Unhandled route error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  return res.status(500).json({ message: safeErrorMessage(err, 'Internal server error.') });
+});
+
 const defaultPort = parseInt(process.env.PORT, 10) || 4000;
 const host = process.env.HOST || '0.0.0.0';
 let activePort = defaultPort;
@@ -1436,6 +1933,7 @@ server.on('error', (error) => {
 });
 
 listenOnPort(activePort);
+
 server.on('listening', () => {
   console.log(`Backend listening on http://${host}:${activePort}`);
   console.log(`Domain: ${APP_DOMAIN} | API: ${PUBLIC_BACKEND_URL} | Frontend: ${FRONTEND_URL}`);

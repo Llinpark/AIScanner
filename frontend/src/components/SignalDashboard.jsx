@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
-import { io } from 'socket.io-client';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import { getSharedSocket } from '../services/marketDataSocket';
 import OutcomeBadge, { RiskAnalysisCard } from './insights/RiskAnalysisCard';
 import AiExplanationCard from './insights/AiExplanationCard';
 import MarketChartPanel from './charts/MarketChartPanel';
-
-import { SOCKET_URL } from '../config/appUrls';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -33,7 +31,7 @@ function isActiveSubscription(subscription) {
 }
 
 export default function SignalDashboard({ initialSignals, subscription }) {
-  const { token, isAuthenticated } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [signals, setSignals] = useState(initialSignals || []);
   const [tierLimits, setTierLimits] = useState({});
   const [allowedPairs, setAllowedPairs] = useState(['EUR/USD', 'GBP/USD']);
@@ -69,9 +67,9 @@ export default function SignalDashboard({ initialSignals, subscription }) {
   }, [tierLimits.performanceDashboard]);
 
   useEffect(() => {
-    if (!token || !isAuthenticated) return undefined;
+    if (!isAuthenticated) return undefined;
 
-    const socket = io(SOCKET_URL, { auth: { token } });
+    const socket = getSharedSocket();
 
     socket.on('signal:update', newSignal => {
       setSignals(prev => [newSignal, ...prev].slice(0, tierLimits.maxSignals || 50));
@@ -83,8 +81,11 @@ export default function SignalDashboard({ initialSignals, subscription }) {
       );
     });
 
-    return () => socket.disconnect();
-  }, [token, isAuthenticated, tierLimits.maxSignals]);
+    return () => {
+      socket.off('signal:update');
+      socket.off('signal:outcome');
+    };
+  }, [isAuthenticated, tierLimits.maxSignals]);
 
   const hasAccess = isActiveSubscription(subscription);
   const tierKey = subscription?.tier || 'basic';

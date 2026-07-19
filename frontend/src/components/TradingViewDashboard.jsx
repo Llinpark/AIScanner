@@ -1,12 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { io } from 'socket.io-client';
+import { getSharedSocket } from '../services/marketDataSocket';
 import { tradingviewApi, subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
 import { alertMatchesSymbol, normalizeMarketSymbol } from '../constants/markets';
-
-import { SOCKET_URL } from '../config/appUrls';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -57,7 +55,7 @@ function DetailRow({ label, value }) {
 }
 
 export default function TradingViewDashboard({ subscription, onNavigatePricing, initialTab }) {
-  const { token } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [setup, setSetup] = useState(null);
   const [liveFilter, setLiveFilter] = useState('ALL');
   const [chartSymbol, setChartSymbol] = useState('EUR/USD');
@@ -183,9 +181,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   }, [subscribed, fetchAlerts]);
 
   useEffect(() => {
-    if (!token || !subscribed) return undefined;
+    if (!isAuthenticated || !subscribed) return undefined;
 
-    const socket = io(SOCKET_URL, { auth: { token } });
+    const socket = getSharedSocket();
 
     socket.on('subscriber:ready', () => setSocketStatus('connected'));
     socket.on('connect', () => setSocketStatus('connected'));
@@ -199,8 +197,14 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       }
     });
 
-    return () => socket.disconnect();
-  }, [token, subscribed]);
+    return () => {
+      socket.off('subscriber:ready');
+      socket.off('connect');
+      socket.off('disconnect');
+      socket.off('connect_error');
+      socket.off('tv:live-alert');
+    };
+  }, [isAuthenticated, subscribed]);
 
   const fetchHistoricalData = async () => {
     try {
@@ -253,8 +257,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       <div className="tv-header">
         <h2>TradingView Alert Setup</h2>
         <p>
-          After subscribing, open TradingView to receive accurate Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 alerts.
-          No TradingView username linking is required.
+          After subscribing, add the KachingFx scanner to TradingView once. Entry, SL, and TP1–TP3 lines draw
+          automatically on your chart, and alerts sync to this dashboard. No username linking is required.
         </p>
       </div>
 
@@ -354,9 +358,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
             <div className="pine-script-section">
               <h3>Open TradingView for accurate alerts</h3>
               <p>
-                Add the KachingFx indicator to your chart in TradingView. Create alerts for{' '}
-                <strong>Kaching Entry</strong>, <strong>Kaching SL</strong>, <strong>Kaching TP1</strong>,{' '}
-                <strong>Kaching TP2</strong>, and <strong>Kaching TP3</strong>.
+                Add the KachingFx indicator to your chart in TradingView. Entry, SL, and TP lines appear
+                automatically when a pattern fires. Create one webhook alert with condition{' '}
+                <strong>Any alert() function call</strong>.
                 Enable TradingView push or email notifications so alerts reach you instantly.
               </p>
               {tierLimits.multiMarketScanner && (
@@ -411,8 +415,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       ? pineMeta.instructions
                       : [
                           'Open TradingView → Pine Editor → New script → paste from your clipboard',
-                          'Add the script to your chart',
-                          'Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 with Webhook URL notifications',
+                          'Add the script to your chart (keep auto-draw lines enabled)',
+                          'Create one alert with "Any alert() function call" and Webhook URL notifications',
                           'Enable TradingView mobile push notifications for real-time delivery'
                         ]
                     ).map(step => (

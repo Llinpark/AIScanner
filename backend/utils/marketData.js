@@ -2,10 +2,14 @@ const { fetchTimeSeries: fetchTwelveDataSeries } = require('./twelveData');
 const { fetchHistoricalSeries: fetchEodhdSeries } = require('./eodhd');
 const { DEFAULT_TTL_MS, getFresh, getStale, isRateLimitError, set } = require('./marketDataCache');
 
-async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100) {
+async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100, options = {}) {
   const cacheKey = `market:${symbol}:${interval}:${limit}`;
-  const cached = getFresh(cacheKey);
-  if (cached) return cached;
+  const forceRefresh = Boolean(options.forceRefresh);
+
+  if (!forceRefresh) {
+    const cached = getFresh(cacheKey);
+    if (cached) return cached;
+  }
 
   const primary = process.env.MARKET_DATA_PRIMARY || process.env.DATA_PROVIDER || 'twelve_data';
   const fallback = process.env.MARKET_DATA_FALLBACK || 'eodhd';
@@ -21,7 +25,8 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100)
           symbol,
           interval,
           limit,
-          baseUrl: config.providers.twelve_data.baseUrl
+          baseUrl: config.providers.twelve_data.baseUrl,
+          forceRefresh
         })
     },
     {

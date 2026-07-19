@@ -8,20 +8,20 @@ export function toChartTime(value) {
 }
 
 export function normalizeCandles(candles = []) {
-  return candles
-    .map(candle => {
-      const time = toChartTime(candle.time ?? candle.timestamp);
-      if (!time) return null;
-      return {
-        time,
-        open: Number(candle.open),
-        high: Number(candle.high),
-        low: Number(candle.low),
-        close: Number(candle.close)
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.time - b.time);
+  const byTime = new Map();
+
+  for (const candle of candles) {
+    const time = toChartTime(candle.time ?? candle.timestamp);
+    if (!time) continue;
+    const open = Number(candle.open);
+    const high = Number(candle.high);
+    const low = Number(candle.low);
+    const close = Number(candle.close);
+    if (![open, high, low, close].every(Number.isFinite)) continue;
+    byTime.set(time, { time, open, high, low, close });
+  }
+
+  return [...byTime.values()].sort((a, b) => a.time - b.time);
 }
 
 function isLongDirection(direction) {

@@ -5,6 +5,33 @@ const requireAuth = require('../middleware/requireAuth');
 const requireSubscription = require('../middleware/requireSubscription');
 const requireTierFeature = require('../middleware/requireTierFeature');
 
+const JOURNAL_PATCH_FIELDS = new Set([
+  'symbol',
+  'direction',
+  'entry',
+  'exit',
+  'lotSize',
+  'outcome',
+  'outcomeR',
+  'pnl',
+  'notes',
+  'tags',
+  'signalId',
+  'openedAt',
+  'closedAt'
+]);
+
+function pickJournalPatch(body = {}) {
+  const patch = {};
+  for (const key of JOURNAL_PATCH_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      patch[key] = body[key];
+    }
+  }
+  patch.updatedAt = new Date();
+  return patch;
+}
+
 function isDbReady() {
   const mongoose = require('mongoose');
   return mongoose.connection.readyState === 1;
@@ -73,10 +100,10 @@ function createJournalRouter() {
     try {
       const userId = req.userId;
       const { id } = req.params;
-      const patch = { ...req.body, updatedAt: new Date() };
+      const patch = pickJournalPatch(req.body);
 
       if (isDbReady()) {
-        const entry = await TradeJournal.findOneAndUpdate({ _id: id, userId }, patch, { new: true });
+        const entry = await TradeJournal.findOneAndUpdate({ _id: id, userId }, { $set: patch }, { new: true });
         if (!entry) return res.status(404).json({ message: 'Journal entry not found' });
         return res.json({ entry });
       }

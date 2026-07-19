@@ -3,18 +3,23 @@ import SignalDashboard from './components/SignalDashboard';
 import Pricing from './components/Pricing';
 import TradingViewDashboard from './components/TradingViewDashboard';
 import AuthForm from './components/AuthForm';
+import ResetPasswordForm from './components/ResetPasswordForm';
+import VerifyEmailPage from './components/VerifyEmailPage';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
+import AcceptedPayments from './components/AcceptedPayments';
 import Hero from './components/Hero';
 import TradingEcosystem from './components/TradingEcosystem';
 import AiIntelligenceSection from './components/AiIntelligenceSection';
 import RiskDisclosure from './components/RiskDisclosure';
 import Contact from './components/Contact';
 import InsightsHub from './components/InsightsHub';
+import ReferAndEarn from './components/ReferAndEarn';
 import AdminHub from './admin/AdminHub';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
 import { APP_DESCRIPTION, APP_PAGE_TITLE } from './config/appUrls';
+import { storeReferralCode } from './utils/referralStorage';
 
 function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
@@ -59,7 +64,56 @@ function AppContent() {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    const verifyToken = params.get('verify');
+    const resetToken = params.get('reset');
+    const refCode = params.get('ref');
     const paypalStatus = params.get('paypal');
+    const binanceStatus = params.get('binance');
+
+    if (refCode) {
+      storeReferralCode(refCode);
+      if (!verifyToken && !resetToken && !paypalStatus && !binanceStatus) {
+        setCurrentPage('signup');
+      }
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+
+    if (verifyToken) {
+      setCurrentPage('verify-email');
+      setPageOptions({ token: verifyToken });
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
+    if (resetToken) {
+      setCurrentPage('reset-password');
+      setPageOptions({ token: resetToken });
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
+
+    if (binanceStatus) {
+      if (binanceStatus === 'success') {
+        refreshSubscription().then(() => {
+          setPaymentNotice('Binance Pay payment successful! Your subscription is now active.');
+          setCurrentPage('pricing');
+        });
+      } else if (binanceStatus === 'cancelled') {
+        setPaymentNotice('Binance Pay payment was cancelled.');
+        setCurrentPage('pricing');
+      } else if (binanceStatus === 'pending') {
+        setPaymentNotice('Binance Pay payment is still processing. We will activate your subscription once it confirms.');
+        setCurrentPage('pricing');
+      } else if (binanceStatus === 'mock') {
+        setCurrentPage('pricing');
+      } else if (binanceStatus === 'error') {
+        setPaymentNotice(`Binance Pay payment failed: ${params.get('message') || 'Unknown error'}`);
+        setCurrentPage('pricing');
+      }
+
+      window.history.replaceState({}, '', window.location.pathname);
+      return;
+    }
 
     if (!paypalStatus) return;
 
@@ -132,6 +186,24 @@ function AppContent() {
       );
     }
 
+    if (currentPage === 'verify-email') {
+      return (
+        <VerifyEmailPage
+          token={pageOptions.token}
+          onSuccess={() => setCurrentPage('dashboard')}
+        />
+      );
+    }
+
+    if (currentPage === 'reset-password') {
+      return (
+        <ResetPasswordForm
+          token={pageOptions.token}
+          onSuccess={() => setCurrentPage('dashboard')}
+        />
+      );
+    }
+
     if (currentPage === 'insights') {
       return isAuthenticated ? (
         <InsightsHub subscription={subscription} onNavigatePricing={() => navigateTo('pricing')} />
@@ -163,6 +235,17 @@ function AppContent() {
           initialMode="login"
           onSuccess={() => setCurrentPage('tradingview')}
         />
+      );
+    }
+
+    if (currentPage === 'referrals') {
+      return isAuthenticated ? (
+        <ReferAndEarn
+          subscription={subscription}
+          onNavigatePricing={() => navigateTo('pricing')}
+        />
+      ) : (
+        <AuthForm initialMode="login" onSuccess={() => setCurrentPage('referrals')} />
       );
     }
 
@@ -211,6 +294,8 @@ function AppContent() {
         {renderPageContent()}
       </main>
 
+      <AcceptedPayments />
+
       <Footer
         onNavigate={navigateTo}
         onNavigateRiskDisclosure={() => navigateTo('risk-disclosure')}
@@ -225,6 +310,7 @@ function LoadingShell() {
       <main className="site-main">
         <div className="loading-state">Loading…</div>
       </main>
+      <AcceptedPayments />
       <Footer onNavigate={() => {}} onNavigateRiskDisclosure={() => {}} />
     </div>
   );

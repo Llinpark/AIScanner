@@ -496,9 +496,16 @@ async function processUpdate(update) {
 
 async function handleWebhook(req) {
   const config = getConfig();
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  if (isProduction && !config.webhookSecret) {
+    return { ok: false, status: 503, message: 'Telegram webhook secret is not configured' };
+  }
+
   if (config.webhookSecret) {
     const headerSecret = req.headers['x-telegram-bot-api-secret-token'];
-    if (headerSecret !== config.webhookSecret) {
+    const { timingSafeEqualString } = require('../utils/security');
+    if (!timingSafeEqualString(String(headerSecret || ''), String(config.webhookSecret))) {
       return { ok: false, status: 401, message: 'Invalid Telegram webhook secret' };
     }
   }

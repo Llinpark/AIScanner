@@ -5,10 +5,16 @@ const TradingPipelineService = require('./TradingPipelineService');
 const { getMarketDataHub } = require('./MarketDataHubService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { normalizeSymbol } = require('../config/symbols');
+const {
+  chartLevelKey,
+  detectTradeOutcome,
+  attachActivation
+} = require('../utils/tradeLevelLifecycle');
 
 const candleBuffers = new Map();
 const lastEmittedBar = new Map();
 const pendingSetups = new Map();
+const activeChartLevels = new Map();
 let autoScanTimer = null;
 let ioRef = null;
 let scanRotationIndex = 0;
@@ -53,6 +59,39 @@ function shouldEmit(symbol, barTime) {
   return true;
 }
 
+function storeActiveChartLevel(symbol, interval, entry, barTime) {
+  const key = chartLevelKey(symbol, interval);
+  activeChartLevels.set(key, attachActivation(entry, barTime));
+}
+
+function getActiveChartLevel(symbol, interval) {
+  return activeChartLevels.get(chartLevelKey(symbol, interval)) || null;
+}
+
+function clearActiveChartLevel(symbol, interval) {
+  activeChartLevels.delete(chartLevelKey(symbol, interval));
+}
+
+function resolveActiveLevelOutcome(symbol, interval, candles) {
+  const active = getActiveChartLevel(symbol, interval);
+  if (!active) return { active: null, closed: null };
+
+  const hit = detectTradeOutcome(active, candles);
+  if (!hit) return { active, closed: null };
+
+  clearActiveChartLevel(symbol, interval);
+  return {
+    active: null,
+    closed: {
+      ...active,
+      outcome: hit.outcome,
+      outcomeR: hit.outcomeR,
+      tradeStatus: hit.outcome === 'sl' ? 'lost' : 'won',
+      closedAt: new Date().toISOString()
+    }
+  };
+}
+
 async function publishEntrySignal(io, symbol, detection) {
   const normalizedSymbol = normalizeSymbol(symbol);
   const candles = getCandles(normalizedSymbol);
@@ -85,6 +124,9 @@ async function publishEntrySignal(io, symbol, detection) {
     },
     { candles, timeframe: '1h' }
   );
+
+  const barTime = candles.length ? candles[candles.length - 1].time : Date.now();
+  storeActiveChartLevel(normalizedSymbol, '1h', payload, barTime);
 
   const saved = await TradingViewAlertService.saveSignal({ ...payload, isBroadcast: true });
 
@@ -264,6 +306,177 @@ function stopAutoScanner() {
   }
 }
 
+async function buildAnalyzeEntry(symbol, detection, candles, interval) {
+  return SignalEnrichmentService.enrichSignal(
+    {
+      symbol,
+      direction: detection.direction,
+      entry: detection.entry,
+      stop_loss: detection.stop_loss,
+      stop_loss_1: detection.stop_loss_1 ?? detection.stop_loss,
+      take_profit_1: detection.take_profit_1,
+      take_profit_2: detection.take_profit_2,
+      take_profit_3: detection.take_profit_3,
+      confidence: detection.confidence,
+      notes: detection.notes,
+      alertType: 'entry',
+      pattern: detection.pattern,
+      patternLabel: detection.patternLabel,
+      gapTop: detection.gapTop,
+      gapBottom: detection.gapBottom,
+      pipelineSteps: detection.pipelineSteps,
+      pipelineVersion: detection.pipelineVersion,
+      pipelineScore: detection.pipelineScore,
+      pipelineScoreBreakdown: detection.pipelineScoreBreakdown,
+      signalQuality: detection.signalQuality,
+      isPremiumSignal: detection.isPremiumSignal,
+      source: 'live_scan',
+      timeframe: interval
+    },
+    { candles, timeframe: interval }
+  );
+}
+
+async function analyzeSymbol(symbol, interval = '1h') {
+  const normalizedSymbol = normalizeSymbol(symbol);
+  const hub = getMarketDataHub();
+  const payload = await hub.getCandles(normalizedSymbol, interval, 100, { allowProviderFetch: true });
+  const candles = (payload.candles || [])
+    .map(c =>
+      PatternDetectionService.normalizeCandle({
+        time: Date.parse(c.timestamp),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume
+      })
+    )
+    .sort((a, b) => a.time - b.time);
+
+  if (candles.length < 3) {
+    const { active, closed } = resolveActiveLevelOutcome(normalizedSymbol, interval, candles);
+    return {
+      symbol: normalizedSymbol,
+      interval,
+      stage: closed ? 'closed' : active ? 'active_trade' : 'insufficient_candles',
+      entry: active,
+      closedLevel: closed,
+      outcome: closed?.outcome || null,
+      candleCount: candles.length
+    };
+  }
+
+  const htfCandles = await fetchHtfCandles(normalizedSymbol);
+  const key = bufferKey(normalizedSymbol);
+  const c3 = candles[candles.length - 1];
+
+  const { active: existingActive, closed: closedLevel } = resolveActiveLevelOutcome(
+    normalizedSymbol,
+    interval,
+    candles
+  );
+
+  if (closedLevel) {
+    return {
+      symbol: normalizedSymbol,
+      interval,
+      stage: 'closed',
+      entry: null,
+      closedLevel,
+      outcome: closedLevel.outcome,
+      barTime: c3.time
+    };
+  }
+
+  let activeLevel = existingActive;
+
+  if (interval === '1h') {
+    const pending = pendingSetups.get(key);
+    if (pending) {
+      const pendingResult = TradingPipelineService.checkPendingRetracement(candles, pending, {
+        symbol: normalizedSymbol,
+        htfCandles
+      });
+
+      if (pendingResult.passed && pendingResult.stage === 'entry') {
+        const entry = await buildAnalyzeEntry(normalizedSymbol, pendingResult.entry, candles, interval);
+        storeActiveChartLevel(normalizedSymbol, interval, entry, c3.time);
+        return {
+          symbol: normalizedSymbol,
+          interval,
+          stage: 'entry',
+          via: 'pending_retrace',
+          entry,
+          barTime: c3.time
+        };
+      }
+    }
+  }
+
+  const result = PatternDetectionService.scanLastCandles(candles, undefined, normalizedSymbol, {
+    htfCandles
+  });
+
+  if (result.entry) {
+    const entry = await buildAnalyzeEntry(normalizedSymbol, result.entry, candles, interval);
+    storeActiveChartLevel(normalizedSymbol, interval, entry, c3.time);
+    return {
+      symbol: normalizedSymbol,
+      interval,
+      stage: 'entry',
+      entry,
+      pipelineScore: result.entry.pipelineScore ?? result.pipeline?.pipelineScore,
+      barTime: c3.time
+    };
+  }
+
+  if (activeLevel) {
+    return {
+      symbol: normalizedSymbol,
+      interval,
+      stage: 'active_trade',
+      entry: activeLevel,
+      barTime: c3.time
+    };
+  }
+
+  if (result.pending) {
+    return {
+      symbol: normalizedSymbol,
+      interval,
+      stage: 'pending_retrace',
+      pending: {
+        pattern: result.pending.pattern,
+        direction: result.pending.direction,
+        gapTop: result.pending.gapTop,
+        gapBottom: result.pending.gapBottom
+      },
+      entry: null,
+      barTime: c3.time
+    };
+  }
+
+  if (result.stage === 'below_premium_threshold' || result.pipeline?.stage === 'below_premium_threshold') {
+    return {
+      symbol: normalizedSymbol,
+      interval,
+      stage: 'below_premium_threshold',
+      pipelineScore: result.pipelineScore ?? result.pipeline?.pipelineScore,
+      entry: null,
+      barTime: c3.time
+    };
+  }
+
+  return {
+    symbol: normalizedSymbol,
+    interval,
+    stage: result.pipeline?.stage || 'no_setup',
+    entry: null,
+    barTime: c3.time
+  };
+}
+
 function getScannerStatus() {
   return {
     autoScanEnabled: PATTERN_SCANNER_CONFIG.autoScanEnabled,
@@ -288,6 +501,7 @@ function getScannerStatus() {
 module.exports = {
   ingestCandle,
   scanSymbol,
+  analyzeSymbol,
   runFullScan,
   startAutoScanner,
   stopAutoScanner,

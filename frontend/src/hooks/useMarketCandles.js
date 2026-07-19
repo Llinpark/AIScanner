@@ -38,6 +38,11 @@ function applyCandlePayload(setters, payload, streamKey) {
   setters.setCandles(rows);
   setters.setProvider(payload.provider || null);
   setters.setLoading(false);
+  if (payload.refreshError) {
+    setters.setError('');
+    setters.setLiveStatus('stale');
+    return;
+  }
   setters.setError('');
   setters.setLiveStatus(payload.stale ? 'stale' : 'synced');
 }
@@ -49,7 +54,7 @@ export default function useMarketCandles({
   subscribed = true,
   liveEnabled = true
 }) {
-  const { token } = useAuth();
+  const { isAuthenticated } = useAuth();
   const [candles, setCandles] = useState([]);
   const [provider, setProvider] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -145,14 +150,14 @@ export default function useMarketCandles({
       markResolved();
     }
 
-    if (!liveEnabled || !token) {
+    if (!liveEnabled || !isAuthenticated) {
       return () => {
         cancelled = true;
         clearTimeout(timeoutId);
       };
     }
 
-    const socket = getSharedSocket(token);
+    const socket = getSharedSocket();
     if (!socket) {
       return () => {
         cancelled = true;
@@ -220,7 +225,7 @@ export default function useMarketCandles({
       socket.off('disconnect', handleDisconnect);
       socket.off('connect_error', handleConnectError);
     };
-  }, [subscribed, symbol, interval, limit, liveEnabled, token]);
+  }, [subscribed, symbol, interval, limit, liveEnabled, isAuthenticated]);
 
   return {
     candles,

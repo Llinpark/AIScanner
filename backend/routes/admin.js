@@ -18,6 +18,7 @@ const {
 } = require('../utils/adminSignals');
 const MarketScannerService = require('../services/MarketScannerService');
 const { activateSubscription, SUBSCRIPTION_PERIOD_DAYS } = require('../services/SubscriptionService');
+const ReferralService = require('../services/ReferralService');
 const { getScannerConfig, applyScannerConfig } = require('../utils/scannerRuntimeConfig');
 const { parseAdminEmails } = require('../utils/adminAccess');
 
@@ -506,6 +507,56 @@ function createAdminRouter({ io } = {}) {
     } catch (error) {
       console.error('Admin scanner config error:', error);
       res.status(500).json({ message: 'Unable to update scanner config', error: error.message });
+    }
+  });
+
+  router.get('/referrals', async (req, res) => {
+    try {
+      const page = Number(req.query.page) || 1;
+      const limit = Number(req.query.limit) || 25;
+      const status = req.query.status ? String(req.query.status) : undefined;
+      const result = await ReferralService.listAdminCommissions({ page, limit, status });
+      res.json(result);
+    } catch (error) {
+      console.error('Admin referrals error:', error);
+      res.status(500).json({ message: 'Unable to load referral commissions', error: error.message });
+    }
+  });
+
+  router.patch('/referrals/:id/pay', async (req, res) => {
+    try {
+      const { payoutReference, adminNotes } = req.body || {};
+      const commission = await ReferralService.markCommissionPaid(req.params.id, {
+        adminUserId: req.userId,
+        payoutReference: payoutReference ? String(payoutReference).trim() : null,
+        adminNotes: adminNotes ? String(adminNotes).trim() : null
+      });
+
+      await logAdminAction(req, {
+        action: 'referral.commission.pay',
+        targetType: 'referral_commission',
+        targetId: commission._id.toString(),
+        summary: `Marked referral commission ${commission._id} as paid`,
+        metadata: {
+          payoutReference: commission.payoutReference,
+          commissionAmount: commission.commissionAmount,
+          currency: commission.currency
+        }
+      });
+
+      res.json({
+        message: 'Referral commission marked as paid.',
+        commission: {
+          id: commission._id.toString(),
+          status: commission.status,
+          paidAt: commission.paidAt,
+          payoutReference: commission.payoutReference
+        }
+      });
+    } catch (error) {
+      console.error('Admin referral pay error:', error);
+      const status = error.message === 'Referral commission not found' ? 404 : 400;
+      res.status(status).json({ message: error.message || 'Unable to mark commission paid', error: error.message });
     }
   });
 

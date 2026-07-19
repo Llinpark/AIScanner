@@ -6,6 +6,9 @@ const UserConfigSchema = new mongoose.Schema({
   displayName: { type: String, trim: true },
   phone: { type: String },
   preferences: { type: mongoose.Schema.Types.Mixed, default: {} },
+  referralCode: { type: String, unique: true, sparse: true, uppercase: true, trim: true },
+  referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'UserConfig', default: null, index: true },
+  referredAt: { type: Date, default: null },
 
   telegram: {
     chatId: { type: String, default: null },
@@ -31,7 +34,7 @@ const UserConfigSchema = new mongoose.Schema({
   subscription: {
     tier: { type: String, enum: ['basic', 'professional', 'premium'], default: 'basic' },
     status: { type: String, enum: ['inactive', 'pending', 'active', 'cancelled'], default: 'inactive' },
-    provider: { type: String, enum: ['mpesa', 'paypal', 'mock'] },
+    provider: { type: String, enum: ['mpesa', 'paypal', 'mock', 'binance', 'sasapay'] },
     providerCustomerId: { type: String },
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },
@@ -41,6 +44,11 @@ const UserConfigSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now }
   },
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  emailVerified: { type: Boolean, default: false },
+  emailVerificationToken: { type: String, default: null },
+  emailVerificationExpiresAt: { type: Date, default: null },
+  passwordResetToken: { type: String, default: null },
+  passwordResetExpiresAt: { type: Date, default: null },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

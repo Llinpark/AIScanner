@@ -1,26 +1,62 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BaselineSeries,
   CandlestickSeries,
-  ColorType,
   createChart,
   createSeriesMarkers,
-  CrosshairMode,
   LineStyle
 } from 'lightweight-charts';
 import {
   buildChartOverlay,
-  normalizeCandles
+  normalizeCandles,
+  normalizeInterval
 } from '../../utils/chartLevels';
 import { timeframeLabel } from '../../constants/chartTimeframes';
+import {
+  getTradingViewCandlestickOptions,
+  getTradingViewChartOptions,
+  TRADINGVIEW_CHART_THEME
+} from '../../constants/tradingViewChartTheme';
 import {
   formatInstrumentPrice,
   getChartPriceFormat
 } from '../../utils/pricePrecision';
 
-const CHART_BAR_SPACING = 12;
-const CHART_MIN_BAR_SPACING = 5;
-const CHART_VISIBLE_BARS = 72;
+function getChartScaleOptions(interval) {
+  const canonical = normalizeInterval(interval);
+  const presets = {
+    '1m': { visibleBars: 120, barSpacing: 8, minBarSpacing: 3, secondsVisible: true },
+    '5m': { visibleBars: 100, barSpacing: 9, minBarSpacing: 3, secondsVisible: true },
+    '15m': { visibleBars: 90, barSpacing: 10, minBarSpacing: 4, secondsVisible: false },
+    '30m': { visibleBars: 80, barSpacing: 10, minBarSpacing: 4, secondsVisible: false },
+    '1h': { visibleBars: 72, barSpacing: 12, minBarSpacing: 5, secondsVisible: false },
+    '4h': { visibleBars: 64, barSpacing: 12, minBarSpacing: 5, secondsVisible: false },
+    '1d': { visibleBars: 56, barSpacing: 14, minBarSpacing: 6, secondsVisible: false },
+    '1w': { visibleBars: 48, barSpacing: 14, minBarSpacing: 6, secondsVisible: false },
+    '1M': { visibleBars: 36, barSpacing: 16, minBarSpacing: 6, secondsVisible: false }
+  };
+
+  return presets[canonical] || presets['1h'];
+}
+
+function applyDefaultChartView(chart, barCount, interval = '1h') {
+  if (!chart) return;
+  const scale = getChartScaleOptions(interval);
+  chart.timeScale().applyOptions({
+    barSpacing: scale.barSpacing,
+    minBarSpacing: scale.minBarSpacing,
+    secondsVisible: scale.secondsVisible,
+    timeVisible: true
+  });
+  if (barCount > 1) {
+    chart.timeScale().setVisibleLogicalRange({
+      from: Math.max(0, barCount - scale.visibleBars),
+      to: barCount + 0.5
+    });
+  } else {
+    chart.timeScale().fitContent();
+  }
+}
 
 const LEVEL_COLORS = {
   entry: '#38bdf8',
@@ -118,26 +154,10 @@ function createZoneSeries(chart, zone, options) {
   return series;
 }
 
-function applyDefaultChartView(chart, barCount) {
-  if (!chart) return;
-  chart.timeScale().applyOptions({
-    barSpacing: CHART_BAR_SPACING,
-    minBarSpacing: CHART_MIN_BAR_SPACING
-  });
-  if (barCount > 1) {
-    chart.timeScale().setVisibleLogicalRange({
-      from: Math.max(0, barCount - CHART_VISIBLE_BARS),
-      to: barCount + 0.5
-    });
-  } else {
-    chart.timeScale().fitContent();
-  }
-}
-
 function lastCandleColor(candles) {
-  if (!candles.length) return '#38bdf8';
+  if (!candles.length) return TRADINGVIEW_CHART_THEME.accent;
   const last = candles[candles.length - 1];
-  return last.close >= last.open ? '#22c55e' : '#ef4444';
+  return last.close >= last.open ? TRADINGVIEW_CHART_THEME.bullish : TRADINGVIEW_CHART_THEME.bearish;
 }
 
 function getTradeSide(overlay) {
@@ -146,7 +166,7 @@ function getTradeSide(overlay) {
   return {
     isLong,
     label: isLong ? 'Buy' : 'Sell',
-    color: isLong ? '#22c55e' : '#ef4444'
+    color: isLong ? TRADINGVIEW_CHART_THEME.bullish : TRADINGVIEW_CHART_THEME.bearish
   };
 }
 
@@ -204,6 +224,7 @@ export default function KachingLightweightChart({
   const candlesRef = useRef([]);
   const viewKeyRef = useRef('');
   const resetViewRef = useRef(() => {});
+  const [chartReady, setChartReady] = useState(false);
 
   const overlay = useMemo(
     () => buildChartOverlay(overlaySignal, candles, interval),
@@ -213,43 +234,9 @@ export default function KachingLightweightChart({
   useEffect(() => {
     if (!containerRef.current) return undefined;
 
+    const scaleOptions = getChartScaleOptions(interval);
     const chart = createChart(containerRef.current, {
-      height,
-      layout: {
-        background: { type: ColorType.Solid, color: '#0F172A' },
-        textColor: '#cbd5e1'
-      },
-      grid: {
-        vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
-        horzLines: { color: 'rgba(255, 255, 255, 0.04)' }
-      },
-      crosshair: {
-        mode: CrosshairMode.Normal,
-        vertLine: {
-          color: 'rgba(148, 163, 184, 0.45)',
-          width: 1,
-          style: LineStyle.Dashed,
-          labelBackgroundColor: '#1e293b'
-        },
-        horzLine: {
-          color: 'rgba(148, 163, 184, 0.45)',
-          width: 1,
-          style: LineStyle.Dashed,
-          labelBackgroundColor: '#1e293b'
-        }
-      },
-      timeScale: {
-        borderColor: 'rgba(148, 163, 184, 0.25)',
-        timeVisible: true,
-        secondsVisible: false,
-        barSpacing: CHART_BAR_SPACING,
-        minBarSpacing: CHART_MIN_BAR_SPACING,
-        rightOffset: 8
-      },
-      rightPriceScale: {
-        borderColor: 'rgba(148, 163, 184, 0.25)',
-        autoScale: true
-      },
+      ...getTradingViewChartOptions(height, scaleOptions),
       handleScroll: {
         mouseWheel: false,
         pressedMouseMove: true,
@@ -274,27 +261,16 @@ export default function KachingLightweightChart({
       }
     });
 
-    const series = chart.addSeries(CandlestickSeries, {
-      upColor: '#22c55e',
-      downColor: '#ef4444',
-      borderVisible: false,
-      wickUpColor: '#22c55e',
-      wickDownColor: '#ef4444',
-      priceLineVisible: true,
-      lastValueVisible: true,
-      priceLineWidth: 1,
-      priceLineStyle: LineStyle.Dashed,
-      crosshairMarkerVisible: true,
-      crosshairMarkerRadius: 4
-    });
+    const series = chart.addSeries(CandlestickSeries, getTradingViewCandlestickOptions());
     const seriesMarkers = createSeriesMarkers(series, []);
 
     chartRef.current = chart;
     seriesRef.current = series;
     markersRef.current = seriesMarkers;
+    setChartReady(true);
 
     const handleDoubleClick = () => {
-      applyDefaultChartView(chart, candlesRef.current.length);
+      applyDefaultChartView(chart, candlesRef.current.length, interval);
     };
 
     chart.subscribeDblClick(handleDoubleClick);
@@ -314,8 +290,9 @@ export default function KachingLightweightChart({
       seriesRef.current = null;
       markersRef.current = null;
       zoneSeriesRef.current = [];
+      setChartReady(false);
     };
-  }, [height]);
+  }, [height, interval]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -335,30 +312,75 @@ export default function KachingLightweightChart({
     const chart = chartRef.current;
     const series = seriesRef.current;
     const seriesMarkers = markersRef.current;
-    if (!series || !chart) return;
+    if (!chartReady || !series || !chart) return;
 
     const normalized = normalizeCandles(candles);
-    candlesRef.current = normalized;
-    series.setData(normalized);
-
-    resetViewRef.current = () => applyDefaultChartView(chart, normalized.length);
-
+    const prev = candlesRef.current;
     const currentViewKey = `${symbol}:${interval}`;
     const shouldResetView = viewKeyRef.current !== currentViewKey;
     if (shouldResetView) {
       viewKeyRef.current = currentViewKey;
     }
 
-    const currentPriceColor = lastCandleColor(normalized);
-    series.applyOptions({
-      priceLineVisible: true,
-      lastValueVisible: true,
-      priceLineColor: currentPriceColor,
-      priceLineStyle: LineStyle.Dashed,
-      crosshairMarkerVisible: true,
-      crosshairMarkerBorderColor: currentPriceColor,
-      crosshairMarkerBackgroundColor: currentPriceColor
-    });
+    const applyLivePriceLine = rows => {
+      if (!rows.length) return;
+      const currentPriceColor = lastCandleColor(rows);
+      series.applyOptions({
+        priceLineVisible: true,
+        lastValueVisible: true,
+        priceLineColor: currentPriceColor,
+        priceLineStyle: LineStyle.Dashed,
+        crosshairMarkerVisible: true,
+        crosshairMarkerBorderColor: currentPriceColor,
+        crosshairMarkerBackgroundColor: currentPriceColor
+      });
+    };
+
+    const sameBar = (left, right) =>
+      left &&
+      right &&
+      left.time === right.time &&
+      left.open === right.open &&
+      left.high === right.high &&
+      left.low === right.low &&
+      left.close === right.close;
+
+    if (!normalized.length) {
+      candlesRef.current = [];
+      series.setData([]);
+      return;
+    }
+
+    const canIncrementalUpdate = prev.length > 0 && !shouldResetView;
+    if (canIncrementalUpdate) {
+      const prevLast = prev[prev.length - 1];
+      const nextLast = normalized[normalized.length - 1];
+
+      if (normalized.length === prev.length && nextLast.time === prevLast.time && !sameBar(nextLast, prevLast)) {
+        series.update(nextLast);
+        candlesRef.current = normalized;
+        applyLivePriceLine(normalized);
+        return;
+      }
+
+      if (
+        normalized.length === prev.length + 1 &&
+        sameBar(normalized[prev.length - 1], prevLast) &&
+        nextLast.time !== prevLast.time
+      ) {
+        series.update(nextLast);
+        candlesRef.current = normalized;
+        applyLivePriceLine(normalized);
+        return;
+      }
+    }
+
+    candlesRef.current = normalized;
+    series.setData(normalized);
+
+    resetViewRef.current = () => applyDefaultChartView(chart, normalized.length, interval);
+
+    applyLivePriceLine(normalized);
 
     priceLinesRef.current.forEach(line => {
       try {
@@ -436,9 +458,9 @@ export default function KachingLightweightChart({
     }
 
     if (shouldResetView) {
-      applyDefaultChartView(chart, normalized.length);
+      applyDefaultChartView(chart, normalized.length, interval);
     }
-  }, [candles, overlay, symbol, interval]);
+  }, [candles, overlay, symbol, interval, chartReady]);
 
   const handleResetView = () => resetViewRef.current();
 

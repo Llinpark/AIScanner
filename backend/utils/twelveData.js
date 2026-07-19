@@ -38,27 +38,31 @@ function toTwelveDataInterval(interval) {
 }
 
 function parseTwelveDataDatetime(value) {
-  if (!value) return Date.now();
+  if (!value) return null;
   const isoLike = String(value).trim().replace(' ', 'T');
   const parsed = Date.parse(isoLike.endsWith('Z') ? isoLike : `${isoLike}Z`);
-  return Number.isFinite(parsed) ? parsed : Date.now();
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalizeTwelveDataCandles(values = []) {
   return values
-    .map(row => ({
-      time: parseTwelveDataDatetime(row.datetime),
-      open: Number(row.open),
-      high: Number(row.high),
-      low: Number(row.low),
-      close: Number(row.close),
-      volume: Number(row.volume || 0)
-    }))
-    .filter(c => Number.isFinite(c.close))
+    .map(row => {
+      const time = parseTwelveDataDatetime(row.datetime);
+      if (!time) return null;
+      return {
+        time,
+        open: Number(row.open),
+        high: Number(row.high),
+        low: Number(row.low),
+        close: Number(row.close),
+        volume: Number(row.volume || 0)
+      };
+    })
+    .filter(c => c && Number.isFinite(c.close))
     .sort((a, b) => a.time - b.time);
 }
 
-async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl }) {
+async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl, forceRefresh = false }) {
   if (!apiKey) {
     throw new Error('Twelve Data API key not configured');
   }
@@ -68,12 +72,16 @@ async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl 
   const outputsize = Math.min(Math.max(Number(limit) || 100, 1), 5000);
   const cacheKey = `twelve:${tdSymbol}:${tdInterval}:${outputsize}`;
 
-  const cached = getFresh(cacheKey);
-  if (cached) return cached;
+  if (!forceRefresh) {
+    const cached = getFresh(cacheKey);
+    if (cached) return cached;
+  }
 
   return dedupeFetch(cacheKey, async () => {
-    const freshCached = getFresh(cacheKey);
-    if (freshCached) return freshCached;
+    if (!forceRefresh) {
+      const freshCached = getFresh(cacheKey);
+      if (freshCached) return freshCached;
+    }
 
     const url = new URL(`${baseUrl}/time_series`);
     url.searchParams.set('symbol', tdSymbol);

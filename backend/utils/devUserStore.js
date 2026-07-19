@@ -47,7 +47,15 @@ function findByEmail(email) {
   return Object.values(store).find(u => String(u.email || '').trim().toLowerCase() === normalized) || null;
 }
 
-function createUser({ email, passwordHash, displayName, phone, subscription }) {
+function findByHashedToken(fieldPrefix, hashedToken) {
+  const normalized = String(hashedToken || '').trim();
+  if (!normalized) return null;
+  const store = readStore();
+  const tokenField = `${fieldPrefix}Token`;
+  return Object.values(store).find(u => String(u[tokenField] || '') === normalized) || null;
+}
+
+function createUser({ email, passwordHash, displayName, phone, subscription, emailVerified, emailVerificationToken, emailVerificationExpiresAt }) {
   const id = randomUUID();
   return upsertUser(id, {
     id,
@@ -56,6 +64,11 @@ function createUser({ email, passwordHash, displayName, phone, subscription }) {
     displayName: displayName || email.split('@')[0],
     phone: phone || '',
     subscription: subscription || { status: 'inactive', tier: 'basic' },
+    emailVerified: emailVerified !== undefined ? emailVerified : false,
+    emailVerificationToken: emailVerificationToken || null,
+    emailVerificationExpiresAt: emailVerificationExpiresAt || null,
+    passwordResetToken: null,
+    passwordResetExpiresAt: null,
     createdAt: new Date().toISOString()
   });
 }
@@ -81,6 +94,7 @@ module.exports = {
   upsertUser,
   findById,
   findByEmail,
+  findByHashedToken,
   findByChatId,
   findByMt5Token,
   createUser,

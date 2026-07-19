@@ -95,9 +95,9 @@ function generateForUser(user, options = {}) {
     },
     instructions: [
       'Open TradingView → Pine Editor → New → paste this script and save it to your chart.',
-      'Create alerts for Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3.',
+      'Keep "Auto-draw Entry / SL / TP lines on chart" enabled — levels appear automatically when a pattern fires.',
+      'Create one alert with condition "Any alert() function call" and Webhook URL notifications.',
       'Each alert payload includes your personal licenseToken — do not share your generated script.',
-      'Set alert notification to Webhook URL and use the webhook URL pre-filled in the script settings.',
       'Enable TradingView push or email notifications for instant delivery.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan).`
     ]

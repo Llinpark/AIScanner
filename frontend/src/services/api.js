@@ -2,21 +2,39 @@ import axios from 'axios';
 import { BACKEND_URL } from '../config/appUrls';
 
 export const api = axios.create({
-  baseURL: BACKEND_URL
+  baseURL: BACKEND_URL,
+  withCredentials: true
 });
 
-export function setAuthToken(token) {
-  if (token) {
-    api.defaults.headers.common.Authorization = `Bearer ${token}`;
-  } else {
-    delete api.defaults.headers.common.Authorization;
-  }
+let unauthorizedHandler = null;
+
+export function setUnauthorizedHandler(handler) {
+  unauthorizedHandler = handler;
 }
 
-const storedToken = localStorage.getItem('token');
-if (storedToken) {
-  setAuthToken(storedToken);
+export function setAuthToken() {
+  // Sessions are stored in httpOnly cookies; no Authorization header needed.
 }
+
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401 && unauthorizedHandler) {
+      unauthorizedHandler();
+    }
+    return Promise.reject(error);
+  }
+);
+
+function logClientError(context, error) {
+  const message =
+    error?.response?.data?.message ||
+    error?.message ||
+    'Request failed';
+  console.error(context, message);
+}
+
+export { logClientError };
 
 export async function fetchSignals() {
   const response = await api.get('/api/signals');
@@ -26,7 +44,12 @@ export async function fetchSignals() {
 export const authApi = {
   register: payload => api.post('/api/auth/register', payload),
   login: payload => api.post('/api/auth/login', payload),
-  me: () => api.get('/api/auth/me')
+  logout: () => api.post('/api/auth/logout'),
+  me: () => api.get('/api/auth/me'),
+  forgotPassword: payload => api.post('/api/auth/forgot-password', payload),
+  resetPassword: payload => api.post('/api/auth/reset-password', payload),
+  verifyEmail: token => api.get('/api/auth/verify-email', { params: { token } }),
+  resendVerification: payload => api.post('/api/auth/resend-verification', payload)
 };
 
 export const subscriptionApi = {
@@ -37,6 +60,10 @@ export const subscriptionApi = {
   getMpesaStatus: checkoutRequestId => api.get(`/api/payments/mpesa/status/${checkoutRequestId}`),
   confirmMpesaMock: payload => api.post('/api/payments/mpesa/mock-complete', payload),
   confirmPaypalMock: payload => api.post('/api/payments/paypal/mock-complete', payload),
+  getBinanceStatus: merchantTradeNo => api.get(`/api/payments/binance/status/${merchantTradeNo}`),
+  confirmBinanceMock: payload => api.post('/api/payments/binance/mock-complete', payload),
+  getSasaPayStatus: checkoutRequestId => api.get(`/api/payments/sasapay/status/${checkoutRequestId}`),
+  confirmSasaPayMock: payload => api.post('/api/payments/sasapay/mock-complete', payload),
   getPerformanceSummary: () => api.get('/api/performance/summary')
 };
 
@@ -68,7 +95,7 @@ export const mt5Api = {
 
 export const tradingviewApi = {
   getSetup: () => api.get('/api/tradingview/setup'),
-  getAlerts: (symbol) =>
+  getAlerts: symbol =>
     api.get('/api/tradingview/alerts', { params: symbol ? { symbol } : {} }),
   getPineScript: () => api.get('/api/tradingview/pine-script'),
   getHistory: (symbol, options = {}) => api.get(`/api/tradingview/history/${symbol}`, { params: options })
@@ -86,21 +113,32 @@ export const marketDataApi = {
 export const scannerApi = {
   getStatus: () => api.get('/api/scanner/status'),
   getPatterns: () => api.get('/api/scanner/patterns'),
-  runScan: (symbol) => api.post('/api/scanner/run', symbol ? { symbol } : {})
+  analyze: (symbol, options = {}) =>
+    api.get('/api/scanner/analyze', {
+      params: { symbol, interval: options.interval || '1h' },
+      timeout: options.timeout || 25000
+    }),
+  runScan: symbol => api.post('/api/scanner/run', symbol ? { symbol } : {})
+};
+
+export const referralApi = {
+  getMe: () => api.get('/api/referrals/me')
 };
 
 export const adminApi = {
   getStats: () => api.get('/api/admin/stats'),
   getUsers: (params = {}) => api.get('/api/admin/users', { params }),
-  getUser: (id) => api.get(`/api/admin/users/${id}`),
+  getUser: id => api.get(`/api/admin/users/${id}`),
   updateUserSubscription: (id, payload) => api.patch(`/api/admin/users/${id}/subscription`, payload),
   getSignals: (params = {}) => api.get('/api/admin/signals', { params }),
   getSignalDuplicates: (params = {}) => api.get('/api/admin/signals/duplicates', { params }),
-  dedupeSignals: (payload) => api.post('/api/admin/signals/dedupe', payload),
-  closeStaleSignals: (payload) => api.post('/api/admin/signals/close-stale', payload),
+  dedupeSignals: payload => api.post('/api/admin/signals/dedupe', payload),
+  closeStaleSignals: payload => api.post('/api/admin/signals/close-stale', payload),
   updateSignalOutcome: (id, payload) => api.patch(`/api/admin/signals/${id}/outcome`, payload),
   getPayments: (params = {}) => api.get('/api/admin/payments', { params }),
   getAuditLog: (params = {}) => api.get('/api/admin/audit-log', { params }),
   getScannerConfig: () => api.get('/api/admin/scanner/config'),
-  updateScannerConfig: (payload) => api.patch('/api/admin/scanner/config', payload)
+  updateScannerConfig: payload => api.patch('/api/admin/scanner/config', payload),
+  getReferrals: (params = {}) => api.get('/api/admin/referrals', { params }),
+  markReferralPaid: (id, payload) => api.patch(`/api/admin/referrals/${id}/pay`, payload)
 };

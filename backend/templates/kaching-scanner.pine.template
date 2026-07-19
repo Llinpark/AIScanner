@@ -1,5 +1,5 @@
 //@version=5
-indicator("{{INDICATOR_TITLE}}", overlay=true, max_labels_count=50)
+indicator("{{INDICATOR_TITLE}}", overlay=true, max_labels_count=50, max_lines_count=500)
 
 // Generated for: {{SUBSCRIBER_LABEL}}
 // Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
@@ -10,6 +10,7 @@ WEBHOOK_SECRET = input.string("{{WEBHOOK_SECRET}}", "Webhook Secret (legacy)", g
 LICENSE_TOKEN = input.string("{{LICENSE_TOKEN}}", "License Token", group="KachingFx")
 TV_USERNAME = input.string("{{TV_USERNAME}}", "TradingView Username (optional)", group="KachingFx")
 SEND_CANDLE_FEED = input.bool({{SEND_CANDLE_FEED}}, "Send each bar to server scanner", group="KachingFx")
+SHOW_TRADE_LINES = input.bool(true, "Auto-draw Entry / SL / TP lines on chart", group="KachingFx")
 
 minBodyRatio = input.float({{MIN_BODY_RATIO}}, "Perfect FVG: min C2 body/range", minval=0.4, maxval=0.95, group="Pattern A — FVG")
 maxWickRatio = input.float({{MAX_WICK_RATIO}}, "Perfect FVG: max C2 wick/range", minval=0.05, maxval=0.5, group="Pattern A — FVG")
@@ -54,6 +55,18 @@ calcLevels(string direction, float entry, float gapTop, float gapBot) =>
     tp2 = direction == "long" ? entry + risk * tp2R : entry - risk * tp2R
     tp3 = direction == "long" ? entry + risk * tp3R : entry - risk * tp3R
     [entry, sl, tp1, tp2, tp3, risk]
+
+var line lnEntry = na
+var line lnSl = na
+var line lnTp1 = na
+var line lnTp2 = na
+var line lnTp3 = na
+var float activeSl = na
+var float activeTp1 = na
+var float activeTp2 = na
+var float activeTp3 = na
+var string activeDirection = na
+var bool tradeActive = false
 
 // ===== PATTERN A: PERFECT FVG (C1,C2,C3) =====
 c1 = request.security(syminfo.tickerid, timeframe.period, [open[2], high[2], low[2], close[2], volume[2]])
@@ -108,29 +121,142 @@ bearBreakConfirm = bearBreakSetup and c3c < c2Open and c3c < c1l and c3c <= open
 entryLabelText(float e, float sl, float tp1, float tp2, float tp3) =>
     "Kaching Entry\n" + str.tostring(e) + "\nKaching SL\n" + str.tostring(sl) + "\nKaching TP1\n" + str.tostring(tp1) + "\nKaching TP2\n" + str.tostring(tp2) + "\nKaching TP3\n" + str.tostring(tp3)
 
+// Clear levels once SL or any TP is hit on a closed bar
+if tradeActive and barstate.isconfirmed
+    longTrade = activeDirection == "long"
+    hitSl = longTrade ? low <= activeSl : high >= activeSl
+    hitTp1 = longTrade ? high >= activeTp1 : low <= activeTp1
+    hitTp2 = longTrade ? high >= activeTp2 : low <= activeTp2
+    hitTp3 = longTrade ? high >= activeTp3 : low <= activeTp3
+    if hitSl or hitTp1 or hitTp2 or hitTp3
+        if not na(lnEntry)
+            line.delete(lnEntry)
+            lnEntry := na
+        if not na(lnSl)
+            line.delete(lnSl)
+            lnSl := na
+        if not na(lnTp1)
+            line.delete(lnTp1)
+            lnTp1 := na
+        if not na(lnTp2)
+            line.delete(lnTp2)
+            lnTp2 := na
+        if not na(lnTp3)
+            line.delete(lnTp3)
+            lnTp3 := na
+        tradeActive := false
+
 // ===== FIRE ENTRY ALERTS =====
 if perfectBullFVG
     [e, sl, t1, t2, t3, _] = calcLevels("long", close, gapTopBull, gapBotBull)
     msg = buildPayload("entry", "perfect_fvg", "long", e, sl, t1, t2, t3, gapTopBull, gapBotBull, 0.88)
     alert(msg, alert.freq_once_per_bar)
+    if SHOW_TRADE_LINES
+        if not na(lnEntry)
+            line.delete(lnEntry)
+        if not na(lnSl)
+            line.delete(lnSl)
+        if not na(lnTp1)
+            line.delete(lnTp1)
+        if not na(lnTp2)
+            line.delete(lnTp2)
+        if not na(lnTp3)
+            line.delete(lnTp3)
+        lnEntry := line.new(bar_index, e, bar_index + 1, e, extend=extend.right, color=color.new(#38bdf8, 0), width=2)
+        lnSl := line.new(bar_index, sl, bar_index + 1, sl, extend=extend.right, color=color.new(#f87171, 0), width=2)
+        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(#4ade80, 0), width=2, style=line.style_dashed)
+        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(#86efac, 0), width=2, style=line.style_dashed)
+        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(#bbf7d0, 0), width=2, style=line.style_dashed)
+        activeDirection := "long"
+        activeSl := sl
+        activeTp1 := t1
+        activeTp2 := t2
+        activeTp3 := t3
+        tradeActive := true
     label.new(bar_index, low, entryLabelText(e, sl, t1, t2, t3), style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white)
 
 if perfectBearFVG
     [e, sl, t1, t2, t3, _] = calcLevels("short", close, gapTopBear, gapBotBear)
     msg = buildPayload("entry", "perfect_fvg", "short", e, sl, t1, t2, t3, gapTopBear, gapBotBear, 0.88)
     alert(msg, alert.freq_once_per_bar)
+    if SHOW_TRADE_LINES
+        if not na(lnEntry)
+            line.delete(lnEntry)
+        if not na(lnSl)
+            line.delete(lnSl)
+        if not na(lnTp1)
+            line.delete(lnTp1)
+        if not na(lnTp2)
+            line.delete(lnTp2)
+        if not na(lnTp3)
+            line.delete(lnTp3)
+        lnEntry := line.new(bar_index, e, bar_index + 1, e, extend=extend.right, color=color.new(#38bdf8, 0), width=2)
+        lnSl := line.new(bar_index, sl, bar_index + 1, sl, extend=extend.right, color=color.new(#f87171, 0), width=2)
+        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(#4ade80, 0), width=2, style=line.style_dashed)
+        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(#86efac, 0), width=2, style=line.style_dashed)
+        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(#bbf7d0, 0), width=2, style=line.style_dashed)
+        activeDirection := "short"
+        activeSl := sl
+        activeTp1 := t1
+        activeTp2 := t2
+        activeTp3 := t3
+        tradeActive := true
     label.new(bar_index, high, entryLabelText(e, sl, t1, t2, t3), style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white)
 
 if bullBreakConfirm
     [e, sl, t1, t2, t3, _] = calcLevels("long", close, math.max(c2Open, c3h), c1h)
     msg = buildPayload("entry", "breakaway_gap", "long", e, sl, t1, t2, t3, math.max(c2Open, c3h), c1h, 0.82)
     alert(msg, alert.freq_once_per_bar)
+    if SHOW_TRADE_LINES
+        if not na(lnEntry)
+            line.delete(lnEntry)
+        if not na(lnSl)
+            line.delete(lnSl)
+        if not na(lnTp1)
+            line.delete(lnTp1)
+        if not na(lnTp2)
+            line.delete(lnTp2)
+        if not na(lnTp3)
+            line.delete(lnTp3)
+        lnEntry := line.new(bar_index, e, bar_index + 1, e, extend=extend.right, color=color.new(#38bdf8, 0), width=2)
+        lnSl := line.new(bar_index, sl, bar_index + 1, sl, extend=extend.right, color=color.new(#f87171, 0), width=2)
+        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(#4ade80, 0), width=2, style=line.style_dashed)
+        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(#86efac, 0), width=2, style=line.style_dashed)
+        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(#bbf7d0, 0), width=2, style=line.style_dashed)
+        activeDirection := "long"
+        activeSl := sl
+        activeTp1 := t1
+        activeTp2 := t2
+        activeTp3 := t3
+        tradeActive := true
     label.new(bar_index, low, entryLabelText(e, sl, t1, t2, t3), style=label.style_label_up, color=color.new(color.blue, 0), textcolor=color.white)
 
 if bearBreakConfirm
     [e, sl, t1, t2, t3, _] = calcLevels("short", close, c1l, math.min(c2Open, c3l))
     msg = buildPayload("entry", "breakaway_gap", "short", e, sl, t1, t2, t3, c1l, math.min(c2Open, c3l), 0.82)
     alert(msg, alert.freq_once_per_bar)
+    if SHOW_TRADE_LINES
+        if not na(lnEntry)
+            line.delete(lnEntry)
+        if not na(lnSl)
+            line.delete(lnSl)
+        if not na(lnTp1)
+            line.delete(lnTp1)
+        if not na(lnTp2)
+            line.delete(lnTp2)
+        if not na(lnTp3)
+            line.delete(lnTp3)
+        lnEntry := line.new(bar_index, e, bar_index + 1, e, extend=extend.right, color=color.new(#38bdf8, 0), width=2)
+        lnSl := line.new(bar_index, sl, bar_index + 1, sl, extend=extend.right, color=color.new(#f87171, 0), width=2)
+        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(#4ade80, 0), width=2, style=line.style_dashed)
+        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(#86efac, 0), width=2, style=line.style_dashed)
+        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(#bbf7d0, 0), width=2, style=line.style_dashed)
+        activeDirection := "short"
+        activeSl := sl
+        activeTp1 := t1
+        activeTp2 := t2
+        activeTp3 := t3
+        tradeActive := true
     label.new(bar_index, high, entryLabelText(e, sl, t1, t2, t3), style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white)
 
 // Feed each closed bar to backend scanner

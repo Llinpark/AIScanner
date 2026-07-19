@@ -1,5 +1,5 @@
 // Subscription tier definitions and pricing
-const { WEBHOOK_MPESA_URL } = require('./appUrls');
+const { WEBHOOK_MPESA_URL, WEBHOOK_BINANCE_URL, WEBHOOK_SASAPAY_URL } = require('./appUrls');
 const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
 const ALL_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W'];
@@ -13,6 +13,7 @@ const TIERS = {
     priceCents: 5500,
     currency: 'KES',
     currencyPayPal: 'USD',
+    currencyBinance: 'USDT',
     description: 'Essential AI and TradingView alerts',
     features: [
       'AI Alerts',
@@ -30,6 +31,7 @@ const TIERS = {
     priceCents: 13882,
     currency: 'KES',
     currencyPayPal: 'USD',
+    currencyBinance: 'USDT',
     description: 'Advanced alerts with confidence, Telegram copier, and trade automation',
     features: [
       'Everything in Basic',
@@ -55,6 +57,7 @@ const TIERS = {
     priceCents: 62500,
     currency: 'KES',
     currencyPayPal: 'USD',
+    currencyBinance: 'USDT',
     description: 'Full multi-market scanner with MT5 automation and SMC',
     features: [
       'Everything in Pro',
@@ -197,6 +200,22 @@ const PAYMENT_CONFIG = {
     clientSecret: process.env.PAYPAL_CLIENT_SECRET,
     mode: process.env.PAYPAL_MODE || 'sandbox',
     webhookId: process.env.PAYPAL_WEBHOOK_ID
+  },
+  binance: {
+    apiKey: process.env.BINANCE_PAY_API_KEY,
+    apiSecret: process.env.BINANCE_PAY_API_SECRET,
+    merchantId: process.env.BINANCE_PAY_MERCHANT_ID,
+    environment: process.env.BINANCE_PAY_ENVIRONMENT || 'sandbox',
+    webhookUrl: process.env.BINANCE_PAY_WEBHOOK_URL || WEBHOOK_BINANCE_URL
+  },
+  sasapay: {
+    clientId: process.env.SASAPAY_CLIENT_ID,
+    clientSecret: process.env.SASAPAY_CLIENT_SECRET,
+    merchantCode: process.env.SASAPAY_MERCHANT_CODE,
+    networkCode: process.env.SASAPAY_NETWORK_CODE || '63902',
+    currency: process.env.SASAPAY_CURRENCY || 'KES',
+    callbackUrl: process.env.SASAPAY_CALLBACK_URL || WEBHOOK_SASAPAY_URL,
+    baseUrl: process.env.SASAPAY_BASE_URL || 'https://sandbox.sasapay.app/api/v1'
   }
 };
 
@@ -217,6 +236,7 @@ function getTierPricing(tierKey, billingCycle = 'monthly') {
       priceCents: tier.weeklyPriceCents,
       currency: tier.currency,
       currencyPayPal: tier.currencyPayPal,
+      currencyBinance: tier.currencyBinance,
       periodDays: 7,
       billingCycle: 'weekly',
       periodLabel: 'week'
@@ -228,6 +248,7 @@ function getTierPricing(tierKey, billingCycle = 'monthly') {
     priceCents: tier.priceCents,
     currency: tier.currency,
     currencyPayPal: tier.currencyPayPal,
+    currencyBinance: tier.currencyBinance,
     periodDays: 30,
     billingCycle: 'monthly',
     periodLabel: 'month'
@@ -259,6 +280,25 @@ function getPublicTiers() {
   return publicTiers;
 }
 
+function getPublicPaymentMethods() {
+  return {
+    mpesa: {
+      tillNumber: PAYMENT_CONFIG.mpesa.shortcode || '5337170',
+      currency: 'KES'
+    },
+    sasapay: {
+      currency: PAYMENT_CONFIG.sasapay.currency || 'KES'
+    },
+    binance: {
+      merchantId: PAYMENT_CONFIG.binance.merchantId || null,
+      currency: 'USDT'
+    },
+    paypal: {
+      currency: 'USD'
+    }
+  };
+}
+
 module.exports = {
   TIERS,
   TIER_FEATURES,
@@ -270,5 +310,6 @@ module.exports = {
   PAYMENT_CONFIG,
   normalizeBillingCycle,
   getTierPricing,
-  getPublicTiers
+  getPublicTiers,
+  getPublicPaymentMethods
 };

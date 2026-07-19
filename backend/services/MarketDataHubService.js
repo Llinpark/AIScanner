@@ -34,9 +34,10 @@ class MarketDataHub {
     this.lastRateLimitMessage = null;
   }
 
-  canFetchFromProvider() {
+  canFetchFromProvider(options = {}) {
+    const bypassGap = Boolean(options.bypassGap);
     if (Date.now() < this.providerBlockedUntil) return false;
-    if (Date.now() - this.lastProviderFetchAt < MIN_PROVIDER_FETCH_GAP_MS) return false;
+    if (!bypassGap && Date.now() - this.lastProviderFetchAt < MIN_PROVIDER_FETCH_GAP_MS) return false;
     return true;
   }
 
@@ -83,14 +84,24 @@ class MarketDataHub {
   normalizePayload(symbol, interval, limit, candles, meta = {}) {
     const normalized = normalizeSymbol(symbol);
     const canonicalInterval = normalizeInterval(interval);
-    const rows = (candles || []).map(candle => ({
-      timestamp: new Date(candle.time).toISOString(),
-      open: Number(candle.open),
-      high: Number(candle.high),
-      low: Number(candle.low),
-      close: Number(candle.close),
-      volume: Number(candle.volume || 0)
-    }));
+    const rows = (candles || []).map(candle => {
+      const rawTime = candle.time ?? candle.timestamp;
+      let timestamp = null;
+      if (typeof rawTime === 'number' && Number.isFinite(rawTime)) {
+        const ms = rawTime > 1e12 ? rawTime : rawTime * 1000;
+        timestamp = new Date(ms).toISOString();
+      } else if (rawTime) {
+        timestamp = new Date(rawTime).toISOString();
+      }
+      return {
+        timestamp,
+        open: Number(candle.open),
+        high: Number(candle.high),
+        low: Number(candle.low),
+        close: Number(candle.close),
+        volume: Number(candle.volume || 0)
+      };
+    }).filter(row => row.timestamp && Number.isFinite(row.close));
 
     return {
       provider: meta.provider || TRADINGVIEW_CONFIG.primaryProvider || 'twelve_data',
@@ -154,20 +165,38 @@ class MarketDataHub {
     return Date.now() - Date.parse(payload.cachedAt) < refreshMsForInterval(interval);
   }
 
-  async refreshFromProvider(symbol, interval, limit = DEFAULT_LIMIT) {
+  async refreshFromProvider(symbol, interval, limit = DEFAULT_LIMIT, options = {}) {
     const normalized = normalizeSymbol(symbol);
     const canonicalInterval = normalizeInterval(interval);
     const parsedLimit = Math.max(1, parseInt(limit, 10) || DEFAULT_LIMIT);
     const dedupeKey = `${this.streamKey(normalized, canonicalInterval)}:${parsedLimit}`;
+    const forceProviderRefresh = Boolean(options.forceProviderRefresh);
 
     if (this.inFlight.has(dedupeKey)) {
       return this.inFlight.get(dedupeKey);
     }
 
-    if (!this.canFetchFromProvider()) {
+    if (!this.canFetchFromProvider({ bypassGap: !forceProviderRefresh })) {
       const cached = await this.readCache(normalized, canonicalInterval, parsedLimit);
       if (cached) {
         return { ...cached, stale: true };
+      }
+      if (!forceProviderRefresh) {
+        const candles = await fetchHistoricalData(
+          TRADINGVIEW_CONFIG,
+          normalized,
+          canonicalInterval,
+          parsedLimit,
+          { forceRefresh: false }
+        ).catch(() => null);
+        if (candles?.length) {
+          const stream = this.streams.get(this.streamKey(normalized, canonicalInterval));
+          const payload = this.normalizePayload(normalized, canonicalInterval, parsedLimit, candles, {
+            source: 'provider-cache',
+            viewers: stream?.viewers || 0
+          });
+          return this.writeCache(normalized, canonicalInterval, parsedLimit, { ...payload, stale: true });
+        }
       }
       throw new Error(
         this.lastRateLimitMessage ||
@@ -182,7 +211,8 @@ class MarketDataHub {
           TRADINGVIEW_CONFIG,
           normalized,
           canonicalInterval,
-          parsedLimit
+          parsedLimit,
+          { forceRefresh: forceProviderRefresh }
         );
         const stream = this.streams.get(this.streamKey(normalized, canonicalInterval));
         const payload = this.normalizePayload(normalized, canonicalInterval, parsedLimit, candles, {
@@ -206,7 +236,9 @@ class MarketDataHub {
 
   async refreshStream(stream) {
     try {
-      const payload = await this.refreshFromProvider(stream.symbol, stream.interval, stream.limit);
+      const payload = await this.refreshFromProvider(stream.symbol, stream.interval, stream.limit, {
+        forceProviderRefresh: true
+      });
       stream.lastRefreshAt = new Date().toISOString();
       const enriched = {
         ...payload,
@@ -238,7 +270,7 @@ class MarketDataHub {
     stream.refreshMs = refreshMsForInterval(stream.interval);
     stream.timer = setInterval(() => {
       if (stream.viewers <= 0) return;
-      if (!this.canFetchFromProvider()) return;
+      if (!this.canFetchFromProvider({ bypassGap: false })) return;
       this.refreshStream(stream).catch(error => {
         console.warn(
           `[MarketDataHub] Refresh failed for ${stream.symbol} ${stream.interval}:`,
@@ -341,9 +373,30 @@ class MarketDataHub {
       return { ...cached, stale: false, viewers: stream?.viewers || 0 };
     }
 
-    if (!this.canFetchFromProvider()) {
+    if (!this.canFetchFromProvider({ bypassGap: true })) {
       if (cached) {
         return { ...cached, stale: true, refreshError: this.lastRateLimitMessage || 'Provider throttled' };
+      }
+      const fallbackCandles = await fetchHistoricalData(
+        TRADINGVIEW_CONFIG,
+        normalized,
+        canonicalInterval,
+        parsedLimit,
+        { forceRefresh: false }
+      ).catch(() => null);
+      if (fallbackCandles?.length) {
+        const stream = this.streams.get(this.streamKey(normalized, canonicalInterval));
+        const payload = this.normalizePayload(normalized, canonicalInterval, parsedLimit, fallbackCandles, {
+          source: 'provider-cache',
+          viewers: stream?.viewers || 0
+        });
+        const stored = await this.writeCache(normalized, canonicalInterval, parsedLimit, payload);
+        return {
+          ...stored,
+          stale: true,
+          refreshError: this.lastRateLimitMessage || 'Provider throttled',
+          viewers: stream?.viewers || 0
+        };
       }
       throw new Error(
         this.lastRateLimitMessage ||

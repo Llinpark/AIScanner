@@ -23,6 +23,7 @@ function getTierPrice(tier, billingCycle) {
 export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, onSignIn }) {
   const { isAuthenticated, user, subscription } = useAuth();
   const [tiers, setTiers] = useState({});
+  const [paymentMethods, setPaymentMethods] = useState({});
   const [billingCycle, setBillingCycle] = useState('monthly');
   const [loading, setLoading] = useState(true);
   const [selectedTier, setSelectedTier] = useState(null);
@@ -33,6 +34,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
       try {
         const response = await subscriptionApi.getTiers();
         setTiers(response.data.tiers || response.data);
+        setPaymentMethods(response.data.paymentMethods || {});
       } catch (error) {
         console.error('Failed to fetch tiers:', error);
       } finally {
@@ -171,6 +173,7 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
           tier={selectedTier}
           tierData={tiers[selectedTier]}
           billingCycle={billingCycle}
+          paymentMethods={paymentMethods}
           onBack={() => setShowCheckout(false)}
           onSubscriptionUpdated={onSubscriptionUpdated}
           onNavigateDashboard={onNavigateDashboard}

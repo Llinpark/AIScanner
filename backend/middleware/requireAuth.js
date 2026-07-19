@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
 const { verifyToken } = require('../utils/auth');
+const { extractAuthToken } = require('../utils/sessionCookies');
 
 async function resolveUserById(userId) {
   if (!userId) return null;
@@ -17,8 +18,7 @@ async function resolveUserById(userId) {
 
 async function requireAuth(req, res, next) {
   try {
-    const authHeader = req.headers.authorization || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    const token = extractAuthToken(req);
 
     if (!token) {
       return res.status(401).json({ message: 'Authentication required. Please sign in.' });

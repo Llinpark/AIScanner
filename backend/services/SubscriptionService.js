@@ -55,6 +55,13 @@ async function activateSubscription(
     io.emit('subscription:updated', { userId: userId.toString(), subscription: user.subscription });
   }
 
+  try {
+    const ReferralService = require('./ReferralService');
+    await ReferralService.ensureReferralCodeForUser(userId);
+  } catch (error) {
+    console.warn('[Referral] Referral code provisioning failed:', error.message);
+  }
+
   return user;
 }
 
@@ -66,19 +73,34 @@ async function createPaymentTransaction(data) {
 }
 
 async function completePaymentTransaction(providerReference, provider, options = {}) {
+  let transaction;
   if (!isDbReady()) {
-    return devPaymentStore.completeTransaction(providerReference, provider, options);
+    transaction = devPaymentStore.completeTransaction(providerReference, provider, options);
+  } else {
+    const status = options.failureReason ? 'failed' : 'completed';
+    const update = {
+      status,
+      rawPayload: options.rawPayload,
+      completedAt: new Date()
+    };
+    if (options.failureReason) {
+      update.failureReason = options.failureReason;
+    }
+    transaction = await PaymentTransaction.findOneAndUpdate({ providerReference, provider }, update, {
+      new: true
+    });
   }
-  const status = options.failureReason ? 'failed' : 'completed';
-  const update = {
-    status,
-    rawPayload: options.rawPayload,
-    completedAt: new Date()
-  };
-  if (options.failureReason) {
-    update.failureReason = options.failureReason;
+
+  if (transaction && transaction.status === 'completed') {
+    try {
+      const ReferralService = require('./ReferralService');
+      await ReferralService.recordCommissionFromPayment(transaction);
+    } catch (error) {
+      console.warn('[Referral] Commission recording failed:', error.message);
+    }
   }
-  return PaymentTransaction.findOneAndUpdate({ providerReference, provider }, update, { new: true });
+
+  return transaction;
 }
 
 async function getPaymentStatus(providerReference, provider, userId) {

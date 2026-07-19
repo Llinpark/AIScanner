@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { subscriptionApi } from '../services/api';
+import { redirectToCheckout } from '../utils/safeRedirect';
 import { useAuth } from '../context/AuthContext';
 
-export default function Checkout({ tier, tierData, billingCycle = 'monthly', onBack, onSubscriptionUpdated, onNavigateDashboard }) {
+const PHONE_PROVIDERS = new Set(['mpesa', 'sasapay']);
+
+export default function Checkout({ tier, tierData, billingCycle = 'monthly', paymentMethods = {}, onBack, onSubscriptionUpdated, onNavigateDashboard }) {
   const { user, updateUser } = useAuth();
   const [provider, setProvider] = useState('mpesa');
   const [phone, setPhone] = useState(user?.phone || '');
@@ -11,6 +14,7 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
   const [mockPaymentId, setMockPaymentId] = useState('');
   const [checkoutRequestId, setCheckoutRequestId] = useState('');
   const [paypalOrderId, setPaypalOrderId] = useState('');
+  const [binanceTradeNo, setBinanceTradeNo] = useState('');
   const [isMockMode, setIsMockMode] = useState(false);
   const [error, setError] = useState('');
   const pollRef = useRef(null);
@@ -21,6 +25,8 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
     periodLabel: billingCycle === 'weekly' ? 'week' : 'month'
   };
   const periodLabel = pricing.periodLabel || (billingCycle === 'weekly' ? 'week' : 'month');
+  const binanceAmount = pricing.priceCents ? (pricing.priceCents / 100).toFixed(2) : '0.00';
+  const binanceMerchantId = paymentMethods?.binance?.merchantId;
 
   useEffect(() => {
     return () => {
@@ -30,21 +36,31 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
     };
   }, []);
 
-  const startMpesaPolling = requestId => {
+  const startPolling = (providerName, referenceId) => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
     }
 
     pollRef.current = setInterval(async () => {
       try {
-        const response = await subscriptionApi.getMpesaStatus(requestId);
+        let response;
+        if (providerName === 'mpesa') {
+          response = await subscriptionApi.getMpesaStatus(referenceId);
+        } else if (providerName === 'sasapay') {
+          response = await subscriptionApi.getSasaPayStatus(referenceId);
+        } else if (providerName === 'binance') {
+          response = await subscriptionApi.getBinanceStatus(referenceId);
+        } else {
+          return;
+        }
+
         if (response.data.status === 'completed' || response.data.subscriptionActive) {
           clearInterval(pollRef.current);
           await onSubscriptionUpdated?.();
           setPaymentState('confirmed');
         } else if (response.data.status === 'failed') {
           clearInterval(pollRef.current);
-          setError(response.data.failureReason || 'M-Pesa payment failed.');
+          setError(response.data.failureReason || 'Payment failed.');
           setPaymentState('error');
         }
       } catch {
@@ -69,7 +85,7 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
         tier,
         provider,
         billingCycle,
-        phone: provider === 'mpesa' ? phone : undefined
+        phone: PHONE_PROVIDERS.has(provider) ? phone : undefined
       });
 
       setIsMockMode(Boolean(response.data.mockMode));
@@ -77,12 +93,12 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
       if (provider === 'mock') {
         setMockPaymentId(response.data.mockPaymentId);
         setPaymentState('initiated');
-      } else if (provider === 'mpesa') {
+      } else if (provider === 'mpesa' || provider === 'sasapay') {
         const requestId = response.data.checkoutRequestId || response.data.stkRequestId;
         setCheckoutRequestId(requestId);
         setPaymentState('initiated');
         if (!response.data.mockMode) {
-          startMpesaPolling(requestId);
+          startPolling(provider, requestId);
         }
       } else if (provider === 'paypal') {
         const orderId = response.data.checkoutId;
@@ -91,9 +107,20 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
         if (response.data.mockMode) {
           setPaymentState('initiated');
         } else if (response.data.checkoutUrl) {
-          window.location.href = response.data.checkoutUrl;
+          redirectToCheckout(response.data.checkoutUrl);
         } else {
           throw new Error('PayPal checkout URL not available');
+        }
+      } else if (provider === 'binance') {
+        const tradeNo = response.data.merchantTradeNo || response.data.checkoutId;
+        setBinanceTradeNo(tradeNo);
+
+        if (response.data.mockMode) {
+          setPaymentState('initiated');
+        } else if (response.data.checkoutUrl) {
+          redirectToCheckout(response.data.checkoutUrl);
+        } else {
+          throw new Error('Binance Pay checkout URL not available');
         }
       }
     } catch (err) {
@@ -144,6 +171,26 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
     }
   };
 
+  const handleConfirmSasaPayMock = async () => {
+    try {
+      setLoading(true);
+      const response = await subscriptionApi.confirmSasaPayMock({
+        checkoutRequestId,
+        tier,
+        billingCycle
+      });
+
+      updateUser(response.data.user);
+      await onSubscriptionUpdated?.();
+      setPaymentState('confirmed');
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Failed to confirm SasaPay payment.');
+      setPaymentState('error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleConfirmPaypalMock = async () => {
     try {
       setLoading(true);
@@ -162,6 +209,34 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleConfirmBinanceMock = async () => {
+    try {
+      setLoading(true);
+      const response = await subscriptionApi.confirmBinanceMock({
+        merchantTradeNo: binanceTradeNo,
+        tier,
+        billingCycle
+      });
+
+      updateUser(response.data.user);
+      await onSubscriptionUpdated?.();
+      setPaymentState('confirmed');
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Failed to confirm Binance Pay payment.');
+      setPaymentState('error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const providerLabels = {
+    mpesa: 'M-Pesa (Till 5337170)',
+    sasapay: 'SasaPay (M-Pesa / Airtel / SasaPay wallet)',
+    binance: `Binance Pay (USDT ${binanceAmount}/${periodLabel})`,
+    paypal: 'PayPal / Card',
+    mock: 'Mock Payment (Test Mode)'
   };
 
   return (
@@ -184,6 +259,17 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
               <strong>PayPal/Card:</strong> USD {(pricing.priceCents / 100).toFixed(2)}/{periodLabel}
             </p>
           )}
+          {provider === 'binance' && (
+            <p>
+              <strong>Binance Pay:</strong> USDT {binanceAmount}/{periodLabel}
+              {binanceMerchantId && (
+                <>
+                  {' '}
+                  · Merchant ID <strong>{binanceMerchantId}</strong>
+                </>
+              )}
+            </p>
+          )}
         </div>
 
         {paymentState === 'pending' && (
@@ -191,42 +277,24 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
             <div className="form-group">
               <label>Payment Method</label>
               <div className="payment-options">
-                <label className="radio-option">
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="mpesa"
-                    checked={provider === 'mpesa'}
-                    onChange={e => setProvider(e.target.value)}
-                  />
-                  M-Pesa (Till 5337170)
-                </label>
-                <label className="radio-option">
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="paypal"
-                    checked={provider === 'paypal'}
-                    onChange={e => setProvider(e.target.value)}
-                  />
-                  PayPal / Card
-                </label>
-                <label className="radio-option">
-                  <input
-                    type="radio"
-                    name="provider"
-                    value="mock"
-                    checked={provider === 'mock'}
-                    onChange={e => setProvider(e.target.value)}
-                  />
-                  Mock Payment (Test Mode)
-                </label>
+                {['mpesa', 'sasapay', 'binance', 'paypal', 'mock'].map(option => (
+                  <label className="radio-option" key={option}>
+                    <input
+                      type="radio"
+                      name="provider"
+                      value={option}
+                      checked={provider === option}
+                      onChange={e => setProvider(e.target.value)}
+                    />
+                    {providerLabels[option]}
+                  </label>
+                ))}
               </div>
             </div>
 
-            {provider === 'mpesa' && (
+            {PHONE_PROVIDERS.has(provider) && (
               <div className="form-group">
-                <label>Phone Number (M-Pesa)</label>
+                <label>Phone Number ({provider === 'sasapay' ? 'SasaPay' : 'M-Pesa'})</label>
                 <input
                   type="tel"
                   placeholder="254712345678 or 0712345678"
@@ -234,7 +302,11 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
                   onChange={e => setPhone(e.target.value)}
                   required
                 />
-                <small>Payment will be sent to Till number 5337170</small>
+                <small>
+                  {provider === 'sasapay'
+                    ? 'You will receive a SasaPay prompt on your phone to approve the payment.'
+                    : 'Payment will be sent to Till number 5337170'}
+                </small>
               </div>
             )}
 
@@ -282,6 +354,27 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
           </div>
         )}
 
+        {paymentState === 'initiated' && provider === 'sasapay' && (
+          <div className="sasapay-flow">
+            <div className="info-box">
+              <h3>SasaPay Payment in Progress</h3>
+              <p>A payment request has been sent to {phone}.</p>
+              <p>Approve the prompt on your phone to complete payment in KES.</p>
+              {!isMockMode && <p>Waiting for payment confirmation…</p>}
+              {isMockMode && (
+                <p>
+                  <em>Mock mode — SasaPay credentials not configured. Click below to simulate payment.</em>
+                </p>
+              )}
+            </div>
+            {isMockMode && (
+              <button type="button" className="btn-confirm" onClick={handleConfirmSasaPayMock} disabled={loading}>
+                {loading ? 'Confirming…' : 'Simulate SasaPay Payment'}
+              </button>
+            )}
+          </div>
+        )}
+
         {paymentState === 'initiated' && provider === 'paypal' && (
           <div className="paypal-flow">
             <div className="info-box">
@@ -300,6 +393,29 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', onB
             {isMockMode && (
               <button type="button" className="btn-confirm" onClick={handleConfirmPaypalMock} disabled={loading}>
                 {loading ? 'Confirming…' : 'Simulate PayPal Payment'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {paymentState === 'initiated' && provider === 'binance' && (
+          <div className="binance-flow">
+            <div className="info-box">
+              <h3>Binance Pay</h3>
+              {isMockMode ? (
+                <>
+                  <p>
+                    <em>Mock mode — Binance Pay credentials not configured.</em>
+                  </p>
+                  <p>Click below to simulate a successful crypto payment.</p>
+                </>
+              ) : (
+                <p>Complete payment in Binance Pay. Your subscription activates automatically after confirmation.</p>
+              )}
+            </div>
+            {isMockMode && (
+              <button type="button" className="btn-confirm" onClick={handleConfirmBinanceMock} disabled={loading}>
+                {loading ? 'Confirming…' : 'Simulate Binance Pay Payment'}
               </button>
             )}
           </div>

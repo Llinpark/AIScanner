@@ -5,6 +5,7 @@ import AdminUsers from './AdminUsers';
 import AdminScanner from './AdminScanner';
 import AdminSignals from './AdminSignals';
 import AdminPayments from './AdminPayments';
+import AdminReferrals from './AdminReferrals';
 import AdminAuditLog from './AdminAuditLog';
 
 export default function AdminHub({ initialTab = 'dashboard' }) {
@@ -17,6 +18,7 @@ export default function AdminHub({ initialTab = 'dashboard' }) {
       {activeTab === 'signals' && <AdminSignals />}
       {activeTab === 'scanner' && <AdminScanner />}
       {activeTab === 'payments' && <AdminPayments />}
+      {activeTab === 'referrals' && <AdminReferrals />}
       {activeTab === 'audit' && <AdminAuditLog />}
     </AdminLayout>
   );

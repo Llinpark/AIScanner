@@ -1,7 +1,9 @@
 const cache = new Map();
 const inFlight = new Map();
 
-const DEFAULT_TTL_MS = Number(process.env.MARKET_DATA_CACHE_TTL_MS || process.env.TWELVE_DATA_CACHE_TTL_MS || 300000);
+const DEFAULT_TTL_MS = Number(
+  process.env.MARKET_DATA_CACHE_TTL_MS || process.env.TWELVE_DATA_CACHE_TTL_MS || 60_000
+);
 const STALE_TTL_MS = Number(process.env.MARKET_DATA_STALE_TTL_MS || 900000);
 
 function isRateLimitError(message) {
