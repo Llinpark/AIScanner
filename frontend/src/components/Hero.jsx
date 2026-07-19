@@ -1,4 +1,4 @@
-export default function Hero({ onViewPricing, onSignUp }) {
+export default function Hero({ onViewPricing, onSignUp, onReferEarn }) {
   return (
     <section className="hero-section">
       <div className="hero-glow hero-glow-left" aria-hidden="true" />
@@ -21,6 +21,11 @@ export default function Hero({ onViewPricing, onSignUp }) {
             <button type="button" className="hero-btn hero-btn-secondary" onClick={onSignUp}>
               Get Started
             </button>
+            {onReferEarn && (
+              <button type="button" className="hero-btn hero-btn-tertiary" onClick={onReferEarn}>
+                Refer &amp; Earn
+              </button>
+            )}
           </div>
         </div>
 

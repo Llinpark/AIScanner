@@ -193,6 +193,18 @@ body.nav-menu-open {
   color: var(--accent-color);
 }
 
+.hero-btn-tertiary {
+  border: 1px solid rgba(212, 160, 38, 0.55);
+  background: transparent;
+  color: var(--accent-color);
+}
+
+.hero-btn-tertiary:hover {
+  background: rgba(212, 160, 38, 0.12);
+  border-color: var(--accent-color);
+  color: var(--accent-hover);
+}
+
 .hero-media {
   position: relative;
   display: flex;
@@ -3654,6 +3666,17 @@ h1, h2, h3, h4, h5, h6,
   font-size: 0.92rem;
   line-height: 1.5;
   margin-bottom: 12px;
+}
+
+.auth-notice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 193, 7, 0.28);
+  background: rgba(255, 193, 7, 0.08);
+  color: var(--heading-color);
+  font-size: 0.92rem;
+  line-height: 1.45;
 }
 
 .auth-forgot-link {

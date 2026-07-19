@@ -158,6 +158,7 @@ function AppContent() {
           <Hero
             onViewPricing={() => setCurrentPage('pricing')}
             onSignUp={() => setCurrentPage('signup')}
+            onReferEarn={() => navigateTo('referrals')}
           />
           <TradingEcosystem />
           <AiIntelligenceSection
@@ -249,7 +250,11 @@ function AppContent() {
           onNavigatePricing={() => navigateTo('pricing')}
         />
       ) : (
-        <AuthForm initialMode="login" onSuccess={() => setCurrentPage('referrals')} />
+        <AuthForm
+          initialMode="login"
+          authNotice="Sign in or register to open Refer & Earn and get your personal referral link."
+          onSuccess={() => setCurrentPage('referrals')}
+        />
       );
     }
 

@@ -8,7 +8,7 @@ function formatFieldErrors(errors) {
   return errors.map(err => `${err.field}: ${err.message}`).join(' ');
 }
 
-export default function AuthForm({ onSuccess, initialMode = 'login' }) {
+export default function AuthForm({ onSuccess, initialMode = 'login', authNotice }) {
   const { login, register } = useAuth();
   const [mode, setMode] = useState(initialMode);
   const [email, setEmail] = useState('');
@@ -140,6 +140,7 @@ export default function AuthForm({ onSuccess, initialMode = 'login' }) {
         <h2>
           {mode === 'login' ? 'Login' : mode === 'register' ? 'Register' : 'Forgot password'}
         </h2>
+        {authNotice && <p className="auth-notice">{authNotice}</p>}
         <p>
           {mode === 'login'
             ? 'Access your trading signals dashboard.'
