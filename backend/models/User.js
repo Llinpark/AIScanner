@@ -34,7 +34,7 @@ const UserConfigSchema = new mongoose.Schema({
   subscription: {
     tier: { type: String, enum: ['basic', 'professional', 'premium'], default: 'basic' },
     status: { type: String, enum: ['inactive', 'pending', 'active', 'cancelled'], default: 'inactive' },
-    provider: { type: String, enum: ['mpesa', 'paypal', 'mock', 'binance', 'sasapay'] },
+    provider: { type: String, enum: ['mpesa', 'paypal', 'mock', 'binance', 'sasapay', 'beta'] },
     providerCustomerId: { type: String },
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },
