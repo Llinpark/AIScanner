@@ -62,6 +62,11 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
                 Subscription plans
               </button>
             </li>
+            <li>
+              <button type="button" className="footer-link" onClick={() => goTo('referrals')}>
+                Refer &amp; Earn
+              </button>
+            </li>
           </ul>
         </div>
 

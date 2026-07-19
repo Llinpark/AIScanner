@@ -20,7 +20,12 @@ function getTierPrice(tier, billingCycle) {
   };
 }
 
-export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, onSignIn }) {
+export default function Pricing({
+  onSubscriptionUpdated,
+  onNavigateDashboard,
+  onNavigateReferrals,
+  onSignIn
+}) {
   const { isAuthenticated, user, subscription } = useAuth();
   const [tiers, setTiers] = useState({});
   const [paymentMethods, setPaymentMethods] = useState({});
@@ -166,6 +171,17 @@ export default function Pricing({ onSubscriptionUpdated, onNavigateDashboard, on
 
           <div className="pricing-footer">
             <p>After payment, open TradingView for accurate alerts.</p>
+            {onNavigateReferrals && (
+              <div className="refer-earn-cta refer-earn-cta-pricing">
+                <div className="refer-earn-cta-copy">
+                  <span className="refer-earn-badge">Refer &amp; Earn</span>
+                  <p>Invite traders and earn commission on their plans.</p>
+                </div>
+                <button type="button" className="btn-fetch" onClick={onNavigateReferrals}>
+                  Refer &amp; Earn
+                </button>
+              </div>
+            )}
           </div>
         </>
       ) : (

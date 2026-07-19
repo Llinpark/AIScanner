@@ -214,7 +214,11 @@ function AppContent() {
 
     if (currentPage === 'dashboard') {
       return isAuthenticated ? (
-        <SignalDashboard initialSignals={signals} subscription={subscription} />
+        <SignalDashboard
+          initialSignals={signals}
+          subscription={subscription}
+          onNavigateReferrals={() => navigateTo('referrals')}
+        />
       ) : (
         <AuthForm
           initialMode="login"
@@ -268,6 +272,7 @@ function AppContent() {
       <Pricing
         onSubscriptionUpdated={refreshSubscription}
         onNavigateDashboard={() => setCurrentPage('dashboard')}
+        onNavigateReferrals={() => navigateTo('referrals')}
         onSignIn={() => setCurrentPage('signin')}
       />
     );

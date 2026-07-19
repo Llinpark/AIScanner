@@ -5552,6 +5552,39 @@ h1, h2, h3, h4, h5, h6,
   }
 }
 
+/* Refer & Earn entry points */
+.refer-earn-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 193, 7, 0.28);
+  background: rgba(255, 193, 7, 0.08);
+}
+
+.refer-earn-cta-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.refer-earn-cta-copy p {
+  margin: 0;
+  color: var(--text-muted-light);
+  font-size: 0.95rem;
+}
+
+.refer-earn-cta-pricing {
+  margin-top: 18px;
+  text-align: left;
+}
+
 /* Refer & Earn */
 .refer-earn-page {
   display: flex;

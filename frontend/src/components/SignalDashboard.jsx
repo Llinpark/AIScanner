@@ -30,7 +30,7 @@ function isActiveSubscription(subscription) {
   return subscription.status === 'active';
 }
 
-export default function SignalDashboard({ initialSignals, subscription }) {
+export default function SignalDashboard({ initialSignals, subscription, onNavigateReferrals }) {
   const { isAuthenticated } = useAuth();
   const [signals, setSignals] = useState(initialSignals || []);
   const [tierLimits, setTierLimits] = useState({});
@@ -97,6 +97,18 @@ export default function SignalDashboard({ initialSignals, subscription }) {
       {!hasAccess && (
         <div className="subscription-banner">
           <p>Your subscription is {subscription?.status || 'inactive'}. Go to Pricing to upgrade.</p>
+        </div>
+      )}
+
+      {onNavigateReferrals && (
+        <div className="refer-earn-cta">
+          <div className="refer-earn-cta-copy">
+            <span className="refer-earn-badge">Refer &amp; Earn</span>
+            <p>Share your link and earn commission on every subscription you refer.</p>
+          </div>
+          <button type="button" className="btn-fetch" onClick={onNavigateReferrals}>
+            Open Refer &amp; Earn
+          </button>
         </div>
       )}
 

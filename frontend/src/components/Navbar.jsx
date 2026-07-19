@@ -22,9 +22,7 @@ export default function Navbar({
     { id: 'insights', label: 'Insights' },
     { id: 'tradingview', label: 'TradingView Setup' },
     { id: 'pricing', label: 'Pricing' },
-    ...(String(subscription?.status || '').toLowerCase() === 'active'
-      ? [{ id: 'referrals', label: 'Refer & Earn' }]
-      : []),
+    { id: 'referrals', label: 'Refer & Earn' },
     { id: 'contact', label: 'Contact' },
     ...(user?.isAdmin ? [{ id: 'admin', label: 'Admin' }] : [])
   ];
