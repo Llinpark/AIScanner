@@ -48,14 +48,31 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
   }, [allowedPairs, chartSymbol]);
 
   useEffect(() => {
-    subscriptionApi
-      .getMe()
-      .then(res => {
-        if (res.data.tierFeatures) setTierLimits(res.data.tierFeatures);
-        if (res.data.allowedCurrencyPairs) setAllowedPairs(res.data.allowedCurrencyPairs);
-        if (res.data.tierDisplayName) setTierDisplayName(res.data.tierDisplayName);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    let retryTimer = null;
+
+    const loadMe = () => {
+      subscriptionApi
+        .getMe()
+        .then(res => {
+          if (cancelled) return;
+          if (res.data.tierFeatures) setTierLimits(res.data.tierFeatures);
+          if (res.data.allowedCurrencyPairs) setAllowedPairs(res.data.allowedCurrencyPairs);
+          if (res.data.tierDisplayName) setTierDisplayName(res.data.tierDisplayName);
+        })
+        .catch(() => {
+          // Don't let a transient failure permanently strand the UI on the
+          // fallback 2-pair default — retry a few seconds later.
+          if (!cancelled) retryTimer = window.setTimeout(loadMe, 5000);
+        });
+    };
+
+    loadMe();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
   }, [subscription]);
 
   useEffect(() => {

@@ -11,14 +11,15 @@ SYMBOL_ALIASES = {
     'EURGBP': 'EUR/GBP',
     'EURJPY': 'EUR/JPY',
     'GBPJPY': 'GBP/JPY',
-    'USDBTC': 'USD/BTC',
-    'BTCUSD': 'USD/BTC',
+    'USDBTC': 'BTC/USD',
+    'BTCUSD': 'BTC/USD',
+    'USD/BTC': 'BTC/USD',
 }
 
 TWELVE_DATA_SYMBOL_MAP = {
     'US30': 'DJI',
     'US100': 'NDX',
-    'USD/BTC': 'BTC/USD',
+    'BTC/USD': 'BTC/USD',
 }
 
 EODHD_SYMBOL_MAP = {
@@ -36,7 +37,7 @@ EODHD_SYMBOL_MAP = {
     'GBP/JPY': 'GBPJPY.FOREX',
     'US30': 'DJI.INDX',
     'US100': 'NDX.INDX',
-    'USD/BTC': 'BTC-USD.CC',
+    'BTC/USD': 'BTC-USD.CC',
 }
 
 INTERVAL_MAP = {

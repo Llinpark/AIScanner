@@ -3,16 +3,32 @@ import { adminApi } from '../services/api';
 
 const TIERS = ['basic', 'professional', 'premium'];
 const STATUSES = ['inactive', 'pending', 'active', 'cancelled'];
+const BILLING_CYCLES = ['monthly', 'weekly'];
 
 function formatDate(value) {
   if (!value) return '—';
   return new Date(value).toLocaleString();
 }
 
+function formatBillingCycle(cycle) {
+  return cycle === 'weekly' ? 'weekly' : cycle === 'monthly' ? 'monthly' : null;
+}
+
+// Billing cycle is only meaningful while a plan is actually in effect;
+// free/never-subscribed/cancelled users shouldn't show a stale "monthly" default.
+function hasBillableSubscription(subscription = {}) {
+  return subscription.status === 'active' || subscription.status === 'pending';
+}
+
+function getBillingCycleLabel(subscription = {}) {
+  return hasBillableSubscription(subscription) ? formatBillingCycle(subscription.billingCycle) : null;
+}
+
 function SubscriptionEditor({ user, onClose, onSaved }) {
   const subscription = user.subscription || {};
   const [tier, setTier] = useState(subscription.tier || 'basic');
   const [status, setStatus] = useState(subscription.status || 'inactive');
+  const [billingCycle, setBillingCycle] = useState(formatBillingCycle(subscription.billingCycle) || 'monthly');
   const [extendDays, setExtendDays] = useState(30);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -55,6 +71,10 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
           <dd>{subscription.status || 'inactive'}</dd>
         </div>
         <div className="admin-meta-item">
+          <dt>Billing cycle</dt>
+          <dd>{getBillingCycleLabel(subscription) || '—'}</dd>
+        </div>
+        <div className="admin-meta-item">
           <dt>Period end</dt>
           <dd>{formatDate(subscription.current_period_end)}</dd>
         </div>
@@ -88,6 +108,17 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
         </label>
 
         <label className="admin-field">
+          <span>Billing cycle</span>
+          <select className="admin-select" value={billingCycle} onChange={e => setBillingCycle(e.target.value)}>
+            {BILLING_CYCLES.map(option => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="admin-field">
           <span>Extend by (days)</span>
           <input type="number" min={1} max={365} value={extendDays} onChange={e => setExtendDays(Number(e.target.value))} />
         </label>
@@ -98,7 +129,7 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
           type="button"
           className="btn-small admin-btn"
           disabled={saving}
-          onClick={() => save({ tier, status })}
+          onClick={() => save({ tier, status, billingCycle })}
         >
           Save tier/status
         </button>
@@ -106,7 +137,7 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
           type="button"
           className="btn-small admin-btn"
           disabled={saving}
-          onClick={() => save({ tier, extendDays })}
+          onClick={() => save({ tier, extendDays, billingCycle })}
         >
           Extend period
         </button>
@@ -114,7 +145,7 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
           type="button"
           className="hero-btn hero-btn-primary admin-btn-compact"
           disabled={saving}
-          onClick={() => save({ activate: true, tier, extendDays, provider: 'mock' })}
+          onClick={() => save({ activate: true, tier, extendDays, billingCycle, provider: 'mock' })}
         >
           Activate plan
         </button>
@@ -221,7 +252,12 @@ export default function AdminUsers() {
                       <tr key={user.id}>
                         <td data-label="Email">{user.email}</td>
                         <td data-label="Name">{user.displayName || '—'}</td>
-                        <td data-label="Tier">{user.subscription?.tier || 'basic'}</td>
+                        <td data-label="Tier">
+                          {user.subscription?.tier || 'basic'}
+                          {getBillingCycleLabel(user.subscription) && (
+                            <span className="admin-tier-cycle"> ({getBillingCycleLabel(user.subscription)})</span>
+                          )}
+                        </td>
                         <td data-label="Status">
                           <span className={`admin-pill status-${user.subscription?.status || 'inactive'}`}>
                             {user.subscription?.status || 'inactive'}

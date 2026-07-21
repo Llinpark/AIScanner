@@ -57,9 +57,10 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100,
       return candles;
     } catch (error) {
       errors.push(`${attempt.name}: ${error.message}`);
-      if (isRateLimitError(error.message)) {
-        break;
-      }
+      // Do NOT break on rate-limit/credit errors — that is exactly the case where
+      // we need to fall through to the next configured provider (e.g. EODHD).
+      // Only a provider's own error should stop *that* provider's retries, which
+      // already happens naturally since each provider only appears once in `ordered`.
     }
   }
 

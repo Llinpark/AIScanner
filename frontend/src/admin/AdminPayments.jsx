@@ -11,6 +11,38 @@ function formatMoney(amount, currency) {
   return `${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ${currency || ''}`.trim();
 }
 
+const SUMMARY_STATUSES = [
+  { key: 'pending', label: 'Pending', tone: 'warning' },
+  { key: 'completed', label: 'Completed', tone: 'success' },
+  { key: 'failed', label: 'Failed', tone: 'danger' },
+  { key: 'cancelled', label: 'Cancelled', tone: 'default' }
+];
+
+function PaymentSummaryCard({ label, tone, lines, loading }) {
+  const totalCount = lines.reduce((sum, line) => sum + line.count, 0);
+  return (
+    <div className={`admin-payment-summary-card tone-${tone}`}>
+      <span className="admin-stat-label">{label}</span>
+      {loading ? (
+        <span className="admin-payment-summary-loading">…</span>
+      ) : lines.length === 0 ? (
+        <strong className="admin-stat-value admin-payment-summary-empty">—</strong>
+      ) : (
+        <div className="admin-payment-summary-lines">
+          {lines.map(line => (
+            <strong key={line.currency} className="admin-stat-value admin-payment-summary-line">
+              {formatMoney(line.total, line.currency)}
+            </strong>
+          ))}
+        </div>
+      )}
+      <small className="admin-stat-hint">
+        {totalCount} transaction{totalCount === 1 ? '' : 's'}
+      </small>
+    </div>
+  );
+}
+
 export default function AdminPayments() {
   const [payments, setPayments] = useState([]);
   const [status, setStatus] = useState('');
@@ -19,6 +51,9 @@ export default function AdminPayments() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [summary, setSummary] = useState(null);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [summaryError, setSummaryError] = useState('');
 
   const loadPayments = useCallback(async () => {
     setLoading(true);
@@ -40,9 +75,32 @@ export default function AdminPayments() {
     }
   }, [page, status]);
 
+  const loadSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    setSummaryError('');
+    try {
+      const response = await adminApi.getPaymentsSummary();
+      setSummary(response.data.summary || {});
+    } catch (err) {
+      setSummaryError(err.response?.data?.message || 'Unable to load payment totals.');
+      setSummary(null);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     loadPayments();
   }, [loadPayments]);
+
+  useEffect(() => {
+    loadSummary();
+  }, [loadSummary]);
+
+  const refreshAll = () => {
+    loadPayments();
+    loadSummary();
+  };
 
   return (
     <div className="admin-payments">
@@ -52,6 +110,20 @@ export default function AdminPayments() {
             <h3>Payments</h3>
             <p className="admin-table-meta">{total} transaction(s)</p>
           </div>
+        </div>
+
+        {summaryError && <div className="feature-lock admin-alert admin-alert-error">{summaryError}</div>}
+
+        <div className="admin-payment-summary-grid">
+          {SUMMARY_STATUSES.map(({ key, label, tone }) => (
+            <PaymentSummaryCard
+              key={key}
+              label={label}
+              tone={tone}
+              lines={summary?.[key] || []}
+              loading={summaryLoading}
+            />
+          ))}
         </div>
 
         <div className="admin-toolbar">
@@ -69,7 +141,7 @@ export default function AdminPayments() {
             <option value="failed">Failed</option>
             <option value="cancelled">Cancelled</option>
           </select>
-          <button type="button" className="btn-fetch admin-btn" onClick={loadPayments} disabled={loading}>
+          <button type="button" className="btn-fetch admin-btn" onClick={refreshAll} disabled={loading || summaryLoading}>
             Refresh
           </button>
         </div>

@@ -122,37 +122,45 @@ export default function AdminReferrals() {
                   </tr>
                 </thead>
                 <tbody>
-                  {commissions.map(row => (
-                    <tr key={row.id}>
-                      <td>{formatDate(row.createdAt)}</td>
-                      <td>{row.referrerEmail || row.referrerUserId}</td>
-                      <td>{row.referredUserEmail || row.referredUserId}</td>
-                      <td>{row.commissionType === 'first_subscription' ? 'First' : 'Renewal'}</td>
-                      <td>
-                        {formatMoney(row.planAmount, row.currency)}
-                        <span className="admin-table-meta"> · {row.tier}</span>
-                      </td>
-                      <td>
-                        {formatMoney(row.commissionAmount, row.currency)}
-                        <span className="admin-table-meta"> ({formatPercent(row.commissionRate)})</span>
-                      </td>
-                      <td>{row.status}</td>
-                      <td>
-                        {row.status === 'pending' ? (
-                          <button
-                            type="button"
-                            className="btn-fetch admin-btn admin-btn-small"
-                            disabled={payingId === row.id}
-                            onClick={() => handleMarkPaid(row.id)}
-                          >
-                            {payingId === row.id ? 'Saving…' : 'Mark paid'}
-                          </button>
-                        ) : (
-                          formatDate(row.paidAt)
-                        )}
+                  {commissions.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="admin-table-empty">
+                        No commissions found.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    commissions.map(row => (
+                      <tr key={row.id}>
+                        <td data-label="Date">{formatDate(row.createdAt)}</td>
+                        <td data-label="Referrer">{row.referrerEmail || row.referrerUserId}</td>
+                        <td data-label="Referred">{row.referredUserEmail || row.referredUserId}</td>
+                        <td data-label="Type">{row.commissionType === 'first_subscription' ? 'First' : 'Renewal'}</td>
+                        <td data-label="Plan">
+                          {formatMoney(row.planAmount, row.currency)}
+                          <span className="admin-table-meta"> · {row.tier}</span>
+                        </td>
+                        <td data-label="Commission">
+                          {formatMoney(row.commissionAmount, row.currency)}
+                          <span className="admin-table-meta"> ({formatPercent(row.commissionRate)})</span>
+                        </td>
+                        <td data-label="Status">{row.status}</td>
+                        <td data-label="Action">
+                          {row.status === 'pending' ? (
+                            <button
+                              type="button"
+                              className="btn-fetch admin-btn admin-btn-small"
+                              disabled={payingId === row.id}
+                              onClick={() => handleMarkPaid(row.id)}
+                            >
+                              {payingId === row.id ? 'Saving…' : 'Mark paid'}
+                            </button>
+                          ) : (
+                            formatDate(row.paidAt)
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -195,6 +203,7 @@ export default function AdminReferrals() {
           <label className="admin-field">
             <span>Payout reference</span>
             <input
+              type="text"
               className="admin-input"
               value={payoutReference}
               onChange={e => setPayoutReference(e.target.value)}
@@ -204,6 +213,7 @@ export default function AdminReferrals() {
           <label className="admin-field">
             <span>Admin notes</span>
             <input
+              type="text"
               className="admin-input"
               value={adminNotes}
               onChange={e => setAdminNotes(e.target.value)}

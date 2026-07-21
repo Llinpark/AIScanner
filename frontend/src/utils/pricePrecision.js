@@ -5,7 +5,7 @@ const SYMBOL_PRICE_FORMAT = {
   XAGUSD: { precision: 3, minMove: 0.001 },
   US30: { precision: 2, minMove: 0.01 },
   US100: { precision: 2, minMove: 0.01 },
-  'USD/BTC': { precision: 2, minMove: 0.01 },
+  'BTC/USD': { precision: 2, minMove: 0.01 },
   USDBTC: { precision: 2, minMove: 0.01 },
   BTCUSD: { precision: 2, minMove: 0.01 }
 };

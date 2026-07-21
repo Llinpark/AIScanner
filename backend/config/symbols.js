@@ -14,7 +14,7 @@ const MARKET_SYMBOLS = {
   'GBP/JPY': { basePrice: 189.6, category: 'forex' },
   US30: { basePrice: 39100, category: 'index' },
   US100: { basePrice: 18250, category: 'index' },
-  'USD/BTC': { basePrice: 97500, category: 'crypto' }
+  'BTC/USD': { basePrice: 97500, category: 'crypto' }
 };
 
 const ALL_CURRENCY_PAIRS = Object.keys(MARKET_SYMBOLS);
@@ -32,8 +32,9 @@ const SYMBOL_ALIASES = {
   EURGBP: 'EUR/GBP',
   EURJPY: 'EUR/JPY',
   GBPJPY: 'GBP/JPY',
-  USDBTC: 'USD/BTC',
-  BTCUSD: 'USD/BTC',
+  USDBTC: 'BTC/USD',
+  BTCUSD: 'BTC/USD',
+  'USD/BTC': 'BTC/USD',
   NAS100: 'US100',
   USTEC: 'US100',
   DJ30: 'US30',

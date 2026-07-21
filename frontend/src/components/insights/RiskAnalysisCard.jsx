@@ -34,6 +34,7 @@ export function RiskAnalysisCard({ riskMetrics, accountBalance, onAccountBalance
         <div><span>R:R TP2</span><strong>1:{riskMetrics.riskReward2}</strong></div>
         <div><span>R:R TP3</span><strong>1:{riskMetrics.riskReward3}</strong></div>
         <div><span>Pip reward TP1</span><strong>{riskMetrics.pipReward1}</strong></div>
+        <div><span>Pip reward TP2</span><strong>{riskMetrics.pipReward2}</strong></div>
         <div><span>Pip reward TP3</span><strong>{riskMetrics.pipReward3}</strong></div>
       </div>
       <div className="risk-sizing">

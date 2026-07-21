@@ -66,6 +66,13 @@ body.nav-menu-open {
   box-sizing: border-box;
 }
 
+/* Admin console needs more horizontal room for data tables than the
+   default content column, otherwise wide tables get squeezed and their
+   right-most column (e.g. row actions) is pushed out of view. */
+.site-main--admin {
+  max-width: 1400px;
+}
+
 .page-notice {
   margin-bottom: 24px;
 }
@@ -545,18 +552,24 @@ body.nav-menu-open {
   font-weight: 700;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1240px) {
   .trading-ecosystem-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 18px;
   }
+}
 
+@media (max-width: 960px) {
   .ecosystem-card {
     padding: 24px 22px;
   }
 }
 
 @media (max-width: 640px) {
+  .trading-ecosystem-grid {
+    grid-template-columns: 1fr;
+  }
+
   .trading-ecosystem-section {
     margin-top: 28px;
   }
@@ -1170,7 +1183,7 @@ body.nav-menu-open {
   display: flex;
   align-items: center;
   gap: 24px;
-  max-width: 1200px;
+  max-width: 1560px;
   margin: 0 auto;
   padding: 14px 24px;
 }
@@ -1202,7 +1215,15 @@ body.nav-menu-open {
   align-items: center;
   gap: 8px;
   margin-left: auto;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.navbar-links::-webkit-scrollbar {
+  display: none;
 }
 
 .navbar-auth {
@@ -1285,6 +1306,134 @@ body.nav-menu-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ===== NAVBAR: LAPTOP AND UP ===== */
+/* Laptops (>= 1025px) keep the full horizontal nav. The link row shrinks its own
+   spacing/font-size (below) so the full link set (Home, Dashboard, Insights,
+   TradingView Setup, Pricing, Refer & Earn, Contact, Admin + user info + PREMIUM
+   badge + Log Out) fits common laptop widths (1280 / 1366 / 1440) without pushing
+   the page into horizontal overflow. If it still runs tight, the link row itself
+   scrolls horizontally (see .navbar-links overflow-x above) rather than wrapping. */
+@media (max-width: 1440px) {
+  .navbar-inner {
+    gap: 16px;
+    padding: 12px 18px;
+  }
+
+  .navbar-links {
+    gap: 2px;
+  }
+
+  .navbar-link {
+    padding: 8px 10px;
+    font-size: 0.86rem;
+  }
+
+  .navbar-auth-link {
+    padding: 8px 12px;
+    font-size: 0.86rem;
+  }
+
+  .navbar-auth {
+    gap: 8px;
+  }
+
+  .navbar-user-name {
+    max-width: 120px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .navbar-inner {
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .navbar-link {
+    padding: 7px 8px;
+    font-size: 0.82rem;
+  }
+
+  .navbar-auth-link {
+    padding: 7px 10px;
+    font-size: 0.82rem;
+  }
+
+  .navbar-user-name {
+    max-width: 90px;
+    font-size: 0.82rem;
+  }
+}
+
+/* ===== NAVBAR: TABLET AND BELOW (HAMBURGER) ===== */
+/* Only phone/tablet viewports collapse into the hamburger menu. Laptop and desktop
+   (> 1024px) always show the full horizontal nav from the block above. */
+@media (max-width: 1024px) {
+  .navbar-inner {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .navbar-menu-toggle {
+    display: inline-flex;
+  }
+
+  .navbar-panel {
+    display: none;
+    order: 4;
+    width: 100%;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px 0 4px;
+    border-top: 1px solid var(--border-color);
+  }
+
+  .navbar-panel.open {
+    display: flex;
+  }
+
+  .navbar-links {
+    order: unset;
+    width: 100%;
+    margin-left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  .navbar-link,
+  .navbar-auth-link {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .navbar-auth {
+    order: unset;
+    width: 100%;
+    margin-left: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .navbar-user {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 0;
+  }
+
+  .navbar-user-name {
+    max-width: 100%;
+    text-align: center;
+  }
 }
 
 .footer-inner {
@@ -2180,7 +2329,7 @@ h1, h2, h3, h4, h5, h6,
   border: 1px solid var(--border-color);
   border-radius: 14px;
   background: var(--surface-color);
-  padding: 18px 16px 16px;
+  padding: 42px 16px 16px;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -2402,7 +2551,6 @@ h1, h2, h3, h4, h5, h6,
 
 .card-header {
   margin-bottom: 10px;
-  padding-top: 4px;
 }
 
 .card-header h2 {
@@ -4462,72 +4610,10 @@ h1, h2, h3, h4, h5, h6,
   }
 
   .navbar-inner {
-    flex-wrap: wrap;
-    gap: 10px;
     padding: 10px 14px;
     padding-top: calc(10px + env(safe-area-inset-top, 0px));
     padding-left: calc(14px + env(safe-area-inset-left, 0px));
     padding-right: calc(14px + env(safe-area-inset-right, 0px));
-  }
-
-  .navbar-menu-toggle {
-    display: inline-flex;
-  }
-
-  .navbar-panel {
-    display: none;
-    order: 4;
-    width: 100%;
-    flex-direction: column;
-    gap: 12px;
-    padding: 12px 0 4px;
-    border-top: 1px solid var(--border-color);
-  }
-
-  .navbar-panel.open {
-    display: flex;
-  }
-
-  .navbar-links {
-    order: unset;
-    width: 100%;
-    margin-left: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-    overflow: visible;
-    padding-bottom: 0;
-  }
-
-  .navbar-link,
-  .navbar-auth-link {
-    width: 100%;
-    min-height: 44px;
-    justify-content: center;
-    text-align: center;
-  }
-
-  .navbar-auth {
-    order: unset;
-    width: 100%;
-    margin-left: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 8px;
-  }
-
-  .navbar-user {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 8px 0;
-  }
-
-  .navbar-user-name {
-    max-width: 100%;
-    text-align: center;
   }
 
   .navbar-logo {
@@ -4844,7 +4930,7 @@ h1, h2, h3, h4, h5, h6,
   }
 
   .pricing-card {
-    padding: 18px 14px;
+    padding: 42px 14px 16px;
   }
 
   .alert-card,
@@ -4886,9 +4972,10 @@ h1, h2, h3, h4, h5, h6,
 
 /* ===== Admin console ===== */
 .admin-shell {
-  max-width: 1200px;
+  max-width: 1320px;
   margin: 0 auto;
   padding: 20px 16px 32px;
+  min-width: 0;
 }
 
 .admin-hero {
@@ -5110,6 +5197,81 @@ h1, h2, h3, h4, h5, h6,
   margin-bottom: 16px;
 }
 
+.admin-payment-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.admin-payment-summary-card {
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(165deg, var(--surface-color) 0%, var(--surface-muted) 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 10px 28px var(--shadow-color);
+}
+
+.admin-payment-summary-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, var(--border-strong), transparent);
+}
+
+.admin-payment-summary-card.tone-warning::before {
+  background: linear-gradient(90deg, var(--accent-color), #f59e0b);
+}
+
+.admin-payment-summary-card.tone-success::before {
+  background: linear-gradient(90deg, var(--success-color), #34d399);
+}
+
+.admin-payment-summary-card.tone-danger::before {
+  background: linear-gradient(90deg, var(--error-color), #f87171);
+}
+
+.admin-payment-summary-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.admin-payment-summary-line {
+  display: block;
+  font-family: var(--heading-font);
+  font-size: clamp(1.05rem, 2.4vw, 1.3rem);
+  line-height: 1.25;
+  color: var(--heading-color);
+}
+
+.admin-payment-summary-card.tone-warning .admin-payment-summary-line {
+  color: #b45309;
+}
+
+.admin-payment-summary-card.tone-success .admin-payment-summary-line {
+  color: var(--success-color);
+}
+
+.admin-payment-summary-card.tone-danger .admin-payment-summary-line {
+  color: var(--error-color);
+}
+
+.admin-payment-summary-empty {
+  margin-top: 8px;
+}
+
+.admin-payment-summary-loading {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-muted);
+}
+
 .admin-panel h3,
 .admin-form-section-title {
   margin: 0;
@@ -5181,6 +5343,7 @@ h1, h2, h3, h4, h5, h6,
 
 .admin-table-wrap {
   overflow-x: auto;
+  max-width: 100%;
   border-radius: 14px;
   border: 1px solid var(--border-color);
   background: var(--surface-color);
@@ -5189,13 +5352,13 @@ h1, h2, h3, h4, h5, h6,
 
 .admin-table {
   width: 100%;
-  min-width: 720px;
+  min-width: 640px;
   border-collapse: collapse;
 }
 
 .admin-table th,
 .admin-table td {
-  padding: 13px 16px;
+  padding: 12px 14px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
   font-size: 0.92rem;
@@ -5205,13 +5368,14 @@ h1, h2, h3, h4, h5, h6,
 .admin-table th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 2;
   background: var(--surface-muted);
   color: var(--heading-color);
   font-family: var(--heading-font);
   font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .admin-table tbody tr:hover {
@@ -5222,9 +5386,33 @@ h1, h2, h3, h4, h5, h6,
   border-bottom: none;
 }
 
+/* Keep the right-most column (usually row actions like "Manage") reachable
+   even when the table needs to scroll horizontally on narrower screens,
+   instead of letting it get pushed off-screen. */
+.admin-table th:last-child,
+.admin-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--surface-color);
+  box-shadow: -6px 0 8px -6px rgba(8, 28, 61, 0.12);
+}
+
+.admin-table th:last-child {
+  z-index: 3;
+  background: var(--surface-muted);
+}
+
+.admin-table tbody tr:hover td:last-child {
+  background: #fcf9f2;
+}
+
 .admin-table-empty {
+  position: static !important;
   text-align: center;
   color: var(--text-muted);
+  background: transparent !important;
+  box-shadow: none !important;
   padding: 28px 16px !important;
 }
 
@@ -5232,6 +5420,11 @@ h1, h2, h3, h4, h5, h6,
   margin: 6px 0 0;
   color: var(--text-muted-light);
   font-size: 0.88rem;
+}
+
+.admin-tier-cycle {
+  color: var(--text-muted);
+  font-size: 0.85em;
 }
 
 .admin-pagination {
@@ -5332,18 +5525,24 @@ h1, h2, h3, h4, h5, h6,
 }
 
 .admin-field input[type='number'],
-.admin-field input[type='search'] {
+.admin-field input[type='search'],
+.admin-field input[type='text'],
+.admin-input {
   width: 100%;
+  min-width: 0;
   padding: 11px 12px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
   background: var(--surface-color);
   color: var(--default-color);
+  font-size: 0.94rem;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .admin-field input[type='number']:focus,
-.admin-field input[type='search']:focus {
+.admin-field input[type='search']:focus,
+.admin-field input[type='text']:focus,
+.admin-input:focus {
   outline: none;
   border-color: var(--accent-color);
   box-shadow: 0 0 0 3px var(--accent-soft);
@@ -5530,6 +5729,10 @@ h1, h2, h3, h4, h5, h6,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .admin-payment-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .admin-weight-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -5565,7 +5768,8 @@ h1, h2, h3, h4, h5, h6,
   }
 
   .admin-meta-grid,
-  .admin-form-grid {
+  .admin-form-grid,
+  .admin-weight-grid {
     grid-template-columns: 1fr;
   }
 
@@ -5622,6 +5826,13 @@ h1, h2, h3, h4, h5, h6,
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--text-muted-light);
+  }
+
+  .admin-table td:last-child,
+  .admin-table th:last-child {
+    position: static;
+    box-shadow: none;
+    background: transparent;
   }
 
   .admin-table td:last-child {
@@ -5842,6 +6053,7 @@ h1, h2, h3, h4, h5, h6,
 
 @media (max-width: 480px) {
   .admin-stat-grid,
+  .admin-payment-summary-grid,
   .admin-weight-grid {
     grid-template-columns: 1fr;
   }

@@ -30,7 +30,7 @@ const TRADINGVIEW_CONFIG = {
     xagusd: { symbol: 'XAG/USD', exchange: 'FOREX' },
     us30: { symbol: 'US30', exchange: 'INDEX' },
     us100: { symbol: 'US100', exchange: 'INDEX' },
-    usdbtc: { symbol: 'USD/BTC', exchange: 'CRYPTO' },
+    usdbtc: { symbol: 'BTC/USD', exchange: 'CRYPTO' },
     audusd: { symbol: 'AUD/USD', exchange: 'FOREX' },
     usdjpy: { symbol: 'USD/JPY', exchange: 'FOREX' }
   }

@@ -296,7 +296,7 @@ function AppContent() {
         onLogout={handleLogout}
       />
 
-      <main className="site-main">
+      <main className={`site-main${currentPage === 'admin' ? ' site-main--admin' : ''}`}>
         {paymentNotice && (
           <div className="page-notice info-box">{paymentNotice}</div>
         )}

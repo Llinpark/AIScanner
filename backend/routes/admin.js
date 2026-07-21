@@ -25,6 +25,7 @@ const { parseAdminEmails } = require('../utils/adminAccess');
 
 const SUBSCRIPTION_TIERS = new Set(['basic', 'professional', 'premium']);
 const SUBSCRIPTION_STATUSES = new Set(['inactive', 'pending', 'active', 'cancelled']);
+const SUBSCRIPTION_BILLING_CYCLES = new Set(['weekly', 'monthly']);
 
 function createAdminRouter({ io } = {}) {
   const router = express.Router();
@@ -182,13 +183,17 @@ function createAdminRouter({ io } = {}) {
         subscription.provider = body.provider;
       }
 
+      if (body.billingCycle && SUBSCRIPTION_BILLING_CYCLES.has(body.billingCycle)) {
+        subscription.billingCycle = body.billingCycle;
+      }
+
       if (body.activate === true) {
         subscription.status = 'active';
         subscription.tier = body.tier && SUBSCRIPTION_TIERS.has(body.tier) ? body.tier : subscription.tier || 'premium';
         subscription.provider = body.provider || subscription.provider || 'mock';
         const extendDays = Math.max(1, parseInt(body.extendDays, 10) || SUBSCRIPTION_PERIOD_DAYS);
         subscription.current_period_end = new Date(Date.now() + extendDays * 24 * 60 * 60 * 1000);
-        actionSummary = `Activated ${subscription.tier} for ${extendDays} days`;
+        actionSummary = `Activated ${subscription.tier} (${subscription.billingCycle || 'monthly'}) for ${extendDays} days`;
       } else if (body.extendDays) {
         const extendDays = Math.max(1, parseInt(body.extendDays, 10) || 0);
         const base = subscription.current_period_end && new Date(subscription.current_period_end) > new Date()
@@ -436,6 +441,43 @@ function createAdminRouter({ io } = {}) {
     } catch (error) {
       console.error('Admin payments error:', error);
       res.status(500).json({ message: 'Unable to load payments', error: error.message });
+    }
+  });
+
+  router.get('/payments/summary', async (req, res) => {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return res.json({ summary: {} });
+      }
+
+      const rows = await PaymentTransaction.aggregate([
+        {
+          $group: {
+            _id: { status: '$status', currency: '$currency' },
+            total: { $sum: '$amount' },
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+
+      const summary = { pending: [], completed: [], failed: [], cancelled: [] };
+      rows.forEach(row => {
+        const status = row._id.status;
+        const currency = row._id.currency || 'N/A';
+        if (!summary[status]) {
+          summary[status] = [];
+        }
+        summary[status].push({ currency, total: row.total, count: row.count });
+      });
+
+      Object.values(summary).forEach(bucket => {
+        bucket.sort((a, b) => a.currency.localeCompare(b.currency));
+      });
+
+      res.json({ summary });
+    } catch (error) {
+      console.error('Admin payments summary error:', error);
+      res.status(500).json({ message: 'Unable to load payments summary', error: error.message });
     }
   });
 

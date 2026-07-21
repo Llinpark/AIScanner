@@ -12,7 +12,7 @@ const {
 const TWELVE_DATA_SYMBOL_MAP = {
   US30: 'DJI',
   US100: 'NDX',
-  'USD/BTC': 'BTC/USD'
+  'BTC/USD': 'BTC/USD'
 };
 
 const TWELVE_DATA_INTERVAL_MAP = {

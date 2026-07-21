@@ -136,6 +136,7 @@ export const adminApi = {
   closeStaleSignals: payload => api.post('/api/admin/signals/close-stale', payload),
   updateSignalOutcome: (id, payload) => api.patch(`/api/admin/signals/${id}/outcome`, payload),
   getPayments: (params = {}) => api.get('/api/admin/payments', { params }),
+  getPaymentsSummary: () => api.get('/api/admin/payments/summary'),
   getAuditLog: (params = {}) => api.get('/api/admin/audit-log', { params }),
   getScannerConfig: () => api.get('/api/admin/scanner/config'),
   updateScannerConfig: payload => api.patch('/api/admin/scanner/config', payload),

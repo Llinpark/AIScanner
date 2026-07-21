@@ -2,7 +2,7 @@
 const { WEBHOOK_MPESA_URL, WEBHOOK_BINANCE_URL, WEBHOOK_SASAPAY_URL } = require('./appUrls');
 const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
-const ALL_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W'];
+const ALL_TIMEFRAMES = ['1M', '1W', '1D', '4h', '1h', '30m', '15m', '5m', '1m'];
 
 const TIERS = {
   basic: {
@@ -18,8 +18,8 @@ const TIERS = {
     features: [
       'AI Alerts',
       'TradingView Alerts',
-      '5 markets (EUR/USD, GBP/USD, XAU/USD, USD/BTC, USD/JPY)',
-      '2 timeframes (1m, 1h)',
+      '5 markets (EUR/USD, GBP/USD, XAU/USD, BTC/USD, USD/JPY)',
+      '4 timeframes (1h, 15m, 3m, 1m)',
       '7-day signal history'
     ]
   },
@@ -36,7 +36,7 @@ const TIERS = {
     features: [
       'Everything in Basic',
       'Most major markets (9 symbols incl. gold & indices)',
-      '4 timeframes (1m, 15m, 1h, 4h)',
+      '6 timeframes (4h, 1h, 30m, 15m, 5m, 1m)',
       'Confidence score',
       'News filter',
       'Performance dashboard',
@@ -80,8 +80,8 @@ const TIER_FEATURES = {
   basic: {
     aiAlerts: true,
     tradingViewAlerts: true,
-    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'USD/BTC', 'USD/JPY'],
-    timeframes: ['1m', '1h'],
+    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'BTC/USD', 'USD/JPY'],
+    timeframes: ['1h', '15m', '3m', '1m'],
     showConfidence: false,
     newsFilter: false,
     performanceDashboard: false,
@@ -111,9 +111,9 @@ const TIER_FEATURES = {
       'USD/JPY',
       'US30',
       'US100',
-      'USD/BTC'
+      'BTC/USD'
     ],
-    timeframes: ['1m', '15m', '1h', '4h'],
+    timeframes: ['4h', '1h', '30m', '15m', '5m', '1m'],
     showConfidence: true,
     newsFilter: true,
     performanceDashboard: true,
@@ -159,7 +159,7 @@ const FEATURE_MATRIX = [
   { key: 'aiAlerts', label: 'AI Alerts', basic: true, professional: true, premium: true },
   { key: 'tradingViewAlerts', label: 'TradingView Alerts', basic: true, professional: true, premium: true },
   { key: 'currencyPairs', label: 'Currency Pairs', basic: 'Limited', professional: 'Most', premium: 'All' },
-  { key: 'timeframes', label: 'Timeframes', basic: '2', professional: '4', premium: 'All' },
+  { key: 'timeframes', label: 'Timeframes', basic: '4', professional: '6', premium: 'All' },
   { key: 'showConfidence', label: 'Confidence Score', basic: false, professional: true, premium: true },
   { key: 'newsFilter', label: 'News Filter', basic: false, professional: true, premium: true },
   { key: 'performanceDashboard', label: 'Performance Dashboard', basic: false, professional: true, premium: true },

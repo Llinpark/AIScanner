@@ -15,7 +15,7 @@ const MT5_SYMBOL_MAP = {
   'GBP/JPY': 'GBPJPY',
   US30: 'US30',
   US100: 'US100',
-  'USD/BTC': 'BTCUSD'
+  'BTC/USD': 'BTCUSD'
 };
 
 function toMt5Symbol(symbol, suffix = '') {

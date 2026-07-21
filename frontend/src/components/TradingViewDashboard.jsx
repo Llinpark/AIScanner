@@ -4,7 +4,7 @@ import { tradingviewApi, subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
-import { alertMatchesSymbol, normalizeMarketSymbol } from '../constants/markets';
+import { alertMatchesSymbol } from '../constants/markets';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -101,19 +101,36 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   }, [symbols, historySymbol, chartSymbol]);
 
   useEffect(() => {
-    if (!subscribed) return;
-    subscriptionApi
-      .getMe()
-      .then(res => {
-        if (res.data.tierFeatures) {
-          setTierLimits(res.data.tierFeatures);
-          const pairs = res.data.allowedCurrencyPairs || res.data.tierFeatures.currencyPairs || ['EUR/USD'];
-          const frames = res.data.tierFeatures.timeframes || ['1h'];
-          if (!pairs.includes(historySymbol)) setHistorySymbol(pairs[0]);
-          if (!frames.includes(selectedTimeframe)) setSelectedTimeframe(frames[0]);
-        }
-      })
-      .catch(() => {});
+    if (!subscribed) return undefined;
+    let cancelled = false;
+    let retryTimer = null;
+
+    const loadTierLimits = () => {
+      subscriptionApi
+        .getMe()
+        .then(res => {
+          if (cancelled) return;
+          if (res.data.tierFeatures) {
+            setTierLimits(res.data.tierFeatures);
+            const pairs = res.data.allowedCurrencyPairs || res.data.tierFeatures.currencyPairs || ['EUR/USD'];
+            const frames = res.data.tierFeatures.timeframes || ['1h'];
+            if (!pairs.includes(historySymbol)) setHistorySymbol(pairs[0]);
+            if (!frames.includes(selectedTimeframe)) setSelectedTimeframe(frames[0]);
+          }
+        })
+        .catch(() => {
+          // Transient network/API errors shouldn't permanently strand the UI on the
+          // fallback 2-pair default — retry a few seconds later.
+          if (!cancelled) retryTimer = window.setTimeout(loadTierLimits, 5000);
+        });
+    };
+
+    loadTierLimits();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
   }, [subscribed, subscription]);
 
   const fetchSetup = useCallback(async () => {
@@ -242,15 +259,27 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   };
 
   const displayAlerts = useMemo(() => {
-    const source = liveAlerts.length ? liveAlerts : alerts;
-    const allowed = new Set(symbols.map(normalizeMarketSymbol));
+    // The backend (`/api/tradingview/alerts`, `filterSignalsForTier`) already restricts
+    // results to the user's allowed currency pairs, so we only need to apply the user's
+    // own manual symbol dropdown selection here. Re-filtering client-side against the
+    // locally-cached `symbols` list is redundant and, if that list is still on its
+    // fallback default (e.g. `/api/subscription/me` hasn't resolved yet), would wrongly
+    // hide real alerts the server already returned for other pairs.
+    // Merge (instead of replace) so a single incoming live alert doesn't hide the
+    // broader, properly tier-filtered history already loaded from the REST endpoint.
+    const byId = new Map();
+    for (const alert of alerts) {
+      byId.set(String(alert.id || alert._id), alert);
+    }
+    for (const alert of liveAlerts) {
+      byId.set(String(alert.id || alert._id), alert);
+    }
+    const merged = Array.from(byId.values()).sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
 
-    return source.filter(alert => {
-      const normalized = normalizeMarketSymbol(alert.symbol);
-      if (!allowed.has(normalized)) return false;
-      return alertMatchesSymbol(alert, liveFilter);
-    });
-  }, [liveAlerts, alerts, liveFilter, symbols]);
+    return merged.filter(alert => alertMatchesSymbol(alert, liveFilter));
+  }, [liveAlerts, alerts, liveFilter]);
 
   return (
     <div className="tv-dashboard">
