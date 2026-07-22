@@ -265,8 +265,8 @@ export default function AdminUsers() {
                         </td>
                         <td data-label="Period end">{formatDate(user.subscription?.current_period_end)}</td>
                         <td data-label="Role">
-                          <span className={`admin-pill ${user.role === 'admin' || user.isAdmin ? 'role-admin' : 'role-user'}`}>
-                            {user.role === 'admin' || user.isAdmin ? 'admin' : 'user'}
+                          <span className={`admin-pill ${user.isAdmin || user.role === 'admin' || user.role === 'super_admin' ? 'role-admin' : 'role-user'}`}>
+                            {user.role === 'super_admin' ? 'super admin' : user.role === 'admin' || user.isAdmin ? 'admin' : 'user'}
                           </span>
                         </td>
                         <td data-label="Joined">{formatDate(user.createdAt)}</td>

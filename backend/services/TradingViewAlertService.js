@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 const Signal = require('../models/Signal');
 const UserConfig = require('../models/User');
-const { canAccessLiveAlerts } = require('../utils/subscriptionAccess');
+const { userCanAccessLiveAlerts, getEffectiveSubscription } = require('../utils/subscriptionAccess');
 const devUserStore = require('../utils/devUserStore');
 const {
   KACHING_ALERT_NAMES,
@@ -104,12 +104,12 @@ function toLiveAlertPayload(signalDoc) {
 }
 
 function toSubscriberRecord(user) {
-  if (!user || !canAccessLiveAlerts(user.subscription)) return null;
+  if (!user || !userCanAccessLiveAlerts(user)) return null;
   return {
     id: user._id?.toString() || user.id,
     email: user.email,
     displayName: user.displayName,
-    subscription: user.subscription,
+    subscription: getEffectiveSubscription(user),
     telegram: user.telegram || null,
     mt5: user.mt5 || null
   };

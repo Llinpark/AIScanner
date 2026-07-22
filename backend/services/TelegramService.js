@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
-const { hasTierFeature, getTierDisplayName } = require('../utils/subscriptionAccess');
+const { userHasTierFeature, getEffectiveSubscription, getTierDisplayName } = require('../utils/subscriptionAccess');
 const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { isEntryAlert } = require('../utils/signalOutcome');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
@@ -187,7 +187,7 @@ function formatSignalMessage(signal, subscriber = null) {
     `<b>Kaching TP3:</b> ${Number(signal.take_profit_3).toFixed(5)}`
   ];
 
-  if (subscriber && hasTierFeature(subscriber.subscription, 'autoLotSizing')) {
+  if (subscriber && userHasTierFeature(subscriber, 'autoLotSizing')) {
     const lotSize = Mt5TradeCopierService.computeLotSize(signal, subscriber);
     if (lotSize) {
       lines.push(`<b>Auto Lot Size:</b> ${Number(lotSize).toFixed(2)}`);
@@ -202,7 +202,7 @@ function formatSignalMessage(signal, subscriber = null) {
     lines.push(`\n<i>${escapeHtml(signal.tradeExplanation)}</i>`);
   }
 
-  if (isEntryAlert(alertType) && subscriber && hasTierFeature(subscriber.subscription, 'mt5Execution')) {
+  if (isEntryAlert(alertType) && subscriber && userHasTierFeature(subscriber, 'mt5Execution')) {
     lines.push('\n<i>Tap Execute to copy this trade to MT5 — entry, SL, TP, and lot size are filled automatically.</i>');
   }
 
@@ -220,7 +220,7 @@ function parseExecuteCallbackData(data) {
 }
 
 function buildSignalReplyMarkup(signal, subscriber) {
-  if (!subscriber || !hasTierFeature(subscriber.subscription, 'mt5Execution')) {
+  if (!subscriber || !userHasTierFeature(subscriber, 'mt5Execution')) {
     return null;
   }
 
@@ -242,7 +242,7 @@ function buildSignalReplyMarkup(signal, subscriber) {
 }
 
 async function notifySubscriber(subscriber, signalDoc) {
-  if (!subscriber || !hasTierFeature(subscriber.subscription, 'telegramAlerts')) {
+  if (!subscriber || !userHasTierFeature(subscriber, 'telegramAlerts')) {
     return false;
   }
 
@@ -288,7 +288,7 @@ async function linkByCode(code, chatId, username) {
   if (!userId) return { ok: false, reason: 'invalid_or_expired_code' };
 
   const user = await findUserById(userId);
-  if (!user || !hasTierFeature(user.subscription, 'telegramAlerts')) {
+  if (!user || !userHasTierFeature(user, 'telegramAlerts')) {
     return { ok: false, reason: 'subscription_required' };
   }
 
@@ -299,8 +299,8 @@ async function linkByCode(code, chatId, username) {
 async function getPublicStatus(user) {
   const config = getConfig();
   const telegram = user?.telegram || {};
-  const tier = user?.subscription?.tier || 'basic';
-  const enabledFeature = hasTierFeature(user?.subscription, 'telegramAlerts');
+  const tier = getEffectiveSubscription(user).tier || 'basic';
+  const enabledFeature = userHasTierFeature(user, 'telegramAlerts');
 
   return {
     configured: isConfigured(),

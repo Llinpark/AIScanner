@@ -43,7 +43,7 @@ const UserConfigSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
   },
-  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  role: { type: String, enum: ['user', 'admin', 'super_admin'], default: 'user' },
   emailVerified: { type: Boolean, default: false },
   emailVerificationToken: { type: String, default: null },
   emailVerificationExpiresAt: { type: Date, default: null },

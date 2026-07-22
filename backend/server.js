@@ -82,8 +82,10 @@ const requireTradingViewAccess = require('./middleware/requireTradingViewAccess'
 const validateRequest = require('./middleware/validate');
 const { subscribeValidators } = require('./validators/authValidators');
 const {
-  canAccessLiveAlerts,
-  canAccessTradingViewAlerts,
+  userCanAccessLiveAlerts,
+  userCanAccessTradingViewAlerts,
+  withEffectiveAccess,
+  getEffectiveSubscription,
   getTierFeatures,
   getTierDisplayName,
   historyCutoffDate,
@@ -1496,8 +1498,8 @@ app.get('/api/tradingview/accounts/:username', requireAuth, requireSubscription,
     res.json({
       username,
       tradingviewUsername: user.tradingviewUsername,
-      liveAlertsEnabled: canAccessTradingViewAlerts(user.subscription),
-      subscription: user.subscription
+      liveAlertsEnabled: userCanAccessTradingViewAlerts(user),
+      subscription: getEffectiveSubscription(user)
     });
   } catch (error) {
     console.error('Get TradingView accounts error:', error);
@@ -1789,11 +1791,11 @@ io.use(async (socket, next) => {
       return next(new Error('Invalid session'));
     }
 
-    if (!canAccessLiveAlerts(user.subscription)) {
+    if (!userCanAccessLiveAlerts(user)) {
       return next(new Error('Active subscription required for live alerts'));
     }
 
-    socket.user = user;
+    socket.user = withEffectiveAccess(user);
     socket.userId = user._id?.toString() || user.id;
     socket.join(`user:${socket.userId}`);
     next();
@@ -1826,7 +1828,7 @@ io.on('connection', socket => {
       const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
       const linkedTv = TradingViewAlertService.normalizeTradingViewUsername(user?.tradingviewUsername);
 
-      if (linkedTv !== normalizedTv || !canAccessTradingViewAlerts(user.subscription)) {
+      if (linkedTv !== normalizedTv || !userCanAccessTradingViewAlerts(user)) {
         socket.emit('tv:subscribe-error', { message: 'Unable to subscribe to live alerts for this TradingView username.' });
         return;
       }

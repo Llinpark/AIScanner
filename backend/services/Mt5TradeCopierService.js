@@ -4,7 +4,7 @@ const TradeExecution = require('../models/TradeExecution');
 const Signal = require('../models/Signal');
 const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
-const { hasTierFeature } = require('../utils/subscriptionAccess');
+const { userHasTierFeature } = require('../utils/subscriptionAccess');
 const { computeRiskMetrics } = require('../utils/signalRisk');
 const { toMt5Symbol, mt5OrderType } = require('../utils/mt5Symbols');
 const { isEntryAlert } = require('../utils/signalOutcome');
@@ -163,7 +163,7 @@ async function createExecution(user, signalDoc) {
     return { ok: false, reason: 'not_entry_signal' };
   }
 
-  if (!hasTierFeature(user.subscription, 'mt5Execution')) {
+  if (!userHasTierFeature(user, 'mt5Execution')) {
     return { ok: false, reason: 'subscription_required' };
   }
 
@@ -182,7 +182,7 @@ async function createExecution(user, signalDoc) {
   }
 
   let lotSize = computeLotSize(signal, user);
-  if ((!lotSize || lotSize <= 0) && hasTierFeature(user.subscription, 'autoLotSizing')) {
+  if ((!lotSize || lotSize <= 0) && userHasTierFeature(user, 'autoLotSizing')) {
     lotSize = 0.01;
   }
   if (!lotSize || lotSize <= 0) {
@@ -204,8 +204,8 @@ async function createExecution(user, signalDoc) {
     lotSize: Number(lotSize.toFixed(2)),
     riskPercent: Number(mt5.riskPercent || 1),
     accountBalance: Number(mt5.accountBalance || 0) || null,
-    trailingStop: hasTierFeature(user.subscription, 'trailingStop'),
-    breakEven: hasTierFeature(user.subscription, 'breakEvenAutomation'),
+    trailingStop: userHasTierFeature(user, 'trailingStop'),
+    breakEven: userHasTierFeature(user, 'breakEvenAutomation'),
     status: 'pending',
     source: 'telegram'
   };
@@ -297,7 +297,7 @@ async function reportExecution(token, payload = {}) {
 async function getPublicStatus(user) {
   const mt5 = user?.mt5 || defaultMt5Config();
   const userId = user._id?.toString() || user.id;
-  const featureEnabled = hasTierFeature(user?.subscription, 'mt5Execution');
+  const featureEnabled = userHasTierFeature(user, 'mt5Execution');
 
   let pendingCount = 0;
   let recentExecutions = [];

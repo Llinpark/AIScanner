@@ -4,8 +4,20 @@ const { FRONTEND_URL } = require('../config/appUrls');
 const APP_NAME = process.env.EMAIL_APP_NAME || 'KachingScanner';
 const EMAIL_FROM = process.env.EMAIL_FROM || `${APP_NAME} <noreply@kachingscanner.com>`;
 
+function getResendApiKey() {
+  return (
+    process.env.RESEND_API_KEY ||
+    (String(process.env.SMTP_HOST || '').includes('resend.com') ? process.env.SMTP_PASS : null) ||
+    null
+  );
+}
+
 function isSmtpConfigured() {
   return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+}
+
+function isMailConfigured() {
+  return Boolean(getResendApiKey() || isSmtpConfigured());
 }
 
 function createTransport() {
@@ -16,6 +28,7 @@ function createTransport() {
     host: process.env.SMTP_HOST,
     port,
     secure: process.env.SMTP_SECURE === 'true' || port === 465,
+    requireTLS: port === 587,
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS
@@ -33,17 +46,56 @@ async function getTransport() {
   return transportPromise;
 }
 
+async function sendViaResendApi({ to, subject, text, html }) {
+  const apiKey = getResendApiKey();
+  if (!apiKey) return null;
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: EMAIL_FROM,
+      to: [to],
+      subject,
+      text,
+      html
+    })
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = body?.message || body?.error || response.statusText || 'Resend API error';
+    const err = new Error(`Resend API ${response.status}: ${detail}`);
+    err.status = response.status;
+    err.body = body;
+    throw err;
+  }
+
+  console.log('[mailer] Resend API accepted email', { to, id: body.id, subject });
+  return { provider: 'resend_api', id: body.id };
+}
+
 async function sendMail({ to, subject, text, html }) {
-  const transport = await getTransport();
   const payload = { from: EMAIL_FROM, to, subject, text, html };
 
+  // Prefer Resend HTTPS API — Fly.io often blocks outbound SMTP ports.
+  if (getResendApiKey()) {
+    return sendViaResendApi({ to, subject, text, html });
+  }
+
+  const transport = await getTransport();
   if (!transport) {
-    console.log('[mailer] SMTP not configured — email logged to console:');
+    console.warn('[mailer] SMTP/Resend not configured — email logged to console:');
     console.log(JSON.stringify({ to, subject, text }, null, 2));
     return { logged: true };
   }
 
-  return transport.sendMail(payload);
+  const info = await transport.sendMail(payload);
+  console.log('[mailer] SMTP accepted email', { to, messageId: info.messageId, subject });
+  return { provider: 'smtp', id: info.messageId };
 }
 
 function verificationLink(token) {
@@ -113,5 +165,6 @@ async function sendPasswordResetEmail({ to, token, displayName }) {
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
-  isSmtpConfigured
+  isSmtpConfigured,
+  isMailConfigured
 };

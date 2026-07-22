@@ -3,6 +3,7 @@ const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
 const { verifyToken } = require('../utils/auth');
 const { extractAuthToken } = require('../utils/sessionCookies');
+const { withEffectiveAccess } = require('../utils/subscriptionAccess');
 
 async function resolveUserById(userId) {
   if (!userId) return null;
@@ -31,7 +32,8 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ message: 'Session expired. Please sign in again.' });
     }
 
-    req.user = user;
+    // Request-scoped effective subscription (admins → active premium). Does not write to DB.
+    req.user = withEffectiveAccess(user);
     req.userId = user._id?.toString() || user.id;
     next();
   } catch (error) {

@@ -4,6 +4,7 @@ const UserConfig = require('../models/User');
 const PaymentTransaction = require('../models/PaymentTransaction');
 const ReferralCommission = require('../models/ReferralCommission');
 const { FRONTEND_URL } = require('../config/appUrls');
+const { hasFullAccess, getEffectiveSubscription } = require('../utils/subscriptionAccess');
 
 const FIRST_COMMISSION_RATE = Number(process.env.REFERRAL_COMMISSION_FIRST_RATE || 0.15);
 const RENEWAL_COMMISSION_RATE = Number(process.env.REFERRAL_COMMISSION_RENEWAL_RATE || 0.05);
@@ -13,7 +14,8 @@ function isDbReady() {
 }
 
 function isActiveSubscriber(user) {
-  return String(user?.subscription?.status || '').toLowerCase() === 'active';
+  if (hasFullAccess(user)) return true;
+  return String(getEffectiveSubscription(user)?.status || '').toLowerCase() === 'active';
 }
 
 function normalizeReferralCode(code) {

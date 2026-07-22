@@ -5,6 +5,56 @@ const {
   ALL_CURRENCY_PAIRS
 } = require('../config/subscriptions');
 const { normalizeSymbol } = require('../config/symbols');
+const { isAdmin } = require('./adminAccess');
+
+/** Far-future period end so admin bypass stays "active" in expiry checks. */
+const ADMIN_ACCESS_PERIOD_END = new Date('2099-12-31T23:59:59.000Z');
+
+function hasFullAccess(user) {
+  return isAdmin(user);
+}
+
+/**
+ * Computed subscription used for feature gates and API/UI responses.
+ * Admins/super_admins get active premium without requiring a paid plan in DB.
+ */
+function getEffectiveSubscription(user) {
+  if (!user) {
+    return { status: 'inactive', tier: 'basic' };
+  }
+
+  const raw = user.subscription?.toObject?.() || user.subscription || {};
+
+  if (!hasFullAccess(user)) {
+    return {
+      ...raw,
+      status: raw.status || 'inactive',
+      tier: raw.tier || 'basic'
+    };
+  }
+
+  return {
+    ...raw,
+    tier: 'premium',
+    status: 'active',
+    provider: raw.provider || 'admin',
+    billingCycle: raw.billingCycle || 'monthly',
+    current_period_end: ADMIN_ACCESS_PERIOD_END,
+    adminBypass: true
+  };
+}
+
+/** Plain request-scoped user with effective subscription (does not mutate DB docs). */
+function withEffectiveAccess(user) {
+  if (!user) return user;
+  const base = user.toObject ? user.toObject() : { ...user };
+  return {
+    ...base,
+    _id: user._id || base._id,
+    id: user._id?.toString?.() || user.id || base.id,
+    subscription: getEffectiveSubscription(user)
+  };
+}
 
 function isSubscriptionActive(subscription) {
   if (!subscription) return false;
@@ -27,7 +77,12 @@ function getTierFeatures(subscriptionOrTier) {
     typeof subscriptionOrTier === 'string'
       ? subscriptionOrTier
       : getTierName(subscriptionOrTier);
-  return TIER_FEATURES[tier] || TIER_FEATURES.basic;
+  const features = TIER_FEATURES[tier] || TIER_FEATURES.basic;
+  // Premium (and admin bypass) includes API access used by /api/v1/signals.
+  if (tier === 'premium' && features.apiAccess == null) {
+    return { ...features, apiAccess: true, propFirmMode: true };
+  }
+  return features;
 }
 
 function getTierDisplayName(tierKey) {
@@ -137,7 +192,23 @@ function hasTierFeature(subscription, featureKey) {
   return Boolean(getTierFeatures(subscription)[featureKey]);
 }
 
+/** User-aware wrappers for services that load users from DB (not via requireAuth). */
+function userCanAccessLiveAlerts(user) {
+  return canAccessLiveAlerts(getEffectiveSubscription(user));
+}
+
+function userCanAccessTradingViewAlerts(user) {
+  return canAccessTradingViewAlerts(getEffectiveSubscription(user));
+}
+
+function userHasTierFeature(user, featureKey) {
+  return hasTierFeature(getEffectiveSubscription(user), featureKey);
+}
+
 module.exports = {
+  hasFullAccess,
+  getEffectiveSubscription,
+  withEffectiveAccess,
   isSubscriptionActive,
   getTierName,
   getTierFeatures,
@@ -154,5 +225,8 @@ module.exports = {
   minimumTierDisplayForFeature,
   canAccessLiveAlerts,
   canAccessTradingViewAlerts,
-  hasTierFeature
+  hasTierFeature,
+  userCanAccessLiveAlerts,
+  userCanAccessTradingViewAlerts,
+  userHasTierFeature
 };

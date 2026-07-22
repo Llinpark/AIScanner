@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { WEBHOOK_TRADINGVIEW_URL } = require('../config/appUrls');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { generateLicenseToken } = require('../utils/webhookSecurity');
-const { getTierDisplayName } = require('../utils/subscriptionAccess');
+const { getTierDisplayName, getEffectiveSubscription } = require('../utils/subscriptionAccess');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'kaching-scanner.pine.template');
 
@@ -38,7 +38,7 @@ function renderTemplate(template, variables) {
 
 function generateForUser(user, options = {}) {
   const userId = user._id?.toString() || user.id || '';
-  const subscription = user.subscription || {};
+  const subscription = getEffectiveSubscription(user);
   const tier = subscription.tier || 'basic';
   const risk = PATTERN_SCANNER_CONFIG.risk || {};
   const webhookUrl = options.webhookUrl || WEBHOOK_TRADINGVIEW_URL;

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useAuth } from '../context/AuthContext';
 import AdminLayout from './AdminLayout';
 import AdminDashboard from './AdminDashboard';
 import AdminUsers from './AdminUsers';
@@ -9,14 +10,24 @@ import AdminReferrals from './AdminReferrals';
 import AdminAuditLog from './AdminAuditLog';
 
 export default function AdminHub({ initialTab = 'dashboard' }) {
-  const [activeTab, setActiveTab] = useState(initialTab);
+  const { user } = useAuth();
+  const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
+  const resolvedInitial =
+    initialTab === 'scanner' && !canManageScanner ? 'dashboard' : initialTab;
+  const [activeTab, setActiveTab] = useState(resolvedInitial);
+
+  useEffect(() => {
+    if (activeTab === 'scanner' && !canManageScanner) {
+      setActiveTab('dashboard');
+    }
+  }, [activeTab, canManageScanner]);
 
   return (
     <AdminLayout activeTab={activeTab} onTabChange={setActiveTab}>
       {activeTab === 'dashboard' && <AdminDashboard />}
       {activeTab === 'users' && <AdminUsers />}
       {activeTab === 'signals' && <AdminSignals />}
-      {activeTab === 'scanner' && <AdminScanner />}
+      {activeTab === 'scanner' && canManageScanner && <AdminScanner />}
       {activeTab === 'payments' && <AdminPayments />}
       {activeTab === 'referrals' && <AdminReferrals />}
       {activeTab === 'audit' && <AdminAuditLog />}

@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 const UserConfig = require('../models/User');
-const { canAccessTradingViewAlerts } = require('../utils/subscriptionAccess');
+const {
+  getEffectiveSubscription,
+  userCanAccessTradingViewAlerts,
+  withEffectiveAccess
+} = require('../utils/subscriptionAccess');
 const devUserStore = require('../utils/devUserStore');
 
 async function requireTradingViewAccess(req, res, next) {
@@ -23,14 +27,14 @@ async function requireTradingViewAccess(req, res, next) {
       }
     }
 
-    if (!user || !canAccessTradingViewAlerts(user.subscription)) {
+    if (!user || !userCanAccessTradingViewAlerts(user)) {
       return res.status(403).json({
         message: 'Active subscription required to access TradingView live alerts.',
-        subscription: user?.subscription || { status: 'inactive', tier: 'basic' }
+        subscription: getEffectiveSubscription(user)
       });
     }
 
-    req.tvUser = user;
+    req.tvUser = withEffectiveAccess(user);
     next();
   } catch (error) {
     return res.status(500).json({ message: 'Unable to verify subscription access', error: error.message });

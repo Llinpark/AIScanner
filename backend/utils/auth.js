@@ -31,7 +31,8 @@ function normalizeSubscription(subscription) {
   return rest;
 }
 
-const { isAdmin } = require('./adminAccess');
+const { isAdmin, isSuperAdmin } = require('./adminAccess');
+const { getEffectiveSubscription } = require('./subscriptionAccess');
 
 function sanitizeUser(user) {
   const obj = user.toObject ? user.toObject() : { ...user };
@@ -44,8 +45,11 @@ function sanitizeUser(user) {
     phone: obj.phone,
     role,
     isAdmin: isAdmin(obj),
+    isSuperAdmin: isSuperAdmin(obj),
+    canManageScannerConfig: isSuperAdmin(obj),
     emailVerified: obj.emailVerified !== false,
-    subscription: normalizeSubscription(obj.subscription),
+    // Admins get computed premium access even if DB subscription is inactive.
+    subscription: normalizeSubscription(getEffectiveSubscription(obj)),
     createdAt: obj.createdAt
   };
 }

@@ -6,6 +6,7 @@ const PaymentTransaction = require('../models/PaymentTransaction');
 const AdminAuditLog = require('../models/AdminAuditLog');
 const requireAuth = require('../middleware/requireAuth');
 const requireAdmin = require('../middleware/requireAdmin');
+const requireSuperAdmin = require('../middleware/requireSuperAdmin');
 const { sanitizeUser } = require('../utils/auth');
 const { logAdminAction } = require('../utils/adminAudit');
 const {
@@ -21,7 +22,7 @@ const { activateSubscription, SUBSCRIPTION_PERIOD_DAYS } = require('../services/
 const ReferralService = require('../services/ReferralService');
 const { getScannerConfig, applyScannerConfig } = require('../utils/scannerRuntimeConfig');
 const WeightLearningService = require('../services/WeightLearningService');
-const { parseAdminEmails } = require('../utils/adminAccess');
+const { parseAdminEmails, canManageScannerConfig } = require('../utils/adminAccess');
 
 const SUBSCRIPTION_TIERS = new Set(['basic', 'professional', 'premium']);
 const SUBSCRIPTION_STATUSES = new Set(['inactive', 'pending', 'active', 'cancelled']);
@@ -72,17 +73,26 @@ function createAdminRouter({ io } = {}) {
       }
 
       const scannerStatus = MarketScannerService.getScannerStatus();
-      const scannerConfig = getScannerConfig();
+      const canSeeScannerConfig = canManageScannerConfig(req.user);
 
       res.json({
         dbConnected,
         users: userStats,
         signals: signalStats,
         payments: paymentStats,
-        scanner: {
-          ...scannerStatus,
-          config: scannerConfig
-        },
+        scanner: canSeeScannerConfig
+          ? {
+              ...scannerStatus,
+              config: getScannerConfig()
+            }
+          : {
+              pipeline: {
+                enabled: Boolean(scannerStatus?.pipeline?.enabled),
+                htfTimeframe: scannerStatus?.pipeline?.htfTimeframe
+              },
+              buffers: scannerStatus?.buffers || []
+            },
+        canManageScannerConfig: canSeeScannerConfig,
         adminEmailsConfigured: parseAdminEmails().length
       });
     } catch (error) {
@@ -119,7 +129,9 @@ function createAdminRouter({ io } = {}) {
       res.json({
         users: users.map(user => ({
           ...sanitizeUser(user),
-          role: user.role || 'user'
+          role: user.role || 'user',
+          // Keep stored billing state for admin management (not computed admin bypass).
+          subscription: user.subscription || {}
         })),
         page,
         limit,
@@ -522,14 +534,14 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/scanner/config', (req, res) => {
+  router.get('/scanner/config', requireSuperAdmin, (req, res) => {
     res.json({
       config: getScannerConfig(),
       status: MarketScannerService.getScannerStatus()
     });
   });
 
-  router.patch('/scanner/config', async (req, res) => {
+  router.patch('/scanner/config', requireSuperAdmin, async (req, res) => {
     try {
       const updated = applyScannerConfig(req.body || {});
 
@@ -559,7 +571,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/learning/status', async (req, res) => {
+  router.get('/learning/status', requireSuperAdmin, async (req, res) => {
     try {
       const status = await WeightLearningService.getCurrentWeights();
       res.json({ status });
@@ -569,7 +581,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/learning/weights', async (req, res) => {
+  router.get('/learning/weights', requireSuperAdmin, async (req, res) => {
     try {
       const status = await WeightLearningService.getCurrentWeights();
       res.json({
@@ -586,7 +598,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.post('/learning/retrain', async (req, res) => {
+  router.post('/learning/retrain', requireSuperAdmin, async (req, res) => {
     try {
       const result = await WeightLearningService.retrain({
         limit: req.body?.limit ? Number(req.body.limit) : undefined

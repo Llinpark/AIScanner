@@ -59,7 +59,11 @@ export default function AuthForm({ onSuccess, initialMode = 'login', authNotice 
 
       if (result.requiresVerification) {
         setPendingVerificationEmail(result.email || email.trim());
-        setInfo(result.message);
+        if (result.emailDeliveryFailed) {
+          setError(result.message);
+        } else {
+          setInfo(result.message);
+        }
         return;
       }
 

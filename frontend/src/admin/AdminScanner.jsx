@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 const WEIGHT_FIELDS = [
   { key: 'liquiditySweep', label: 'Liquidity sweep' },
@@ -11,6 +12,8 @@ const WEIGHT_FIELDS = [
 ];
 
 export default function AdminScanner() {
+  const { user } = useAuth();
+  const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
   const [form, setForm] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -18,12 +21,17 @@ export default function AdminScanner() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!canManageScanner) {
+      setLoading(false);
+      setError('Super admin access required for scanner configuration.');
+      return;
+    }
     adminApi
       .getScannerConfig()
       .then(res => setForm(res.data.config))
       .catch(err => setError(err.response?.data?.message || 'Unable to load scanner config.'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [canManageScanner]);
 
   const updateField = (key, value) => {
     setForm(prev => ({ ...prev, [key]: value }));

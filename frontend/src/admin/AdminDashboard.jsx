@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 function StatCard({ label, value, hint, tone = 'default' }) {
   return (
@@ -12,6 +13,8 @@ function StatCard({ label, value, hint, tone = 'default' }) {
 }
 
 export default function AdminDashboard() {
+  const { user } = useAuth();
+  const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
   const [stats, setStats] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -34,6 +37,7 @@ export default function AdminDashboard() {
 
   const scanner = stats?.scanner || {};
   const config = scanner.config || {};
+  const showConfig = canManageScanner && Boolean(config.premiumThreshold != null || config.autoScanEnabled != null);
 
   return (
     <div className="admin-dashboard">
@@ -50,17 +54,21 @@ export default function AdminDashboard() {
         <StatCard label="Total signals" value={stats?.signals?.total ?? 0} />
         <StatCard label="Completed payments" value={stats?.payments?.completed ?? 0} tone="success" />
         <StatCard label="Failed payments" value={stats?.payments?.failed ?? 0} tone="danger" />
-        <StatCard
-          label="Premium threshold"
-          value={`${config.premiumThreshold ?? '—'}%`}
-          hint="Live scanner config"
-          tone="accent"
-        />
-        <StatCard
-          label="Auto-scan"
-          value={config.autoScanEnabled ? 'On' : 'Off'}
-          hint={`Every ${Math.round((config.autoScanIntervalMs || 0) / 1000)}s`}
-        />
+        {showConfig && (
+          <>
+            <StatCard
+              label="Premium threshold"
+              value={`${config.premiumThreshold ?? '—'}%`}
+              hint="Live scanner config"
+              tone="accent"
+            />
+            <StatCard
+              label="Auto-scan"
+              value={config.autoScanEnabled ? 'On' : 'Off'}
+              hint={`Every ${Math.round((config.autoScanIntervalMs || 0) / 1000)}s`}
+            />
+          </>
+        )}
         <StatCard
           label="Database"
           value={stats?.dbConnected ? 'Connected' : 'Offline'}
@@ -76,10 +84,12 @@ export default function AdminDashboard() {
           </span>
         </div>
         <dl className="admin-meta-grid">
-          <div className="admin-meta-item">
-            <dt>Batch size</dt>
-            <dd>{config.scanBatchSize ?? '—'} symbols / cycle</dd>
-          </div>
+          {showConfig && (
+            <div className="admin-meta-item">
+              <dt>Batch size</dt>
+              <dd>{config.scanBatchSize ?? '—'} symbols / cycle</dd>
+            </div>
+          )}
           <div className="admin-meta-item">
             <dt>HTF timeframe</dt>
             <dd>{scanner.pipeline?.htfTimeframe ?? '—'}</dd>

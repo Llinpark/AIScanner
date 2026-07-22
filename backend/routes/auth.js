@@ -173,11 +173,22 @@ router.post('/register', registerValidators, validateRequest, async (req, res) =
     }
 
     if (verificationToken) {
-      await sendVerificationEmail({
-        to: email,
-        token: verificationToken,
-        displayName: user.displayName
-      });
+      try {
+        await sendVerificationEmail({
+          to: email,
+          token: verificationToken,
+          displayName: user.displayName
+        });
+      } catch (mailError) {
+        console.error('[auth] verification email failed:', mailError.message, mailError.body || '');
+        return res.status(201).json({
+          message:
+            'Account created, but the verification email could not be sent. Tap Resend verification email, or contact support.',
+          requiresVerification: true,
+          email,
+          emailDeliveryFailed: true
+        });
+      }
     }
 
     return res.status(201).json({
@@ -344,16 +355,24 @@ router.post('/resend-verification', resendVerificationValidators, validateReques
       emailVerificationToken: hashToken(verificationToken),
       emailVerificationExpiresAt: verificationExpiry()
     });
-    await sendVerificationEmail({
-      to: user.email,
-      token: verificationToken,
-      displayName: user.displayName
-    });
+    try {
+      await sendVerificationEmail({
+        to: user.email,
+        token: verificationToken,
+        displayName: user.displayName
+      });
+    } catch (mailError) {
+      console.error('[auth] resend verification email failed:', mailError.message, mailError.body || '');
+      return res.status(502).json({
+        message: 'Unable to send verification email right now. Please try again in a moment.'
+      });
+    }
 
     return res.json({
       message: 'If an unverified account exists for that email, a verification link has been sent.'
     });
   } catch (error) {
+    console.error('[auth] resend-verification error:', error.message);
     return res.status(500).json({ message: 'Unable to resend verification email.' });
   }
 });
