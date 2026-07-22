@@ -158,6 +158,7 @@ async function fetchHistoricalSeries(params) {
 module.exports = {
   toEodhdSymbol,
   toEodhdIntradayInterval,
+  isEodhdEodInterval,
   normalizeEodhdCandles,
   fetchIntradaySeries,
   fetchEodSeries,

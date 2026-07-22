@@ -25,6 +25,7 @@ import {
   formatInstrumentPrice,
   getChartPriceFormat
 } from '../../utils/pricePrecision';
+import { formatMarketDataProvider } from '../../utils/marketDataProviders';
 
 function getChartScaleOptions(interval) {
   const canonical = normalizeInterval(interval);
@@ -607,6 +608,7 @@ export default function KachingLightweightChart({
   };
 
   const displayLiveStatus = liveEnabled ? liveStatus : 'off';
+  const providerLabel = formatMarketDataProvider(provider);
   const formatLevel = value => formatInstrumentPrice(value, symbol);
   const changeColor = ohlcLegend?.bullish
     ? TRADINGVIEW_CHART_THEME.bullish
@@ -617,7 +619,7 @@ export default function KachingLightweightChart({
       <div className="kaching-chart-meta">
         <span>
           <strong>{symbol}</strong> · {timeframeLabel(interval)}
-          {provider ? ` · ${provider}` : ''}
+          {providerLabel ? ` · ${providerLabel}` : ''}
         </span>
         <span className="kaching-chart-controls">
           <button type="button" className="chart-reset-btn" onClick={handleResetView} title="Reset zoom and pan">

@@ -46,6 +46,16 @@ function isCreditExhaustedError(message) {
   );
 }
 
+/** EODHD free tier rejects intraday endpoints. */
+function isEodhdEodOnlyError(message) {
+  const text = String(message || '').toLowerCase();
+  return (
+    text.includes('only eod data allowed') ||
+    text.includes('only eod data') ||
+    text.includes('eod data allowed for free')
+  );
+}
+
 
 function getEntry(key) {
   return cache.get(key) || null;
@@ -93,6 +103,7 @@ module.exports = {
   isPerMinuteCreditError,
   isRateLimitError,
   isCreditExhaustedError,
+  isEodhdEodOnlyError,
   getFresh,
   getStale,
   set,

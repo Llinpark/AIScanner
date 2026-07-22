@@ -7,6 +7,7 @@ import { getTimeframesForTier } from '../../constants/subscriptionLimits';
 import { useAuth } from '../../context/AuthContext';
 import useLiveChartLevels from '../../hooks/useLiveChartLevels';
 import useMarketCandles from '../../hooks/useMarketCandles';
+import { formatMarketDataProvider } from '../../utils/marketDataProviders';
 import ChartTimeframeToolbar from './ChartTimeframeToolbar';
 import KachingLightweightChart from './KachingLightweightChart';
 
@@ -66,13 +67,14 @@ export default function MarketChartPanel({
     [allowedTimeframes, isControlled, onIntervalChange]
   );
 
-  const { candles, provider, loading, error, liveStatus } = useMarketCandles({
-    symbol: debouncedSymbol,
-    interval,
-    limit: 200,
-    subscribed,
-    liveEnabled
-  });
+  const { candles, provider, fallbackUsed, fallbackInterval, loading, error, liveStatus } =
+    useMarketCandles({
+      symbol: debouncedSymbol,
+      interval,
+      limit: 200,
+      subscribed,
+      liveEnabled
+    });
 
   const { liveSignal, stage, analyzing, closedOutcome } = useLiveChartLevels({
     symbol: debouncedSymbol,
@@ -105,6 +107,12 @@ export default function MarketChartPanel({
       {liveStatus === 'stale' && candles.length > 0 && (
         <div className="page-notice info-box">
           Live refresh delayed — showing cached candles while the data provider catches up.
+        </div>
+      )}
+      {fallbackUsed && fallbackInterval && candles.length > 0 && (
+        <div className="page-notice info-box">
+          Live intraday feed unavailable — showing daily EOD ({fallbackInterval}) from{' '}
+          {formatMarketDataProvider(provider) || 'fallback'}.
         </div>
       )}
       {useLiveLevels && analyzing && candles.length > 0 && (

@@ -37,6 +37,8 @@ function applyCandlePayload(setters, payload, streamKey) {
   lastPayloadByStream.set(streamKey, payload);
   setters.setCandles(rows);
   setters.setProvider(payload.provider || null);
+  setters.setFallbackUsed(Boolean(payload.fallback_used));
+  setters.setFallbackInterval(payload.fallback_interval || null);
   setters.setLoading(false);
   if (payload.refreshError) {
     setters.setError('');
@@ -57,6 +59,8 @@ export default function useMarketCandles({
   const { isAuthenticated } = useAuth();
   const [candles, setCandles] = useState([]);
   const [provider, setProvider] = useState(null);
+  const [fallbackUsed, setFallbackUsed] = useState(false);
+  const [fallbackInterval, setFallbackInterval] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [liveStatus, setLiveStatus] = useState('idle');
@@ -66,6 +70,8 @@ export default function useMarketCandles({
     if (!subscribed || !symbol || !interval) {
       setCandles([]);
       setProvider(null);
+      setFallbackUsed(false);
+      setFallbackInterval(null);
       setError('');
       setLiveStatus('off');
       activeStreamRef.current = '';
@@ -83,6 +89,8 @@ export default function useMarketCandles({
     if (cachedPayload?.candles?.length) {
       setCandles(cachedPayload.candles);
       setProvider(cachedPayload.provider || null);
+      setFallbackUsed(Boolean(cachedPayload.fallback_used));
+      setFallbackInterval(cachedPayload.fallback_interval || null);
       setLoading(false);
       setError('');
       setLiveStatus(cachedPayload.stale ? 'stale' : 'synced');
@@ -94,6 +102,8 @@ export default function useMarketCandles({
     const setters = {
       setCandles,
       setProvider,
+      setFallbackUsed,
+      setFallbackInterval,
       setLoading,
       setError,
       setLiveStatus
@@ -230,6 +240,8 @@ export default function useMarketCandles({
   return {
     candles,
     provider,
+    fallbackUsed,
+    fallbackInterval,
     loading,
     error,
     liveStatus

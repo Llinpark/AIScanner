@@ -133,12 +133,23 @@ class MarketDataHub {
       requested_limit: limit,
       count: rows.length,
       fallback_used: Boolean(meta.fallback_used),
+      fallback_interval: meta.fallback_interval || null,
       source: meta.source || 'hub',
       cached: true,
       cachedAt: new Date().toISOString(),
       refreshMs: refreshMsForInterval(canonicalInterval),
       viewers: meta.viewers || 0,
       candles: rows
+    };
+  }
+
+  payloadMetaFromCandles(candles, extra = {}) {
+    const meta = candles?.meta || {};
+    return {
+      provider: meta.provider,
+      fallback_used: Boolean(meta.fallback_used),
+      fallback_interval: meta.fallback_interval || null,
+      ...extra
     };
   }
 
@@ -213,10 +224,16 @@ class MarketDataHub {
         ).catch(() => null);
         if (candles?.length) {
           const stream = this.streams.get(this.streamKey(normalized, canonicalInterval));
-          const payload = this.normalizePayload(normalized, canonicalInterval, parsedLimit, candles, {
-            source: 'provider-cache',
-            viewers: stream?.viewers || 0
-          });
+          const payload = this.normalizePayload(
+            normalized,
+            canonicalInterval,
+            parsedLimit,
+            candles,
+            this.payloadMetaFromCandles(candles, {
+              source: 'provider-cache',
+              viewers: stream?.viewers || 0
+            })
+          );
           return this.writeCache(normalized, canonicalInterval, parsedLimit, { ...payload, stale: true });
         }
         throw new Error(
@@ -238,10 +255,16 @@ class MarketDataHub {
           { forceRefresh: forceProviderRefresh }
         );
         const stream = this.streams.get(this.streamKey(normalized, canonicalInterval));
-        const payload = this.normalizePayload(normalized, canonicalInterval, parsedLimit, candles, {
-          source: 'provider',
-          viewers: stream?.viewers || 0
-        });
+        const payload = this.normalizePayload(
+          normalized,
+          canonicalInterval,
+          parsedLimit,
+          candles,
+          this.payloadMetaFromCandles(candles, {
+            source: 'provider',
+            viewers: stream?.viewers || 0
+          })
+        );
         return this.writeCache(normalized, canonicalInterval, parsedLimit, payload);
       } catch (error) {
         if (isRateLimitError(error.message)) {
@@ -409,10 +432,16 @@ class MarketDataHub {
       ).catch(() => null);
       if (fallbackCandles?.length) {
         const stream = this.streams.get(this.streamKey(normalized, canonicalInterval));
-        const payload = this.normalizePayload(normalized, canonicalInterval, parsedLimit, fallbackCandles, {
-          source: 'provider-cache',
-          viewers: stream?.viewers || 0
-        });
+        const payload = this.normalizePayload(
+          normalized,
+          canonicalInterval,
+          parsedLimit,
+          fallbackCandles,
+          this.payloadMetaFromCandles(fallbackCandles, {
+            source: 'provider-cache',
+            viewers: stream?.viewers || 0
+          })
+        );
         const stored = await this.writeCache(normalized, canonicalInterval, parsedLimit, payload);
         return {
           ...stored,
