@@ -16,7 +16,7 @@ const STALE_TTL_SECONDS = Math.max(
 );
 const MIN_PROVIDER_FETCH_GAP_MS = Math.max(
   1000,
-  Number(process.env.MARKET_DATA_MIN_FETCH_GAP_MS || 8000)
+  Number(process.env.MARKET_DATA_MIN_FETCH_GAP_MS || 9000)
 );
 const RATE_LIMIT_COOLDOWN_MS = Math.max(
   30_000,
@@ -40,8 +40,10 @@ class MarketDataHub {
 
   canFetchFromProvider(options = {}) {
     const bypassGap = Boolean(options.bypassGap);
-    // Only enforce hub-wide block when EODHD cannot take over.
+    // Hub-wide pause when neither provider can serve (no EODHD key).
     if (!isEodhdConfigured() && Date.now() < this.providerBlockedUntil) return false;
+    // Always space provider calls — free Twelve Data is ~8 credits/min and EODHD
+    // free tier often cannot cover intraday fallback.
     if (!bypassGap && Date.now() - this.lastProviderFetchAt < MIN_PROVIDER_FETCH_GAP_MS) return false;
     return true;
   }
@@ -217,11 +219,12 @@ class MarketDataHub {
           });
           return this.writeCache(normalized, canonicalInterval, parsedLimit, { ...payload, stale: true });
         }
+        throw new Error(
+          this.lastRateLimitMessage ||
+            'Market data temporarily throttled. Please wait a moment and try again.'
+        );
       }
-      throw new Error(
-        this.lastRateLimitMessage ||
-          'Market data temporarily throttled. Please wait a moment and try again.'
-      );
+      // Cold start with force refresh: proceed — Twelve Data serializes credits itself.
     }
 
     const task = (async () => {
@@ -451,8 +454,8 @@ class MarketDataHub {
       streamingEngine: 'backend-broadcast',
       providerUsage: 'historical-only-demand-driven',
       refreshSchedule: {
-        M1: '30s',
-        M5: '25s',
+        M1: '60s',
+        M5: '60s',
         M15: '45s',
         M30: '60s',
         H1: '120s',

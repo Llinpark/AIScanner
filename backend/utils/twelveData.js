@@ -25,6 +25,34 @@ const TWELVE_DATA_INTERVAL_MAP = {
   '1M': '1month'
 };
 
+/** Stay under free-tier 8 credits/min (leave 1 credit headroom). */
+const CREDITS_PER_MINUTE = Math.max(
+  1,
+  Math.min(60, Number(process.env.TWELVE_DATA_CREDITS_PER_MINUTE || 7))
+);
+const MIN_CALL_SPACING_MS = Math.ceil(60_000 / CREDITS_PER_MINUTE);
+
+let lastApiCallAt = 0;
+let apiCallChain = Promise.resolve();
+
+function enqueueApiCall(fetcher) {
+  const run = async () => {
+    const waitMs = Math.max(0, lastApiCallAt + MIN_CALL_SPACING_MS - Date.now());
+    if (waitMs > 0) {
+      await new Promise(resolve => setTimeout(resolve, waitMs));
+    }
+    lastApiCallAt = Date.now();
+    return fetcher();
+  };
+
+  const next = apiCallChain.then(run, run);
+  apiCallChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
 function toTwelveDataSymbol(symbol) {
   const normalized = normalizeSymbol(symbol);
   return TWELVE_DATA_SYMBOL_MAP[normalized] || normalized;
@@ -81,15 +109,21 @@ async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl,
       if (freshCached) return freshCached;
     }
 
-    const url = new URL(`${baseUrl}/time_series`);
-    url.searchParams.set('symbol', tdSymbol);
-    url.searchParams.set('interval', tdInterval);
-    url.searchParams.set('outputsize', String(outputsize));
-    url.searchParams.set('order', 'asc');
-    url.searchParams.set('timezone', 'UTC');
-    url.searchParams.set('apikey', apiKey);
+    return enqueueApiCall(async () => {
+      // Re-check cache after waiting in the credit queue.
+      if (!forceRefresh) {
+        const freshCached = getFresh(cacheKey);
+        if (freshCached) return freshCached;
+      }
 
-    try {
+      const url = new URL(`${baseUrl}/time_series`);
+      url.searchParams.set('symbol', tdSymbol);
+      url.searchParams.set('interval', tdInterval);
+      url.searchParams.set('outputsize', String(outputsize));
+      url.searchParams.set('order', 'asc');
+      url.searchParams.set('timezone', 'UTC');
+      url.searchParams.set('apikey', apiKey);
+
       const response = await fetch(url);
       const payload = await response.json();
 
@@ -108,11 +142,7 @@ async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl,
 
       set(cacheKey, candles, DEFAULT_TTL_MS);
       return candles;
-    } catch (error) {
-      // Never swallow credit/rate-limit errors with stale Twelve Data cache —
-      // marketData.js must fall through to EODHD immediately.
-      throw error;
-    }
+    });
   });
 }
 

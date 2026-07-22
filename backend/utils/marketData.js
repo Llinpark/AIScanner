@@ -30,11 +30,12 @@ function markTwelveDataUnavailable(errorMessage) {
   if (isCreditExhaustedError(errorMessage)) {
     twelveDataSkipUntil = Math.max(twelveDataSkipUntil, now + TWELVE_DATA_CREDIT_SKIP_MS);
     console.warn(
-      `[MarketData] Twelve Data credits exhausted — routing to EODHD for ${TWELVE_DATA_CREDIT_SKIP_MS}ms`
+      `[MarketData] Twelve Data plan credits exhausted — routing to EODHD for ${TWELVE_DATA_CREDIT_SKIP_MS}ms`
     );
     return;
   }
   if (isRateLimitError(errorMessage)) {
+    // Per-minute free-tier limits ("current minute") use the short cooldown only.
     twelveDataSkipUntil = Math.max(twelveDataSkipUntil, now + TWELVE_DATA_RATE_SKIP_MS);
     console.warn(
       `[MarketData] Twelve Data rate limited — routing to EODHD for ${TWELVE_DATA_RATE_SKIP_MS}ms`

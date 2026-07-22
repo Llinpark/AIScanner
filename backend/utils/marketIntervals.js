@@ -1,6 +1,7 @@
 const REFRESH_MS_BY_CANONICAL = {
-  '1m': 30_000,
-  '5m': 25_000,
+  // Keep 1m/5m slower than Twelve Data free-tier (~8 credits/min) allows.
+  '1m': 60_000,
+  '5m': 60_000,
   '15m': 45_000,
   '30m': 60_000,
   '1h': 120_000,
