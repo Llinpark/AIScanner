@@ -1,6 +1,54 @@
 const { fetchTimeSeries: fetchTwelveDataSeries } = require('./twelveData');
 const { fetchHistoricalSeries: fetchEodhdSeries } = require('./eodhd');
-const { DEFAULT_TTL_MS, getFresh, getStale, isRateLimitError, set } = require('./marketDataCache');
+const {
+  DEFAULT_TTL_MS,
+  getFresh,
+  getStale,
+  isCreditExhaustedError,
+  isRateLimitError,
+  set
+} = require('./marketDataCache');
+
+const TWELVE_DATA_CREDIT_SKIP_MS = Math.max(
+  60_000,
+  Number(process.env.TWELVE_DATA_CREDIT_SKIP_MS || 6 * 60 * 60 * 1000)
+);
+const TWELVE_DATA_RATE_SKIP_MS = Math.max(
+  30_000,
+  Number(process.env.MARKET_DATA_RATE_LIMIT_COOLDOWN_MS || 65_000)
+);
+
+/** Skip Twelve Data until this timestamp after credit/rate-limit failures. */
+let twelveDataSkipUntil = 0;
+
+function shouldSkipTwelveData() {
+  return Date.now() < twelveDataSkipUntil;
+}
+
+function markTwelveDataUnavailable(errorMessage) {
+  const now = Date.now();
+  if (isCreditExhaustedError(errorMessage)) {
+    twelveDataSkipUntil = Math.max(twelveDataSkipUntil, now + TWELVE_DATA_CREDIT_SKIP_MS);
+    console.warn(
+      `[MarketData] Twelve Data credits exhausted — routing to EODHD for ${TWELVE_DATA_CREDIT_SKIP_MS}ms`
+    );
+    return;
+  }
+  if (isRateLimitError(errorMessage)) {
+    twelveDataSkipUntil = Math.max(twelveDataSkipUntil, now + TWELVE_DATA_RATE_SKIP_MS);
+    console.warn(
+      `[MarketData] Twelve Data rate limited — routing to EODHD for ${TWELVE_DATA_RATE_SKIP_MS}ms`
+    );
+  }
+}
+
+function twelveDataSkipStatus() {
+  const now = Date.now();
+  return {
+    skipped: now < twelveDataSkipUntil,
+    skipUntil: twelveDataSkipUntil > now ? new Date(twelveDataSkipUntil).toISOString() : null
+  };
+}
 
 async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100, options = {}) {
   const cacheKey = `market:${symbol}:${interval}:${limit}`;
@@ -48,6 +96,11 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100,
     .flatMap(name => attempts.filter(item => item.name === name && item.enabled));
 
   for (const attempt of ordered) {
+    if (attempt.name === 'twelve_data' && shouldSkipTwelveData()) {
+      errors.push('twelve_data: skipped (credit/rate-limit cooldown — using fallback)');
+      continue;
+    }
+
     try {
       const candles = await attempt.run();
       set(cacheKey, candles, DEFAULT_TTL_MS);
@@ -57,10 +110,10 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100,
       return candles;
     } catch (error) {
       errors.push(`${attempt.name}: ${error.message}`);
-      // Do NOT break on rate-limit/credit errors — that is exactly the case where
-      // we need to fall through to the next configured provider (e.g. EODHD).
-      // Only a provider's own error should stop *that* provider's retries, which
-      // already happens naturally since each provider only appears once in `ordered`.
+      if (attempt.name === 'twelve_data') {
+        markTwelveDataUnavailable(error.message);
+      }
+      // Fall through immediately to the next provider (EODHD on credit outage).
     }
   }
 
@@ -71,12 +124,17 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100,
   }
 
   if (errors.some(entry => isRateLimitError(entry))) {
-    throw new Error(`${errors.join(' | ')} (cached data unavailable — wait one minute or upgrade Twelve Data)`);
+    throw new Error(
+      `${errors.join(' | ')} (cached data unavailable — wait one minute or check EODHD/Twelve Data keys)`
+    );
   }
 
   throw new Error(errors.join(' | ') || 'No market data providers configured');
 }
 
 module.exports = {
-  fetchHistoricalData
+  fetchHistoricalData,
+  shouldSkipTwelveData,
+  twelveDataSkipStatus,
+  markTwelveDataUnavailable
 };

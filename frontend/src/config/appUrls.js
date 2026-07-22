@@ -22,3 +22,9 @@ export const APP_PAGE_TITLE = `${APP_NAME} — ${APP_TAGLINE}`;
 
 export const APP_DESCRIPTION =
   'KachingScanner is an AI Trading Intelligence Platform — smart market analysis, premium SMC signals, live charts, TradingView alerts, and optional automated execution.';
+
+export const OG_IMAGE_PATH = '/hero-img.png';
+
+export const OG_IMAGE_URL = `${SITE_URL.replace(/\/$/, '')}${OG_IMAGE_PATH}`;
+
+export const THEME_COLOR = '#0b1220';

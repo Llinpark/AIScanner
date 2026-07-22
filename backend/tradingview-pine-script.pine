@@ -2,7 +2,7 @@
 strategy("KachingScanner Alert Bridge", overlay=true)
 
 // Example input fields for alerts
-symbolName = syminfo.tickerid
+symbolName = syminfo.ticker
 alertMessage = input.string("KachingScanner signal", title="Alert message")
 stopLoss = input.float(0.0, title="Stop loss")
 takeProfit = input.float(0.0, title="Take profit")

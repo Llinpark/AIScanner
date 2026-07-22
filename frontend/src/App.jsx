@@ -16,44 +16,36 @@ import Contact from './components/Contact';
 import InsightsHub from './components/InsightsHub';
 import ReferAndEarn from './components/ReferAndEarn';
 import AdminHub from './admin/AdminHub';
+import SeoHead from './components/SeoHead';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
-import { APP_DESCRIPTION, APP_PAGE_TITLE } from './config/appUrls';
 import { storeReferralCode } from './utils/referralStorage';
+import { pageFromPath, pathForPage } from './seo/routes';
+import { usePathRouting } from './seo/usePathRouting';
 
 function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
   const [signals, setSignals] = useState([]);
-  const [currentPage, setCurrentPage] = useState('home');
+  const [currentPage, setCurrentPage] = useState(() => pageFromPath(window.location.pathname));
   const [previousPage, setPreviousPage] = useState('home');
   const [pageOptions, setPageOptions] = useState({});
   const [paymentNotice, setPaymentNotice] = useState('');
 
-  const navigateTo = (page, options = {}) => {
-    if (page === 'risk-disclosure') {
-      setPreviousPage(currentPage);
-    }
-    setPageOptions(options);
-    setCurrentPage(page);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  const navigateTo = usePathRouting({
+    currentPage,
+    setCurrentPage,
+    setPageOptions,
+    setPreviousPage
+  });
 
   const closeRiskDisclosure = () => {
-    navigateTo(previousPage);
+    navigateTo(previousPage || 'home');
   };
 
   const handleLogout = () => {
     logout();
-    setCurrentPage('home');
+    navigateTo('home', {}, { replace: true });
   };
-
-  useEffect(() => {
-    document.title = APP_PAGE_TITLE;
-    const meta = document.querySelector('meta[name="description"]');
-    if (meta) {
-      meta.setAttribute('content', APP_DESCRIPTION);
-    }
-  }, []);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -73,22 +65,23 @@ function AppContent() {
     if (refCode) {
       storeReferralCode(refCode);
       if (!verifyToken && !resetToken && !paypalStatus && !binanceStatus) {
-        setCurrentPage('signup');
+        navigateTo('signup', {}, { replace: true });
+      } else {
+        window.history.replaceState(
+          { page: currentPage, options: pageOptions },
+          '',
+          pathForPage(currentPage)
+        );
       }
-      window.history.replaceState({}, '', window.location.pathname);
     }
 
     if (verifyToken) {
-      setCurrentPage('verify-email');
-      setPageOptions({ token: verifyToken });
-      window.history.replaceState({}, '', window.location.pathname);
+      navigateTo('verify-email', { token: verifyToken }, { replace: true });
       return;
     }
 
     if (resetToken) {
-      setCurrentPage('reset-password');
-      setPageOptions({ token: resetToken });
-      window.history.replaceState({}, '', window.location.pathname);
+      navigateTo('reset-password', { token: resetToken }, { replace: true });
       return;
     }
 
@@ -96,22 +89,22 @@ function AppContent() {
       if (binanceStatus === 'success') {
         refreshSubscription().then(() => {
           setPaymentNotice('Binance Pay payment successful! Your subscription is now active.');
-          setCurrentPage('pricing');
+          navigateTo('pricing', {}, { replace: true });
         });
       } else if (binanceStatus === 'cancelled') {
         setPaymentNotice('Binance Pay payment was cancelled.');
-        setCurrentPage('pricing');
+        navigateTo('pricing', {}, { replace: true });
       } else if (binanceStatus === 'pending') {
-        setPaymentNotice('Binance Pay payment is still processing. We will activate your subscription once it confirms.');
-        setCurrentPage('pricing');
+        setPaymentNotice(
+          'Binance Pay payment is still processing. We will activate your subscription once it confirms.'
+        );
+        navigateTo('pricing', {}, { replace: true });
       } else if (binanceStatus === 'mock') {
-        setCurrentPage('pricing');
+        navigateTo('pricing', {}, { replace: true });
       } else if (binanceStatus === 'error') {
         setPaymentNotice(`Binance Pay payment failed: ${params.get('message') || 'Unknown error'}`);
-        setCurrentPage('pricing');
+        navigateTo('pricing', {}, { replace: true });
       }
-
-      window.history.replaceState({}, '', window.location.pathname);
       return;
     }
 
@@ -120,19 +113,19 @@ function AppContent() {
     if (paypalStatus === 'success') {
       refreshSubscription().then(() => {
         setPaymentNotice('PayPal payment successful! Your subscription is now active.');
-        setCurrentPage('pricing');
+        navigateTo('pricing', {}, { replace: true });
       });
     } else if (paypalStatus === 'cancelled') {
       setPaymentNotice('PayPal payment was cancelled.');
-      setCurrentPage('pricing');
+      navigateTo('pricing', {}, { replace: true });
     } else if (paypalStatus === 'error') {
       setPaymentNotice(`PayPal payment failed: ${params.get('message') || 'Unknown error'}`);
-      setCurrentPage('pricing');
+      navigateTo('pricing', {}, { replace: true });
     } else if (paypalStatus === 'mock') {
-      setCurrentPage('pricing');
+      navigateTo('pricing', {}, { replace: true });
     }
-
-    window.history.replaceState({}, '', window.location.pathname);
+    // navigateTo is stable enough for query bootstrap; include refreshSubscription only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshSubscription]);
 
   if (loading) {
@@ -156,14 +149,14 @@ function AppContent() {
       return (
         <>
           <Hero
-            onViewPricing={() => setCurrentPage('pricing')}
-            onSignUp={() => setCurrentPage('signup')}
+            onViewPricing={() => navigateTo('pricing')}
+            onSignUp={() => navigateTo('signup')}
             onReferEarn={() => navigateTo('referrals')}
           />
           <TradingEcosystem />
           <AiIntelligenceSection
-            onViewPricing={() => setCurrentPage('pricing')}
-            onSignUp={() => setCurrentPage('signup')}
+            onViewPricing={() => navigateTo('pricing')}
+            onSignUp={() => navigateTo('signup')}
           />
         </>
       );
@@ -171,19 +164,13 @@ function AppContent() {
 
     if (currentPage === 'signin') {
       return (
-        <AuthForm
-          initialMode="login"
-          onSuccess={() => setCurrentPage('dashboard')}
-        />
+        <AuthForm initialMode="login" onSuccess={() => navigateTo('dashboard', {}, { replace: true })} />
       );
     }
 
     if (currentPage === 'signup') {
       return (
-        <AuthForm
-          initialMode="register"
-          onSuccess={() => setCurrentPage('pricing')}
-        />
+        <AuthForm initialMode="register" onSuccess={() => navigateTo('pricing', {}, { replace: true })} />
       );
     }
 
@@ -191,7 +178,7 @@ function AppContent() {
       return (
         <VerifyEmailPage
           token={pageOptions.token}
-          onSuccess={() => setCurrentPage('dashboard')}
+          onSuccess={() => navigateTo('dashboard', {}, { replace: true })}
         />
       );
     }
@@ -200,7 +187,7 @@ function AppContent() {
       return (
         <ResetPasswordForm
           token={pageOptions.token}
-          onSuccess={() => setCurrentPage('dashboard')}
+          onSuccess={() => navigateTo('dashboard', {}, { replace: true })}
         />
       );
     }
@@ -209,7 +196,7 @@ function AppContent() {
       return isAuthenticated ? (
         <InsightsHub subscription={subscription} onNavigatePricing={() => navigateTo('pricing')} />
       ) : (
-        <AuthForm initialMode="login" onSuccess={() => setCurrentPage('insights')} />
+        <AuthForm initialMode="login" onSuccess={() => navigateTo('insights', {}, { replace: true })} />
       );
     }
 
@@ -223,7 +210,7 @@ function AppContent() {
       ) : (
         <AuthForm
           initialMode="login"
-          onSuccess={() => setCurrentPage('dashboard')}
+          onSuccess={() => navigateTo('dashboard', {}, { replace: true })}
         />
       );
     }
@@ -238,7 +225,7 @@ function AppContent() {
       ) : (
         <AuthForm
           initialMode="login"
-          onSuccess={() => setCurrentPage('tradingview')}
+          onSuccess={() => navigateTo('tradingview', pageOptions, { replace: true })}
         />
       );
     }
@@ -253,20 +240,23 @@ function AppContent() {
         <AuthForm
           initialMode="login"
           authNotice="Sign in or register to open Refer & Earn and get your personal referral link."
-          onSuccess={() => setCurrentPage('referrals')}
+          onSuccess={() => navigateTo('referrals', {}, { replace: true })}
         />
       );
     }
 
     if (currentPage === 'admin') {
       if (!isAuthenticated) {
-        return <AuthForm initialMode="login" onSuccess={() => setCurrentPage('admin')} />;
+        return <AuthForm initialMode="login" onSuccess={() => navigateTo('admin', {}, { replace: true })} />;
       }
       if (!user?.isAdmin) {
         return (
           <div className="dashboard-card">
             <h2>Admin access required</h2>
-            <p>Your account does not have admin privileges. Add your email to ADMIN_EMAILS in backend/.env or set role=admin in MongoDB.</p>
+            <p>
+              Your account does not have admin privileges. Add your email to ADMIN_EMAILS in
+              backend/.env or set role=admin in MongoDB.
+            </p>
           </div>
         );
       }
@@ -276,15 +266,16 @@ function AppContent() {
     return (
       <Pricing
         onSubscriptionUpdated={refreshSubscription}
-        onNavigateDashboard={() => setCurrentPage('dashboard')}
+        onNavigateDashboard={() => navigateTo('dashboard')}
         onNavigateReferrals={() => navigateTo('referrals')}
-        onSignIn={() => setCurrentPage('signin')}
+        onSignIn={() => navigateTo('signin')}
       />
     );
   };
 
   return (
     <div className="site-layout">
+      <SeoHead page={currentPage} />
       <Navbar
         isAuthenticated={isAuthenticated}
         user={user}
@@ -297,9 +288,7 @@ function AppContent() {
       />
 
       <main className={`site-main${currentPage === 'admin' ? ' site-main--admin' : ''}`}>
-        {paymentNotice && (
-          <div className="page-notice info-box">{paymentNotice}</div>
-        )}
+        {paymentNotice && <div className="page-notice info-box">{paymentNotice}</div>}
 
         {renderPageContent()}
       </main>
@@ -317,6 +306,7 @@ function AppContent() {
 function LoadingShell() {
   return (
     <div className="site-layout">
+      <SeoHead page={pageFromPath(typeof window !== 'undefined' ? window.location.pathname : '/')} />
       <main className="site-main">
         <div className="loading-state">Loading…</div>
       </main>

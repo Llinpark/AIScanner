@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import AppLink from './AppLink';
 import SocialLinks from './SocialLinks';
 import { CONTACT_EMAIL } from '../config/appUrls';
 
@@ -37,9 +38,9 @@ export default function Contact({ onNavigateHome }) {
   return (
     <div className="contact-page">
       <nav className="page-breadcrumb" aria-label="Breadcrumb">
-        <button type="button" className="breadcrumb-link" onClick={onNavigateHome}>
+        <AppLink page="home" onNavigate={onNavigateHome} className="breadcrumb-link">
           Home
-        </button>
+        </AppLink>
         <span className="breadcrumb-separator">/</span>
         <span className="breadcrumb-current">Contact</span>
       </nav>

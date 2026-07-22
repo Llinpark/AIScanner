@@ -1,0 +1,16 @@
+User-agent: *
+Allow: /
+Allow: /pricing
+Allow: /contact
+Allow: /risk-disclosure
+Allow: /signin
+Allow: /signup
+Allow: /referrals
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /insights
+Disallow: /tradingview
+Disallow: /verify-email
+Disallow: /reset-password
+
+Sitemap: https://kachingscanner.com/sitemap.xml

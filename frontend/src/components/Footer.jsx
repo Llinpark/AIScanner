@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import AppLink from './AppLink';
 import SocialLinks from './SocialLinks';
 import { APP_NAME, APP_TAGLINE, CONTACT_EMAIL, SITE_URL } from '../config/appUrls';
 
@@ -44,28 +45,29 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
           <h4>Product</h4>
           <ul>
             <li>
-              <button type="button" className="footer-link" onClick={() => goTo('dashboard')}>
+              <AppLink page="dashboard" onNavigate={goTo} className="footer-link">
                 Live signal dashboard
-              </button>
+              </AppLink>
             </li>
             <li>
-              <button
-                type="button"
+              <AppLink
+                page="tradingview"
+                options={{ tab: 'live' }}
+                onNavigate={goTo}
                 className="footer-link"
-                onClick={() => goTo('tradingview', { tab: 'live' })}
               >
                 TradingView alerts
-              </button>
+              </AppLink>
             </li>
             <li>
-              <button type="button" className="footer-link" onClick={() => goTo('pricing')}>
+              <AppLink page="pricing" onNavigate={goTo} className="footer-link">
                 Subscription plans
-              </button>
+              </AppLink>
             </li>
             <li>
-              <button type="button" className="footer-link" onClick={() => goTo('referrals')}>
+              <AppLink page="referrals" onNavigate={goTo} className="footer-link">
                 Refer &amp; Earn
-              </button>
+              </AppLink>
             </li>
           </ul>
         </div>
@@ -74,23 +76,24 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
           <h4>Support</h4>
           <ul>
             <li>
-              <button
-                type="button"
+              <AppLink
+                page="tradingview"
+                options={{ tab: 'setup' }}
+                onNavigate={goTo}
                 className="footer-link"
-                onClick={() => goTo('tradingview', { tab: 'setup' })}
               >
                 TradingView setup guide
-              </button>
+              </AppLink>
             </li>
             <li>
-              <button type="button" className="footer-link" onClick={() => goTo('pricing')}>
+              <AppLink page="pricing" onNavigate={goTo} className="footer-link">
                 Subscription &amp; payments
-              </button>
+              </AppLink>
             </li>
             <li>
-              <button type="button" className="footer-link" onClick={() => goTo('contact')}>
+              <AppLink page="contact" onNavigate={goTo} className="footer-link">
                 Contact us
-              </button>
+              </AppLink>
             </li>
           </ul>
         </div>
@@ -120,13 +123,13 @@ export default function Footer({ onNavigate, onNavigateRiskDisclosure }) {
             <p className="footer-risk-text">
               Risk Warning: Your capital is at risk. Leveraged products may not be suitable for
               everyone. Please consider our{' '}
-              <button
-                type="button"
+              <AppLink
+                page="risk-disclosure"
+                onNavigate={() => onNavigateRiskDisclosure?.()}
                 className="footer-risk-link"
-                onClick={onNavigateRiskDisclosure}
               >
                 Risk Disclosure
-              </button>
+              </AppLink>
               .
             </p>
             <button

@@ -10,7 +10,7 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const { assertProductionSecurityConfig, sanitizeMongoInput, safeErrorMessage, verifyPaymentWebhookSecret } = require('./utils/security');
+const { assertProductionSecurityConfig, sanitizeMongoInput, safeErrorMessage, verifyPaymentWebhookSecret, isMockPaymentsAllowed } = require('./utils/security');
 const { globalApiLimiter, authLimiter, webhookLimiter, scannerLimiter } = require('./middleware/rateLimit');
 const requireMockPayments = require('./middleware/requireMockPayments');
 
@@ -414,6 +414,9 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
     }
 
     if (provider === 'mock') {
+      if (!isMockPaymentsAllowed()) {
+        return res.status(404).json({ message: 'Not found' });
+      }
       const mockPaymentId = `mock_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       user = await UserConfig.findByIdAndUpdate(
         userId,
@@ -457,6 +460,11 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       let stkResult;
 
       if (PAYMENT_CONFIG.mode === 'mock' || !MpesaService.isConfigured()) {
+        if (!isMockPaymentsAllowed()) {
+          return res.status(503).json({
+            message: 'M-Pesa is not configured for live payments. Please use PayPal or another available method.'
+          });
+        }
         stkResult = {
           checkoutRequestId: `stk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           merchantRequestId: `mr_${Date.now()}`,
@@ -515,7 +523,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         amount: pricing.price,
         billingCycle: pricing.billingCycle,
         tillNumber: PAYMENT_CONFIG.mpesa.shortcode,
-        mockMode: PAYMENT_CONFIG.mode === 'mock' || !MpesaService.isConfigured()
+        mockMode: isMockPaymentsAllowed() && (PAYMENT_CONFIG.mode === 'mock' || !MpesaService.isConfigured())
       });
     }
 
@@ -528,6 +536,11 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       let orderResult;
 
       if (PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()) {
+        if (!isMockPaymentsAllowed()) {
+          return res.status(503).json({
+            message: 'PayPal is not configured for live payments. Please use another available method.'
+          });
+        }
         const mockOrderId = `paypal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
         orderResult = {
           orderId: mockOrderId,
@@ -584,7 +597,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         amount: pricing.priceCents / 100,
         currency: pricing.currencyPayPal,
         billingCycle: pricing.billingCycle,
-        mockMode: PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()
+        mockMode: isMockPaymentsAllowed() && (PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured())
       });
     }
 
@@ -593,6 +606,11 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       let orderResult;
 
       if (PAYMENT_CONFIG.mode === 'mock' || !BinanceService.isConfigured()) {
+        if (!isMockPaymentsAllowed()) {
+          return res.status(503).json({
+            message: 'Binance Pay is not configured for live payments. Please use PayPal or another available method.'
+          });
+        }
         const mockTradeNo = `binance_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`.slice(0, 32);
         orderResult = {
           merchantTradeNo: mockTradeNo,
@@ -652,7 +670,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         amount: orderResult.amount,
         currency: orderResult.currency,
         billingCycle: pricing.billingCycle,
-        mockMode: PAYMENT_CONFIG.mode === 'mock' || !BinanceService.isConfigured(),
+        mockMode: isMockPaymentsAllowed() && (PAYMENT_CONFIG.mode === 'mock' || !BinanceService.isConfigured()),
         merchantId: PAYMENT_CONFIG.binance.merchantId || null
       });
     }
@@ -666,6 +684,11 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       let paymentResult;
 
       if (PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured()) {
+        if (!isMockPaymentsAllowed()) {
+          return res.status(503).json({
+            message: 'SasaPay is not configured for live payments. Please use PayPal or another available method.'
+          });
+        }
         paymentResult = {
           checkoutRequestId: `sasa_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           merchantRequestId: `sasa_mr_${Date.now()}`,
@@ -722,7 +745,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         checkoutRequestId: paymentResult.checkoutRequestId,
         amount: pricing.price,
         billingCycle: pricing.billingCycle,
-        mockMode: PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured()
+        mockMode: isMockPaymentsAllowed() && (PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured())
       });
     }
 
@@ -1513,14 +1536,17 @@ app.get('/api/tradingview/alerts', requireAuth, requireSubscription, async (req,
     const features = getTierFeatures(req.user.subscription);
     const cutoff = historyCutoffDate(req.user.subscription);
     const filter = { createdAt: { $gte: cutoff } };
-    if (symbol) filter.symbol = symbol;
+    const requestedSymbol =
+      symbol && String(symbol).toUpperCase() !== 'ALL' ? normalizeSymbol(symbol) : null;
 
-    const limit = symbol ? Math.min(50, features.maxSignals) : features.maxSignals;
-    const signals = await Signal.find(filter).sort({ createdAt: -1 }).limit(limit * 2);
-    const filtered = filterSignalsForTier(signals, req.user.subscription).slice(0, limit);
+    const limit = requestedSymbol ? Math.min(50, features.maxSignals) : features.maxSignals;
+    const signals = await Signal.find(filter).sort({ createdAt: -1 }).limit(limit * 5);
+    const filtered = filterSignalsForTier(signals, req.user.subscription)
+      .filter(s => !requestedSymbol || normalizeSymbol(s.symbol) === requestedSymbol)
+      .slice(0, limit);
 
     res.json({
-      symbol: symbol || null,
+      symbol: requestedSymbol || null,
       tier: req.user.subscription?.tier || 'basic',
       alerts: filtered.map(s => sanitizeSignalForTier(s, req.user.subscription)),
       count: filtered.length

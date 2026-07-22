@@ -29,7 +29,8 @@ const PATTERN_SCANNER_CONFIG = {
   },
 
   autoScanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS, 10) || 300_000,
-  scanBatchSize: Math.max(1, parseInt(process.env.SCANNER_BATCH_SIZE, 10) || 2),
+  // Scan more symbols per cycle so the full universe rotates faster.
+  scanBatchSize: Math.max(1, parseInt(process.env.SCANNER_BATCH_SIZE, 10) || 5),
   autoScanEnabled: process.env.SCANNER_AUTO_ENABLED !== 'false',
 
   // 10-step SMC pipeline (liquidity → sweep → MSS → expansion → FVG → retrace → entry)
@@ -64,7 +65,8 @@ const PATTERN_SCANNER_CONFIG = {
       slBufferPips: 5
     },
     scoring: {
-      premiumThreshold: Number(process.env.SCANNER_PREMIUM_THRESHOLD || 90),
+      // Publish high-conviction setups; 80 keeps coverage broader than a near-perfect 90 gate.
+      premiumThreshold: Number(process.env.SCANNER_PREMIUM_THRESHOLD || 80),
       expansionIdealBodyRatio: 0.82,
       weights: {
         liquiditySweep: 0.28,

@@ -1,6 +1,6 @@
 const { normalizeSymbol } = require('../config/symbols');
 const { TRADINGVIEW_CONFIG } = require('../config/tradingview');
-const { fetchHistoricalData } = require('../utils/marketData');
+const { fetchHistoricalData, twelveDataSkipStatus } = require('../utils/marketData');
 const { isRateLimitError } = require('../utils/marketDataCache');
 const { getRedisClient } = require('../utils/redisClient');
 const {
@@ -23,6 +23,10 @@ const RATE_LIMIT_COOLDOWN_MS = Math.max(
   Number(process.env.MARKET_DATA_RATE_LIMIT_COOLDOWN_MS || 65_000)
 );
 
+function isEodhdConfigured() {
+  return Boolean(TRADINGVIEW_CONFIG.providers?.eodhd?.apiKey || process.env.EODHD_API_KEY);
+}
+
 class MarketDataHub {
   constructor(io) {
     this.io = io;
@@ -36,25 +40,41 @@ class MarketDataHub {
 
   canFetchFromProvider(options = {}) {
     const bypassGap = Boolean(options.bypassGap);
-    if (Date.now() < this.providerBlockedUntil) return false;
+    // Only enforce hub-wide block when EODHD cannot take over.
+    if (!isEodhdConfigured() && Date.now() < this.providerBlockedUntil) return false;
     if (!bypassGap && Date.now() - this.lastProviderFetchAt < MIN_PROVIDER_FETCH_GAP_MS) return false;
     return true;
   }
 
   markProviderRateLimited(message) {
-    this.providerBlockedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
     this.lastRateLimitMessage = message || 'Provider rate limited';
-    console.warn(`[MarketDataHub] Provider rate limited — pausing fetches for ${RATE_LIMIT_COOLDOWN_MS}ms`);
+    if (isEodhdConfigured()) {
+      // Do not freeze the hub — marketData.js skips Twelve Data and uses EODHD immediately.
+      console.warn(
+        '[MarketDataHub] Primary provider limited/out of credits — continuing via EODHD fallback'
+      );
+      return;
+    }
+    this.providerBlockedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+    console.warn(
+      `[MarketDataHub] Provider rate limited — pausing fetches for ${RATE_LIMIT_COOLDOWN_MS}ms (no EODHD key)`
+    );
   }
 
   providerThrottleStatus() {
     const now = Date.now();
+    const twelveSkip = twelveDataSkipStatus();
     return {
       canFetch: this.canFetchFromProvider(),
-      blockedUntil: this.providerBlockedUntil > now ? new Date(this.providerBlockedUntil).toISOString() : null,
+      blockedUntil:
+        !isEodhdConfigured() && this.providerBlockedUntil > now
+          ? new Date(this.providerBlockedUntil).toISOString()
+          : null,
       lastFetchAt: this.lastProviderFetchAt ? new Date(this.lastProviderFetchAt).toISOString() : null,
       minFetchGapMs: MIN_PROVIDER_FETCH_GAP_MS,
-      lastRateLimitMessage: this.lastRateLimitMessage
+      lastRateLimitMessage: this.lastRateLimitMessage,
+      eodhdConfigured: isEodhdConfigured(),
+      twelveDataSkip: twelveSkip
     };
   }
 

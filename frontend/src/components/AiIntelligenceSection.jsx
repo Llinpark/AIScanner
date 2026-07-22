@@ -121,7 +121,15 @@ export default function AiIntelligenceSection({ onViewPricing, onSignUp }) {
             className={`ai-showcase-panel${item.reverse ? ' ai-showcase-panel-reverse' : ''}`}
           >
             <div className="ai-showcase-media">
-              <img src={item.image} alt="" className="ai-showcase-image" loading="lazy" decoding="async" />
+              <img
+                src={item.image}
+                alt={item.title}
+                className="ai-showcase-image"
+                width="640"
+                height="420"
+                loading="lazy"
+                decoding="async"
+              />
               <div className="ai-showcase-media-glow" aria-hidden="true" />
             </div>
             <div className="ai-showcase-copy">

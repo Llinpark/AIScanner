@@ -1,3 +1,4 @@
+import AppLink from './AppLink';
 import { CONTACT_EMAIL } from '../config/appUrls';
 
 export default function RiskDisclosure({ onNavigateHome, onClose }) {
@@ -6,9 +7,9 @@ export default function RiskDisclosure({ onNavigateHome, onClose }) {
   return (
     <div className="risk-disclosure-page">
       <nav className="page-breadcrumb" aria-label="Breadcrumb">
-        <button type="button" className="breadcrumb-link" onClick={onNavigateHome}>
+        <AppLink page="home" onNavigate={onNavigateHome} className="breadcrumb-link">
           Home
-        </button>
+        </AppLink>
         <span className="breadcrumb-separator">/</span>
         <span className="breadcrumb-current">Risk Disclosure</span>
       </nav>

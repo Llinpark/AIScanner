@@ -1,4 +1,5 @@
 const { randomUUID } = require('crypto');
+const { normalizeSymbol } = require('../config/symbols');
 
 const OUTCOME_R = {
   tp1: 1,
@@ -9,14 +10,6 @@ const OUTCOME_R = {
 };
 
 const WIN_OUTCOMES = new Set(['tp1', 'tp2', 'tp3']);
-
-function normalizeSymbol(symbol) {
-  const raw = String(symbol || '').trim().toUpperCase();
-  if (!raw) return '';
-  if (raw.includes('/')) return raw;
-  if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
-  return raw;
-}
 
 function isEntryAlert(alertType) {
   return alertType === 'entry' || alertType === 'signal';

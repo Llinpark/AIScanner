@@ -4,8 +4,6 @@ const {
   DEFAULT_TTL_MS,
   dedupeFetch,
   getFresh,
-  getStale,
-  isRateLimitError,
   set
 } = require('./marketDataCache');
 
@@ -111,13 +109,8 @@ async function fetchTimeSeries({ apiKey, symbol, interval, limit = 100, baseUrl,
       set(cacheKey, candles, DEFAULT_TTL_MS);
       return candles;
     } catch (error) {
-      if (isRateLimitError(error.message)) {
-        const stale = getStale(cacheKey);
-        if (stale) {
-          console.warn(`[TwelveData] Rate limited for ${tdSymbol}, serving stale cache`);
-          return stale;
-        }
-      }
+      // Never swallow credit/rate-limit errors with stale Twelve Data cache —
+      // marketData.js must fall through to EODHD immediately.
       throw error;
     }
   });

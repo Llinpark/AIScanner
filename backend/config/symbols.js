@@ -34,24 +34,45 @@ const SYMBOL_ALIASES = {
   GBPJPY: 'GBP/JPY',
   USDBTC: 'BTC/USD',
   BTCUSD: 'BTC/USD',
+  BTCUSDT: 'BTC/USD',
   'USD/BTC': 'BTC/USD',
   NAS100: 'US100',
   USTEC: 'US100',
+  NDX: 'US100',
+  NDXUSD: 'US100',
+  US100USD: 'US100',
   DJ30: 'US30',
+  DJI: 'US30',
+  DJIA: 'US30',
   US30USD: 'US30',
-  US100USD: 'US100'
+  DOW: 'US30'
 };
 
+/**
+ * Normalize TradingView / broker / provider symbols to canonical app form.
+ * Handles FX:EURUSD, OANDA:GBPUSD, TVC:DJI, EURUSD, EUR/USD, etc.
+ */
 function normalizeSymbol(symbol) {
-  const raw = String(symbol || '')
+  let raw = String(symbol || '')
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '');
   if (!raw) return '';
+
+  // Strip exchange / broker prefixes (FX:EURUSD, TVC:DJI, BINANCE:BTCUSDT)
+  if (raw.includes(':')) {
+    const parts = raw.split(':').filter(Boolean);
+    raw = parts[parts.length - 1];
+  }
+
+  // Strip common TradingView / feed suffixes
+  raw = raw.replace(/!$/g, '');
+  raw = raw.replace(/\.(P|FX|FOREX|CASH|CFD)$/i, '');
+
   if (SYMBOL_ALIASES[raw]) return SYMBOL_ALIASES[raw];
   if (raw.includes('/')) return raw;
   if (raw === 'US30' || raw === 'US100') return raw;
-  if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
+  if (/^[A-Z]{6}$/.test(raw)) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
   return raw;
 }
 

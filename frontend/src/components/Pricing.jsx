@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import Checkout from './Checkout';
+import { PRICING_FAQS } from '../seo/pageMeta';
 
 function isActiveSubscription(subscription) {
   if (!subscription) return false;
@@ -73,7 +74,7 @@ export default function Pricing({
   return (
     <div className="pricing-container">
       <div className="pricing-header">
-        <h1>Choose Your Trading Plan</h1>
+        <h1>Pricing &amp; Plans</h1>
         <p>
           {isAuthenticated ? (
             <>
@@ -154,9 +155,15 @@ export default function Pricing({
                         <span className="btn-subscribe-label">Current Plan</span>
                       </button>
                     ) : (
-                      <button type="button" className={`btn-subscribe btn-${key}`} onClick={() => handleSelectTier(key)}>
+                      <button
+                        type="button"
+                        className={`btn-subscribe btn-${key}`}
+                        onClick={() => handleSelectTier(key)}
+                      >
                         <span className="btn-subscribe-label">
-                          {hasAccess && key !== currentTier ? `Switch to ${tier.name}` : `Get ${tier.name}`}
+                          {hasAccess && key !== currentTier
+                            ? `Switch to ${tier.name}`
+                            : `Get ${tier.name}`}
                         </span>
                         <span className="btn-subscribe-arrow" aria-hidden="true">
                           →
@@ -168,6 +175,18 @@ export default function Pricing({
               );
             })}
           </div>
+
+          <section className="pricing-faq" aria-labelledby="pricing-faq-title">
+            <h2 id="pricing-faq-title">Frequently asked questions</h2>
+            <div className="pricing-faq-list">
+              {PRICING_FAQS.map(item => (
+                <details key={item.question} className="pricing-faq-item">
+                  <summary>{item.question}</summary>
+                  <p>{item.answer}</p>
+                </details>
+              ))}
+            </div>
+          </section>
 
           <div className="pricing-footer">
             <p>After payment, open TradingView for accurate alerts.</p>

@@ -23,7 +23,7 @@ function applyScannerConfig(patch = {}) {
     PATTERN_SCANNER_CONFIG.scanBatchSize = Math.max(1, parseInt(patch.scanBatchSize, 10) || 2);
   }
   if (patch.premiumThreshold !== undefined) {
-    const threshold = Math.min(100, Math.max(50, parseInt(patch.premiumThreshold, 10) || 90));
+    const threshold = Math.min(100, Math.max(50, parseInt(patch.premiumThreshold, 10) || 80));
     PATTERN_SCANNER_CONFIG.pipeline.scoring.premiumThreshold = threshold;
   }
   if (patch.weights && typeof patch.weights === 'object') {

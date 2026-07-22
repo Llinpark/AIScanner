@@ -33,10 +33,13 @@ export default function Hero({ onViewPricing, onSignUp, onReferEarn }) {
           <div className="hero-image-wrap">
             <img
               src="/hero-img.png"
-              alt="Kaching AI trading dashboard on tablet and mobile"
+              alt="KachingScanner AI trading dashboard on tablet and mobile"
               className="hero-image"
+              width="960"
+              height="720"
               loading="eager"
               decoding="async"
+              fetchPriority="high"
             />
             <div className="hero-image-fade" aria-hidden="true" />
           </div>

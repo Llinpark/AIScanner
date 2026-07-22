@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-
+import AppLink from './AppLink';
 import { APP_NAME } from '../config/appUrls';
 
 const TIER_BADGE_LABELS = { basic: 'BASIC', professional: 'PRO', premium: 'PREMIUM' };
@@ -36,22 +36,22 @@ export default function Navbar({
     return () => document.body.classList.remove('nav-menu-open');
   }, [menuOpen]);
 
-  const handleNavigate = page => {
+  const handleNavigate = (page, options, navOpts) => {
     setMenuOpen(false);
-    onNavigate(page);
+    onNavigate(page, options, navOpts);
   };
 
   return (
     <header className={`site-navbar ${menuOpen ? 'menu-open' : ''}`}>
       <div className="navbar-inner">
-        <button
-          type="button"
+        <AppLink
+          page="home"
+          onNavigate={handleNavigate}
           className="navbar-brand"
-          onClick={() => handleNavigate('home')}
-          aria-label={`${APP_NAME} home`}
+          ariaLabel={`${APP_NAME} home`}
         >
-          <img className="navbar-logo" src="/logo-1.png" alt={APP_NAME} />
-        </button>
+          <img className="navbar-logo" src="/logo-1.png" alt={APP_NAME} width="140" height="40" />
+        </AppLink>
 
         <button
           type="button"
@@ -67,14 +67,15 @@ export default function Navbar({
         <div id="navbar-panel" className={`navbar-panel ${menuOpen ? 'open' : ''}`}>
           <nav className="navbar-links" aria-label="Main navigation">
             {pageLinks.map(link => (
-              <button
+              <AppLink
                 key={link.id}
-                type="button"
+                page={link.id}
+                onNavigate={handleNavigate}
                 className={`navbar-link ${currentPage === link.id ? 'active' : ''}`}
-                onClick={() => handleNavigate(link.id)}
+                ariaCurrent={currentPage === link.id ? 'page' : undefined}
               >
                 {link.label}
-              </button>
+              </AppLink>
             ))}
           </nav>
 
@@ -95,20 +96,28 @@ export default function Navbar({
               </>
             ) : (
               <>
-                <button
-                  type="button"
+                <AppLink
+                  page="signup"
+                  onNavigate={() => {
+                    setMenuOpen(false);
+                    onSignUp();
+                  }}
                   className={`navbar-auth-link ${currentPage === 'signup' ? 'active' : ''}`}
-                  onClick={onSignUp}
+                  ariaCurrent={currentPage === 'signup' ? 'page' : undefined}
                 >
                   Register
-                </button>
-                <button
-                  type="button"
+                </AppLink>
+                <AppLink
+                  page="signin"
+                  onNavigate={() => {
+                    setMenuOpen(false);
+                    onSignIn();
+                  }}
                   className={`navbar-auth-link navbar-auth-link-primary ${currentPage === 'signin' ? 'active' : ''}`}
-                  onClick={onSignIn}
+                  ariaCurrent={currentPage === 'signin' ? 'page' : undefined}
                 >
                   Login
-                </button>
+                </AppLink>
               </>
             )}
           </div>
