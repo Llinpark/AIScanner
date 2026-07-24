@@ -17,6 +17,7 @@ function Get-EnvValue($name) {
 $keys = @(
   'MONGODB_URI', 'REDIS_URL', 'JWT_SECRET', 'WEBHOOK_SIGNING_SECRET',
   'PAYMENT_WEBHOOK_SECRET', 'TELEGRAM_WEBHOOK_SECRET', 'TRADINGVIEW_WEBHOOK_SECRET',
+  'TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_USERNAME',
   'TWELVE_DATA_API_KEY', 'EODHD_API_KEY',
   'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY'
 )
@@ -40,7 +41,7 @@ $overrides = @{
   ADMIN_EMAILS = 'collinspark1985@gmail.com,barasajohn1985@gmail.com,lilianmonari15@gmail.com'
   REDIS_ENABLED = 'true'
   TELEGRAM_USE_POLLING = 'false'
-  SCANNER_AUTO_ENABLED = 'true'
+  SCANNER_AUTO_ENABLED = 'false'
   BETA_MODE = 'true'
   BETA_TIER = 'premium'
   BETA_ACCESS_DAYS = '30'

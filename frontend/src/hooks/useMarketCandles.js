@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { marketDataApi } from '../services/api';
 import { getSharedSocket } from '../services/marketDataSocket';
 import { normalizeInterval, symbolsMatch } from '../utils/chartLevels';
+import { toUserFacingMarketDataError } from '../utils/marketDataErrors';
 
 const inflightRequests = new Map();
 const lastPayloadByStream = new Map();
@@ -147,12 +148,12 @@ export default function useMarketCandles({
             return;
           }
           const data = err.response?.data;
-          const message =
+          const raw =
             (typeof data === 'object' && (data?.message || data?.detail)) ||
             (err.code === 'ECONNABORTED' ? 'Chart request timed out. Try refreshing.' : null) ||
             err.message ||
             'Failed to load chart data.';
-          setError(message);
+          setError(toUserFacingMarketDataError(raw, 'Failed to load chart data.'));
           setLoading(false);
           setLiveStatus('error');
         });
@@ -197,7 +198,7 @@ export default function useMarketCandles({
         return;
       }
       markResolved();
-      setError(payload.message);
+      setError(toUserFacingMarketDataError(payload.message));
       setLoading(false);
       setLiveStatus('error');
     };

@@ -10,16 +10,16 @@ A hybrid Forex AI scanner architecture combining Python and the MERN stack.
 
 ## Architecture
 
-1. `python-service`
-   - **Market Data Service** (FastAPI): provider-agnostic interface with Twelve Data primary and EODHD automatic fallback.
-   - Redis-backed caching (in-memory fallback when Redis is unavailable).
-   - WebSocket relay for live Twelve Data price streaming.
-   - Endpoints under `/market-data/*` plus `POST /signal` and `GET /health`.
+1. `python-service` (FastAPI AI analytics)
+   - LSTM / indicator signal analytics on **injected** OHLC bars.
+   - May read the shared Redis hub cache written by Node (`kaching:candles:*`).
+   - Does **not** call Twelve Data or EODHD — Node owns market-data retrieval.
+   - Endpoints: `POST /signal` (candles in body), Redis-only `GET /market-data/candles`, `GET /health`.
 
-2. `backend`
-   - Receives signals from Python.
-   - Persists them into MongoDB.
-   - Broadcasts real-time updates to React clients via Socket.IO.
+2. `backend` (Node)
+   - **Sole** market-data owner: Twelve Data, EODHD, MarketDataHubService, ChartDataService.
+   - Passes candles into FastAPI via `PythonAiService` when `PYTHON_SERVICE_URL` is set.
+   - Persists signals into MongoDB; Socket.IO for live chart/candle updates.
    - Supports subscriber authentication and subscription billing.
 
 3. `frontend`
@@ -30,16 +30,17 @@ A hybrid Forex AI scanner architecture combining Python and the MERN stack.
 
 ## Setup 
 
-### Python service
+### Python service (AI only)
 
-Set `TWELVE_DATA_API_KEY` and optional `EODHD_API_KEY` in `python-service/.env` (see `.env.example`).
+Market provider keys stay in `backend/.env` only. Optional shared Redis for hub cache reads — see `python-service/.env.example`.
 
-FastAPI market data endpoints:
-- `GET /market-data/status`
-- `GET /market-data/providers`
-- `GET /market-data/candles?symbol=EUR/USD&interval=1h&limit=100`
-- `GET /market-data/symbols/{symbol}/candles`
-- `WS /market-data/ws` — subscribe with `{"action":"subscribe","symbols":["EUR/USD"]}`
+FastAPI endpoints:
+- `POST /signal` — body: `{ symbol, interval, lookback?, candles: [...] }`
+- `GET /market-data/candles` — Redis hub cache only (404 if Node has not written the key)
+- `POST /market-data/candles` — normalize/echo injected bars
+- `GET /health`
+
+Node proxy (supplies hub candles automatically): `POST /api/ai/signal`
 
 ```powershell
 cd python-service
@@ -107,8 +108,8 @@ Production URLs (override in `backend/.env` and `frontend/.env`):
 
 ## Notes
 
-- Replace API keys in `backend/.env` and `python-service/.env` (Twelve Data + optional EODHD fallback).
-- Market data uses **Twelve Data primary** with **EODHD automatic fallback** in both Node and Python services.
+- Replace Twelve Data / EODHD API keys in `backend/.env` only.
+- Market data uses **Twelve Data primary** with **EODHD automatic fallback** in the Node hub; FastAPI only analyzes injected/Redis bars.
 
 ## Run All Services
 

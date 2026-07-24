@@ -193,6 +193,9 @@ async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
 
 async function broadcastToSubscribers(io, signalData, inMemorySignals = [], options = {}) {
   const subscribers = await findActiveSubscribers();
+  const fromTradingViewWebhook = Boolean(
+    options.fromTradingViewWebhook || options.skipMarketData
+  );
 
   if (options.existingSaved) {
     const delivery = await deliverBroadcastToSubscribers(io, options.existingSaved, subscribers);
@@ -209,17 +212,28 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
 
   for (const subscriber of subscribers) {
     const mt5 = subscriber.mt5 || {};
-    const MarketScannerService = require('../services/MarketScannerService');
-    const candles = MarketScannerService.getCandles(signalData.symbol);
-    const enriched = await SignalEnrichmentService.enrichSignal(
-      { ...signalData, userId: subscriber.id, isBroadcast: true },
-      {
+    const basePayload = { ...signalData, userId: subscriber.id, isBroadcast: true };
+
+    let enriched;
+    if (fromTradingViewWebhook) {
+      // Metadata + per-user risk stats only — never candles / live market data.
+      enriched = await SignalEnrichmentService.enrichFromTradingViewWebhook(basePayload, {
+        fromTradingViewWebhook: true,
+        userId: subscriber.id,
+        subscriber,
         accountBalance: mt5.accountBalance,
         riskPercent: mt5.riskPercent || 1,
-        candles,
         timeframe: signalData.timeframe || '1h'
-      }
-    );
+      });
+    } else {
+      const MarketScannerService = require('../services/MarketScannerService');
+      enriched = await SignalEnrichmentService.enrichSignal(basePayload, {
+        accountBalance: mt5.accountBalance,
+        riskPercent: mt5.riskPercent || 1,
+        candles: MarketScannerService.getCandles(signalData.symbol),
+        timeframe: signalData.timeframe || '1h'
+      });
+    }
 
     const saved = await saveSignal(enriched, inMemorySignals);
 
@@ -245,7 +259,9 @@ function buildSignalData(body) {
     patternLabel: body.patternLabel || body.pattern_label || null,
     gapTop: parseFloat(body.gapTop || body.gap_top || 0) || undefined,
     gapBottom: parseFloat(body.gapBottom || body.gap_bottom || 0) || undefined,
-    source: 'tradingview'
+    strategy: body.strategy || body.strategy_name || body.patternLabel || body.pattern_label || null,
+    source: 'tradingview',
+    origin: 'tradingview_webhook'
   };
 
   if (signalData.pattern === 'perfect_fvg' && !signalData.patternLabel) {
@@ -260,23 +276,49 @@ function buildSignalData(body) {
   return signalData;
 }
 
-async function processIncomingWebhook(io, rawBody, inMemorySignals = []) {
+/**
+ * TradingView webhook / inject path — validate, persist, and publish only.
+ * Never fetches candles, never runs indicator / liquidity / FVG / SMC pipelines.
+ */
+async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
   const body = parseWebhookBody(rawBody);
   const baseData = buildSignalData(body);
+
   const { signalData, updatedEntry } = await SignalOutcomeService.processSignalLifecycle(
     baseData,
-    inMemorySignals
+    inMemorySignals,
+    { fromTradingViewWebhook: true, skipMarketData: true }
   );
 
   if (updatedEntry) {
     io.emit('signal:outcome', updatedEntry);
   }
 
+  const delivery = await broadcastToSubscribers(io, signalData, inMemorySignals, {
+    fromTradingViewWebhook: true,
+    skipMarketData: true
+  });
+
+  console.log(
+    `[TV Webhook] Published ${signalData.alertType} ${signalData.symbol} ` +
+      `(publish-only, delivered=${delivery.delivered}, no market-data fetch)`
+  );
+
   return {
     mode: 'broadcast',
+    publishOnly: true,
     outcomeLinked: Boolean(updatedEntry),
-    ...(await broadcastToSubscribers(io, signalData, inMemorySignals))
+    ...delivery
   };
+}
+
+async function publishTradingViewAlert(io, rawBody, inMemorySignals = []) {
+  return processTradingViewWebhook(io, rawBody, inMemorySignals);
+}
+
+/** @deprecated Prefer processTradingViewWebhook / publishTradingViewAlert (publish-only). */
+async function processIncomingWebhook(io, rawBody, inMemorySignals = []) {
+  return processTradingViewWebhook(io, rawBody, inMemorySignals);
 }
 
 module.exports = {
@@ -291,6 +333,8 @@ module.exports = {
   deliverLiveAlert,
   broadcastToSubscribers,
   processIncomingWebhook,
+  processTradingViewWebhook,
+  publishTradingViewAlert,
   buildSignalData,
   KACHING_ALERT_NAMES
 };

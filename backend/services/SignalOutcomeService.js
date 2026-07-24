@@ -7,7 +7,10 @@ const {
   applyOutcomeUpdate,
   normalizeSymbol
 } = require('../utils/signalOutcome');
-const { enrichSignal } = require('../services/SignalEnrichmentService');
+const {
+  enrichSignal,
+  enrichFromTradingViewWebhook
+} = require('../services/SignalEnrichmentService');
 const { scheduleRetrainOnOutcome } = require('./WeightLearningService');
 
 function isDbConnected() {
@@ -62,8 +65,16 @@ async function updateEntryOutcome(entry, alertType, inMemorySignals) {
   return saved;
 }
 
-async function processSignalLifecycle(rawSignalData, inMemorySignals = []) {
-  const signalData = await enrichSignal(rawSignalData);
+async function processSignalLifecycle(rawSignalData, inMemorySignals = [], options = {}) {
+  const fromTradingViewWebhook = Boolean(
+    options.fromTradingViewWebhook || options.skipMarketData
+  );
+  const signalData = fromTradingViewWebhook
+    ? await enrichFromTradingViewWebhook(rawSignalData, {
+        fromTradingViewWebhook: true,
+        ...options
+      })
+    : await enrichSignal(rawSignalData, options);
   const alertType = signalData.alertType || 'signal';
 
   if (isOutcomeAlert(alertType)) {

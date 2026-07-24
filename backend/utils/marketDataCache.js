@@ -6,6 +6,10 @@ const DEFAULT_TTL_MS = Number(
 );
 const STALE_TTL_MS = Number(process.env.MARKET_DATA_STALE_TTL_MS || 900000);
 
+/** Calm copy for end users when providers are throttled or unavailable. */
+const USER_FACING_MARKET_DATA_UNAVAILABLE =
+  'Market data is temporarily unavailable. Please try again shortly.';
+
 /** Soft per-minute throttle (e.g. free tier 8 credits/min) — not a plan outage. */
 function isPerMinuteCreditError(message) {
   const text = String(message || '').toLowerCase();
@@ -29,6 +33,40 @@ function isRateLimitError(message) {
     text.includes('too many requests') ||
     text.includes('429')
   );
+}
+
+/** True when a message looks like raw Twelve Data / EODHD / provider-chain output. */
+function isProviderTechnicalError(message) {
+  const text = String(message || '').toLowerCase();
+  if (!text) return false;
+  return (
+    isRateLimitError(text) ||
+    text.includes('twelve_data:') ||
+    text.includes('eodhd:') ||
+    text.includes('cached data unavailable') ||
+    text.includes('twelvedata.com') ||
+    text.includes('eodhistoricaldata') ||
+    text.includes('eodhd/') ||
+    text.includes('check eodhd') ||
+    text.includes('api key') ||
+    text.includes('not configured') ||
+    text.includes('no market data providers') ||
+    text.includes('provider throttled') ||
+    text.includes('provider rate limited') ||
+    text.includes('credit/rate-limit')
+  );
+}
+
+/**
+ * Map provider/rate-limit failures to calm user-facing copy.
+ * Technical detail should stay in server logs only.
+ */
+function toUserFacingMarketDataError(message, fallback = USER_FACING_MARKET_DATA_UNAVAILABLE) {
+  if (!message) return fallback;
+  if (isProviderTechnicalError(message)) {
+    return USER_FACING_MARKET_DATA_UNAVAILABLE;
+  }
+  return String(message);
 }
 
 /**
@@ -100,9 +138,12 @@ async function dedupeFetch(key, fetcher) {
 module.exports = {
   DEFAULT_TTL_MS,
   STALE_TTL_MS,
+  USER_FACING_MARKET_DATA_UNAVAILABLE,
   isPerMinuteCreditError,
   isRateLimitError,
   isCreditExhaustedError,
+  isProviderTechnicalError,
+  toUserFacingMarketDataError,
   isEodhdEodOnlyError,
   getFresh,
   getStale,

@@ -1,5 +1,10 @@
-"""Market data package — Twelve Data primary, EODHD automatic fallback."""
+"""Market data package — Redis / injected candles only (Node owns providers)."""
 
-from .service import MarketDataService, market_data_service
+from .service import MarketDataService, MarketDataUnavailableError, candles_to_dataframe, market_data_service
 
-__all__ = ['MarketDataService', 'market_data_service']
+__all__ = [
+    'MarketDataService',
+    'MarketDataUnavailableError',
+    'candles_to_dataframe',
+    'market_data_service',
+]

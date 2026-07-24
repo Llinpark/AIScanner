@@ -1,87 +1,150 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
-from .base import MarketDataProvider, MarketDataProviderError
 from .cache import MarketDataCache
 from .config import MarketDataSettings, load_settings
-from .eodhd_service import EodhdService
-from .symbols import normalize_symbol, to_eodhd_symbol, to_twelve_data_interval, to_twelve_data_symbol
-from .twelve_data_service import TwelveDataService
+from .errors import CANDLES_REQUIRED_MESSAGE, USER_FACING_MARKET_DATA_UNAVAILABLE
+from .symbols import normalize_interval, normalize_symbol
 
 
 class MarketDataUnavailableError(RuntimeError):
     pass
 
 
+def candles_to_dataframe(candles: Iterable[dict[str, Any]] | None) -> pd.DataFrame:
+    """Normalize injected OHLC bars (from Node hub / request body) into a DataFrame."""
+    rows: list[dict[str, Any]] = []
+    for candle in candles or []:
+        if not isinstance(candle, dict):
+            continue
+        raw_time = candle.get('timestamp', candle.get('time'))
+        if raw_time is None:
+            continue
+        try:
+            if isinstance(raw_time, (int, float)):
+                ms = raw_time if raw_time > 1e12 else raw_time * 1000
+                ts = pd.to_datetime(ms, unit='ms', utc=True)
+            else:
+                ts = pd.to_datetime(raw_time, utc=True)
+            rows.append(
+                {
+                    'timestamp': ts,
+                    'open': float(candle['open']),
+                    'high': float(candle['high']),
+                    'low': float(candle['low']),
+                    'close': float(candle['close']),
+                    'volume': float(candle.get('volume') or 0),
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    if not rows:
+        return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
+    df = pd.DataFrame(rows).sort_values('timestamp').drop_duplicates(subset=['timestamp'], keep='last')
+    return df.reset_index(drop=True)
+
+
 class MarketDataService:
-    """Provider-agnostic market data service with automatic fallback."""
+    """Consumes candles injected by Node (request body) or shared Redis hub cache.
+
+    Never calls Twelve Data, EODHD, or any external market-data HTTP API.
+    """
 
     def __init__(self, settings: MarketDataSettings | None = None):
         self.settings = settings or load_settings()
         self.cache = MarketDataCache(self.settings)
-        self.providers: dict[str, MarketDataProvider] = {
-            'twelve_data': TwelveDataService(self.settings),
-            'eodhd': EodhdService(self.settings),
-        }
-
-    def _provider_chain(self) -> list[MarketDataProvider]:
-        chain: list[MarketDataProvider] = []
-        for name in [self.settings.primary_provider, self.settings.fallback_provider]:
-            provider = self.providers.get(name)
-            if provider and provider not in chain:
-                chain.append(provider)
-        return chain
 
     def status(self) -> dict[str, Any]:
         return {
-            'primary_provider': self.settings.primary_provider,
-            'fallback_provider': self.settings.fallback_provider,
+            'mode': 'injected_or_redis',
+            'providers': [],
+            'external_http_fetch': False,
             'cache_backend': self.cache.backend,
             'cache_ttl_seconds': self.settings.cache_ttl_seconds,
-            'stream_enabled': self.settings.stream_enabled,
-            'providers': [provider.status() for provider in self.providers.values()],
+            'redis_enabled': self.settings.redis_enabled,
+            'note': 'Node MarketDataHubService owns Twelve Data / EODHD. FastAPI only reads Redis or request candles.',
         }
 
-    def get_candles(self, symbol: str, interval: str = '1h', limit: int = 100) -> tuple[pd.DataFrame, dict[str, Any]]:
+    def resolve_bars(
+        self,
+        symbol: str,
+        interval: str = '1h',
+        limit: int = 100,
+        candles: list[dict[str, Any]] | None = None,
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        """Prefer explicit candles; otherwise read Node hub Redis cache."""
+        if candles:
+            df = candles_to_dataframe(candles)
+            if df.empty:
+                raise MarketDataUnavailableError(CANDLES_REQUIRED_MESSAGE)
+            if limit and len(df) > limit:
+                df = df.tail(limit).reset_index(drop=True)
+            meta = {
+                'provider': 'injected',
+                'source': 'request_body',
+                'symbol': normalize_symbol(symbol),
+                'interval': normalize_interval(interval),
+                'requested_limit': limit,
+                'count': len(df),
+                'fallback_used': False,
+            }
+            return df, meta
+
+        return self.get_candles_from_redis(symbol, interval, limit)
+
+    def get_candles_from_redis(
+        self, symbol: str, interval: str = '1h', limit: int = 100
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
         normalized = normalize_symbol(symbol)
-        cache_key = self.cache.build_key(normalized, interval, limit)
-        cached = self.cache.get(cache_key)
-        if cached:
-            return pd.DataFrame(cached['candles']), cached['meta']
+        canonical = normalize_interval(interval)
+        parsed_limit = max(1, int(limit or 100))
 
-        errors: list[str] = []
-        for provider in self._provider_chain():
-            if not provider.is_configured():
-                errors.append(f'{provider.name}: not configured')
+        # Try exact key, then common hub defaults (Node often caches limit=200).
+        candidate_limits = [parsed_limit]
+        for alt in (200, 100, 500):
+            if alt not in candidate_limits:
+                candidate_limits.append(alt)
+
+        for key_limit in candidate_limits:
+            key = self.cache.build_hub_key(normalized, canonical, key_limit)
+            cached = self.cache.get(key)
+            if not cached:
                 continue
-            try:
-                candles = provider.fetch_candles(normalized, interval, limit)
-                meta = {
-                    'provider': provider.name,
-                    'symbol': normalized,
-                    'provider_symbol': self._provider_symbol(provider.name, normalized),
-                    'interval': interval,
-                    'requested_limit': limit,
-                    'count': len(candles),
-                    'fallback_used': provider.name != self.settings.primary_provider,
-                }
-                self.cache.set(cache_key, {'candles': candles, 'meta': meta})
-                return pd.DataFrame(candles).reset_index(drop=True), meta
-            except (MarketDataProviderError, Exception) as exc:
-                errors.append(f'{provider.name}: {exc}')
+            raw_candles = cached.get('candles') if isinstance(cached, dict) else None
+            df = candles_to_dataframe(raw_candles)
+            if df.empty:
+                continue
+            if len(df) > parsed_limit:
+                df = df.tail(parsed_limit).reset_index(drop=True)
+            meta = {
+                'provider': cached.get('provider') or 'redis',
+                'source': 'redis_hub',
+                'symbol': normalized,
+                'interval': canonical,
+                'requested_limit': parsed_limit,
+                'count': len(df),
+                'fallback_used': bool(cached.get('fallback_used')),
+                'cache_key': key,
+                'stale': bool(cached.get('stale')),
+            }
+            return df, meta
 
-        stale = self.cache.get_stale(cache_key)
-        if stale:
-            meta = {**stale['meta'], 'stale': True}
-            return pd.DataFrame(stale['candles']).reset_index(drop=True), meta
+        print(f'[MarketData] Redis cache miss for {normalized} {canonical} (limit={parsed_limit})')
+        raise MarketDataUnavailableError(USER_FACING_MARKET_DATA_UNAVAILABLE)
 
-        raise MarketDataUnavailableError(' | '.join(errors) or 'No market data providers configured')
-
-    def get_candles_payload(self, symbol: str, interval: str = '1h', limit: int = 100) -> dict[str, Any]:
-        df, meta = self.get_candles(symbol, interval, limit)
+    def get_candles_payload(
+        self,
+        symbol: str,
+        interval: str = '1h',
+        limit: int = 100,
+        candles: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        df, meta = self.resolve_bars(symbol, interval, limit, candles)
         rows = []
         for _, row in df.iterrows():
             ts = row['timestamp']
@@ -97,13 +160,12 @@ class MarketDataService:
             )
         return {**meta, 'candles': rows}
 
-    @staticmethod
-    def _provider_symbol(provider_name: str, symbol: str) -> str:
-        if provider_name == 'eodhd':
-            return to_eodhd_symbol(symbol)
-        return to_twelve_data_symbol(symbol)
-
 
 market_data_service = MarketDataService()
 
-__all__ = ['MarketDataService', 'market_data_service', 'MarketDataUnavailableError']
+__all__ = [
+    'MarketDataService',
+    'market_data_service',
+    'MarketDataUnavailableError',
+    'candles_to_dataframe',
+]

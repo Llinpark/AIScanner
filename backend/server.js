@@ -55,12 +55,14 @@ const {
 } = require('./services/SubscriptionService');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
+const ChartDataService = require('./services/ChartDataService');
 const {
   normalizeSignalLevels,
   validateKachingEntrySignal
 } = require('./utils/kachingSignalLevels');
 const MarketScannerService = require('./services/MarketScannerService');
 const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
+const PythonAiService = require('./services/PythonAiService');
 const SignalEnrichmentService = require('./services/SignalEnrichmentService');
 const SignalOutcomeService = require('./services/SignalOutcomeService');
 const WeightLearningService = require('./services/WeightLearningService');
@@ -102,6 +104,10 @@ const { extractAuthTokenFromSocket } = require('./utils/sessionCookies');
 const { isAdmin } = require('./utils/adminAccess');
 const { normalizeSymbol } = require('./config/symbols');
 const { normalizeInterval } = require('./utils/marketIntervals');
+const {
+  toUserFacingMarketDataError,
+  USER_FACING_MARKET_DATA_UNAVAILABLE
+} = require('./utils/marketDataCache');
 
 const TRADINGVIEW_WEBHOOK_SECRET = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
 
@@ -211,7 +217,11 @@ app.get('/api/health', (req, res) => {
     dbState: mongoose.connection.readyState,
     domain: APP_DOMAIN,
     frontendUrl: FRONTEND_URL,
-    publicBackendUrl: PUBLIC_BACKEND_URL
+    publicBackendUrl: PUBLIC_BACKEND_URL,
+    pythonAi: {
+      configured: PythonAiService.isConfigured(),
+      url: PythonAiService.isConfigured() ? PythonAiService.getPythonServiceUrl() : null
+    }
   });
 });
 
@@ -231,33 +241,18 @@ app.post('/api/signals', webhookLimiter, async (req, res) => {
     const auth = await assertTradingViewWebhook(req, res);
     if (!auth) return;
 
-    const payload = parseTradingViewPayload(auth.body || req.body);
-
-    if (!isDbReady()) {
-      const enriched = await SignalEnrichmentService.enrichSignal(payload);
-      const fallback = Object.assign({}, enriched, { createdAt: new Date(), _id: `mem_${Date.now()}` });
-      inMemorySignals.unshift(fallback);
-      io.emit('signal:update', fallback);
-      return res.status(201).json({ fallback: true, signal: fallback });
-    }
-
-    const enriched = await SignalEnrichmentService.enrichSignal(payload);
-    const signal = new Signal(enriched);
-    const saved = await signal.save();
-    io.emit('signal:update', saved);
-
-    await TradingViewAlertService.broadcastToSubscribers(
+    // Publish-only: never enrich with live market data on TradingView inject paths.
+    const result = await MarketScannerService.publishTradingViewAlert(
       io,
-      {
-        ...payload,
-        source: payload.source || 'scanner',
-        alertType: TradingViewAlertService.normalizeAlertType(payload.alertType || 'signal')
-      },
-      inMemorySignals,
-      { existingSaved: saved }
+      auth.body || req.body,
+      inMemorySignals
     );
 
-    return res.status(201).json(saved);
+    return res.status(201).json({
+      success: true,
+      publishOnly: true,
+      ...result
+    });
   } catch (error) {
     console.error('Error saving signal:', error);
     return res.status(400).json({ message: safeErrorMessage(error, 'Unable to save signal.') });
@@ -293,20 +288,25 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       parsed.low != null &&
       parsed.close != null;
 
+    // Candle feeds are acknowledged only — no ingest, scan, indicators, or live market-data fetch.
     if ((isCandlePayload || isCandleFeed) && parsed.symbol && !isStructuredEntry) {
-      const scanResult = await MarketScannerService.ingestCandle(io, {
-        symbol: parsed.symbol || parsed.ticker,
-        open: parsed.open,
-        high: parsed.high,
-        low: parsed.low,
-        close: parsed.close,
-        volume: parsed.volume,
-        time: parsed.time
+      console.log(
+        `[TV Webhook] Candle feed acknowledged (no scan/fetch): ${parsed.symbol || parsed.ticker}`
+      );
+      return res.status(201).json({
+        success: true,
+        mode: 'candle_ack',
+        publishOnly: true,
+        scanned: false,
+        fetched: false
       });
-      return res.status(201).json({ success: true, mode: 'candle_scan', scanResult });
     }
 
-    const result = await TradingViewAlertService.processIncomingWebhook(io, req.body, inMemorySignals);
+    const result = await MarketScannerService.publishTradingViewAlert(
+      io,
+      req.body,
+      inMemorySignals
+    );
     return res.status(201).json({ success: true, ...result });
   } catch (error) {
     console.error('TradingView webhook error:', error);
@@ -1826,7 +1826,7 @@ app.get('/api/tradingview/history/:symbol', requireAuth, requireSubscription, as
       });
     }
 
-    const historicalData = await TradingViewService.getHistoricalData(symbol, interval, parseInt(limit, 10));
+    const historicalData = await ChartDataService.getHistoricalData(symbol, interval, parseInt(limit, 10));
     const response = { symbol, interval, data: historicalData };
 
     if (features.newsFilter) {
@@ -1836,7 +1836,9 @@ app.get('/api/tradingview/history/:symbol', requireAuth, requireSubscription, as
     res.json(response);
   } catch (error) {
     console.error('Get historical data error:', error);
-    res.status(500).json({ message: 'Unable to fetch historical data', error: error.message });
+    res.status(500).json({
+      message: toUserFacingMarketDataError(error.message, 'Unable to fetch historical data')
+    });
   }
 });
 
@@ -1871,15 +1873,18 @@ app.get('/api/market-data/candles', requireAuth, requireSubscription, async (req
       try {
         payload = await hub.getCandles(symbol, interval, parsedLimit, { allowProviderFetch: true });
       } catch (refreshError) {
-        payload = { ...payload, stale: true, refreshError: refreshError.message };
+        payload = {
+          ...payload,
+          stale: true,
+          refreshError: toUserFacingMarketDataError(refreshError.message)
+        };
       }
     }
     res.json(payload);
   } catch (error) {
     console.error('Market data proxy error:', error);
     res.status(502).json({
-      message: error.message || 'Unable to fetch market data',
-      detail: error.message
+      message: toUserFacingMarketDataError(error.message, 'Unable to fetch market data')
     });
   }
 });
@@ -1994,10 +1999,68 @@ app.get('/api/scanner/analyze', scannerLimiter, requireAuth, requireSubscription
     }
 
     const result = await MarketScannerService.analyzeSymbol(symbol, interval);
-    return res.json({ success: true, ...result });
+
+    // Optional FastAPI AI analytics — Node supplies candles; Python never fetches providers.
+    let pythonAi = null;
+    if (PythonAiService.isConfigured()) {
+      pythonAi = await PythonAiService.createSignal({
+        symbol,
+        interval,
+        lookback: 100
+      });
+    }
+
+    return res.json({ success: true, ...result, pythonAi });
   } catch (error) {
     console.error('Scanner analyze error:', error);
     return res.status(500).json({ message: 'Scanner analyze failed', error: error.message });
+  }
+});
+
+/**
+ * AI signal analytics via FastAPI.
+ * Node resolves candles from MarketDataHub / ChartDataService and injects them into Python.
+ */
+app.post('/api/ai/signal', scannerLimiter, requireAuth, requireSubscription, async (req, res) => {
+  try {
+    if (!PythonAiService.isConfigured()) {
+      return res.status(503).json({
+        message: 'Python AI service is not configured (set PYTHON_SERVICE_URL).'
+      });
+    }
+
+    const symbol = req.body?.symbol || req.query.symbol;
+    const interval = req.body?.interval || req.query.interval || '1h';
+    const lookback = Number(req.body?.lookback || 200);
+
+    if (!symbol) {
+      return res.status(400).json({ message: 'symbol is required' });
+    }
+
+    if (!isCurrencyPairAllowed(symbol, req.user.subscription)) {
+      return res.status(403).json({
+        message: `Currency pair ${symbol} is not included in your plan.`,
+        allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
+      });
+    }
+
+    const signal = await PythonAiService.createSignal(
+      {
+        symbol,
+        interval,
+        lookback,
+        candles: req.body?.candles
+      },
+      { throwOnError: true }
+    );
+
+    return res.json({ success: true, signal });
+  } catch (error) {
+    console.error('AI signal error:', error);
+    return res.status(502).json({
+      message: 'AI signal analytics failed',
+      error: safeErrorMessage(error)
+    });
   }
 });
 
@@ -2142,11 +2205,14 @@ io.on('connection', socket => {
 
       socket.emit('market:error', {
         message: hub.providerThrottleStatus().blockedUntil
-          ? 'Market data temporarily rate limited. Please wait a moment and try again.'
+          ? USER_FACING_MARKET_DATA_UNAVAILABLE
           : 'Unable to load chart data for this symbol.'
       });
     } catch (error) {
-      socket.emit('market:error', { message: error.message || 'Unable to subscribe to market data' });
+      console.error('[MarketData] subscribe error:', error.message);
+      socket.emit('market:error', {
+        message: toUserFacingMarketDataError(error.message, 'Unable to subscribe to market data')
+      });
     }
   });
 

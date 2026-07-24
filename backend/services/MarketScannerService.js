@@ -1,10 +1,12 @@
 const TradingViewAlertService = require('./TradingViewAlertService');
+const TradingViewService = require('./TradingViewService');
 const SignalEnrichmentService = require('./SignalEnrichmentService');
 const PatternDetectionService = require('./PatternDetectionService');
 const TradingPipelineService = require('./TradingPipelineService');
 const { getMarketDataHub } = require('./MarketDataHubService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { normalizeSymbol } = require('../config/symbols');
+const { toUserFacingMarketDataError } = require('../utils/marketDataCache');
 const {
   chartLevelKey,
   detectTradeOutcome,
@@ -153,10 +155,8 @@ async function fetchHtfCandles(symbol) {
   const htfTimeframe = PATTERN_SCANNER_CONFIG.pipeline.htf?.timeframe || '4h';
   try {
     const hub = getMarketDataHub();
-    let payload = await hub.getCandles(symbol, htfTimeframe, 60, { cacheOnly: true });
-    if (!payload?.candles?.length) {
-      payload = await hub.getCandles(symbol, htfTimeframe, 60, { allowProviderFetch: true });
-    }
+    // Soft-decouple: HTF assist uses cache only — never a provider fetch on this path.
+    const payload = await hub.getCandles(symbol, htfTimeframe, 60, { cacheOnly: true });
     return (payload.candles || [])
       .map(c =>
         PatternDetectionService.normalizeCandle({
@@ -280,7 +280,7 @@ async function runFullScan(io) {
       const result = await scanSymbol(io, symbol);
       results.push({ symbol, ...result });
     } catch (error) {
-      results.push({ symbol, error: error.message });
+      results.push({ symbol, error: toUserFacingMarketDataError(error.message) });
     }
   }
   return results;
@@ -288,7 +288,17 @@ async function runFullScan(io) {
 
 function startAutoScanner(io) {
   ioRef = io;
-  if (!PATTERN_SCANNER_CONFIG.autoScanEnabled || autoScanTimer) {
+  // Keep boot/admin plumbing; gate the timer so signal generation is webhook-driven.
+  // Chart/cache polling lives in MarketDataHubService and is unaffected.
+  if (!PATTERN_SCANNER_CONFIG.autoScanEnabled) {
+    if (autoScanTimer) {
+      clearInterval(autoScanTimer);
+      autoScanTimer = null;
+    }
+    console.log('[Scanner] Auto-scan disabled — signals publish via TradingView webhooks only');
+    return;
+  }
+  if (autoScanTimer) {
     return;
   }
 
@@ -296,7 +306,7 @@ function startAutoScanner(io) {
     runFullScan(io).catch(err => console.error('[Scanner] auto-scan error:', err.message));
   }, PATTERN_SCANNER_CONFIG.autoScanIntervalMs);
 
-  console.log(`[Scanner] Auto-scan every ${PATTERN_SCANNER_CONFIG.autoScanIntervalMs}ms`);
+  console.log(`[Scanner] Auto-scan every ${PATTERN_SCANNER_CONFIG.autoScanIntervalMs}ms (legacy polling)`);
 }
 
 function stopAutoScanner() {
@@ -480,8 +490,11 @@ async function analyzeSymbol(symbol, interval = '1h') {
 function getScannerStatus() {
   return {
     autoScanEnabled: PATTERN_SCANNER_CONFIG.autoScanEnabled,
+    autoScanRunning: Boolean(autoScanTimer),
     autoScanIntervalMs: PATTERN_SCANNER_CONFIG.autoScanIntervalMs,
     scanBatchSize: PATTERN_SCANNER_CONFIG.scanBatchSize,
+    // Primary production path for live signals (not timer-based scanSymbol).
+    signalPublication: 'tradingview_webhook',
     symbols: PATTERN_SCANNER_CONFIG.symbols,
     buffers: PATTERN_SCANNER_CONFIG.symbols.map(symbol => ({
       symbol,
@@ -498,6 +511,20 @@ function getScannerStatus() {
   };
 }
 
+/**
+ * TradingView webhook path (inject / publish only).
+ * Validates + publishes alerts to sockets / Telegram / storage.
+ * NEVER calls hub.getCandles, fetchHistoricalData, indicator, liquidity, or FVG pipelines.
+ * Manual/on-demand: scanSymbol / analyzeSymbol / runFullScan (API). Timer auto-scan is opt-in.
+ */
+async function publishTradingViewAlert(io, rawBody, inMemorySignals = []) {
+  return TradingViewService.publishWebhookEvent(io, rawBody, inMemorySignals);
+}
+
+async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
+  return publishTradingViewAlert(io, rawBody, inMemorySignals);
+}
+
 module.exports = {
   ingestCandle,
   scanSymbol,
@@ -506,5 +533,7 @@ module.exports = {
   startAutoScanner,
   stopAutoScanner,
   getScannerStatus,
-  getCandles
+  getCandles,
+  publishTradingViewAlert,
+  processTradingViewWebhook
 };

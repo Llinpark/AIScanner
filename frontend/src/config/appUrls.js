@@ -6,10 +6,7 @@ export const BACKEND_URL =
   import.meta.env.VITE_BACKEND_URL ||
   (import.meta.env.DEV ? '' : `https://api.${APP_DOMAIN}`);
 
-export const MARKET_DATA_WS_URL =
-  import.meta.env.VITE_MARKET_DATA_WS_URL ||
-  (import.meta.env.DEV ? 'ws://localhost:8001' : `wss://market.${APP_DOMAIN}`);
-
+/** Live candles use Node Socket.IO (MarketDataHub), not the Python FastAPI process. */
 export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || BACKEND_URL || undefined;
 
 export const CONTACT_EMAIL = `enquiries@${APP_DOMAIN}`;

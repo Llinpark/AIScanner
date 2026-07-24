@@ -1,3 +1,5 @@
+"""Symbol / interval normalization aligned with the Node market-data hub."""
+
 SYMBOL_ALIASES = {
     'EURUSD': 'EUR/USD',
     'GBPUSD': 'GBP/USD',
@@ -16,60 +18,25 @@ SYMBOL_ALIASES = {
     'USD/BTC': 'BTC/USD',
 }
 
-TWELVE_DATA_SYMBOL_MAP = {
-    'US30': 'DJI',
-    'US100': 'NDX',
-    'BTC/USD': 'BTC/USD',
-}
-
-EODHD_SYMBOL_MAP = {
-    'EUR/USD': 'EURUSD.FOREX',
-    'GBP/USD': 'GBPUSD.FOREX',
-    'XAU/USD': 'XAUUSD.FOREX',
-    'XAG/USD': 'XAGUSD.FOREX',
-    'AUD/USD': 'AUDUSD.FOREX',
-    'USD/JPY': 'USDJPY.FOREX',
-    'USD/CAD': 'USDCAD.FOREX',
-    'NZD/USD': 'NZDUSD.FOREX',
-    'USD/CHF': 'USDCHF.FOREX',
-    'EUR/GBP': 'EURGBP.FOREX',
-    'EUR/JPY': 'EURJPY.FOREX',
-    'GBP/JPY': 'GBPJPY.FOREX',
-    'US30': 'DJI.INDX',
-    'US100': 'NDX.INDX',
-    'BTC/USD': 'BTC-USD.CC',
-}
-
-INTERVAL_MAP = {
-    '1m': '1min',
-    '1min': '1min',
-    '5m': '5min',
-    '5min': '5min',
-    '15m': '15min',
-    '15min': '15min',
-    '30m': '30min',
-    '30min': '30min',
-    '1h': '1h',
-    '60min': '1h',
-    '4h': '4h',
-    '1D': '1day',
-    '1day': '1day',
-    '1W': '1week',
-    '1week': '1week',
-}
-
-EODHD_INTRADAY_INTERVAL_MAP = {
+INTERVAL_ALIASES = {
     '1m': '1m',
     '1min': '1m',
     '5m': '5m',
     '5min': '5m',
-    '15m': '5m',
-    '15min': '5m',
-    '30m': '5m',
-    '30min': '5m',
+    '15m': '15m',
+    '15min': '15m',
+    '30m': '30m',
+    '30min': '30m',
     '1h': '1h',
     '60min': '1h',
-    '4h': '1h',
+    '60m': '1h',
+    '4h': '4h',
+    '1d': '1d',
+    '1D': '1d',
+    '1day': '1d',
+    '1w': '1w',
+    '1W': '1w',
+    '1week': '1w',
 }
 
 
@@ -88,31 +55,6 @@ def normalize_symbol(symbol: str) -> str:
     return raw
 
 
-def to_twelve_data_symbol(symbol: str) -> str:
-    normalized = normalize_symbol(symbol)
-    return TWELVE_DATA_SYMBOL_MAP.get(normalized, normalized)
-
-
-def to_eodhd_symbol(symbol: str) -> str:
-    normalized = normalize_symbol(symbol)
-    if normalized in EODHD_SYMBOL_MAP:
-        return EODHD_SYMBOL_MAP[normalized]
-    compact = normalized.replace('/', '')
-    if normalized in {'US30', 'US100'}:
-        return EODHD_SYMBOL_MAP[normalized]
-    return f'{compact}.FOREX'
-
-
-def to_twelve_data_interval(interval: str) -> str:
+def normalize_interval(interval: str) -> str:
     key = str(interval or '1h').strip()
-    return INTERVAL_MAP.get(key, key)
-
-
-def to_eodhd_intraday_interval(interval: str) -> str:
-    key = str(interval or '1h').strip()
-    return EODHD_INTRADAY_INTERVAL_MAP.get(key, '1h')
-
-
-def is_daily_interval(interval: str) -> bool:
-    key = str(interval or '').strip().lower()
-    return key in {'1d', '1day', '1w', '1week'}
+    return INTERVAL_ALIASES.get(key, INTERVAL_ALIASES.get(key.lower(), key.lower() or '1h'))

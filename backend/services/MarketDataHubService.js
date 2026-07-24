@@ -1,7 +1,11 @@
 const { normalizeSymbol } = require('../config/symbols');
 const { TRADINGVIEW_CONFIG } = require('../config/tradingview');
 const { fetchHistoricalData, twelveDataSkipStatus } = require('../utils/marketData');
-const { isRateLimitError } = require('../utils/marketDataCache');
+const {
+  isRateLimitError,
+  toUserFacingMarketDataError,
+  USER_FACING_MARKET_DATA_UNAVAILABLE
+} = require('../utils/marketDataCache');
 const { getRedisClient } = require('../utils/redisClient');
 const {
   cacheTtlSecondsForInterval,
@@ -49,7 +53,11 @@ class MarketDataHub {
   }
 
   markProviderRateLimited(message) {
-    this.lastRateLimitMessage = message || 'Provider rate limited';
+    // Keep technical detail in logs; never surface provider credit/URL text to clients.
+    if (message) {
+      console.warn(`[MarketDataHub] Provider limit detail: ${message}`);
+    }
+    this.lastRateLimitMessage = USER_FACING_MARKET_DATA_UNAVAILABLE;
     if (isEodhdConfigured()) {
       // Do not freeze the hub — marketData.js skips Twelve Data and uses EODHD immediately.
       console.warn(
@@ -238,7 +246,7 @@ class MarketDataHub {
         }
         throw new Error(
           this.lastRateLimitMessage ||
-            'Market data temporarily throttled. Please wait a moment and try again.'
+            USER_FACING_MARKET_DATA_UNAVAILABLE
         );
       }
       // Cold start with force refresh: proceed — Twelve Data serializes credits itself.
@@ -302,7 +310,7 @@ class MarketDataHub {
           viewers: stream.viewers,
           refreshMs: stream.refreshMs,
           stale: true,
-          refreshError: error.message
+          refreshError: toUserFacingMarketDataError(error.message)
         };
         this.io.to(this.roomKey(stream.symbol, stream.interval)).emit('market:candles', enriched);
         return enriched;
@@ -421,7 +429,7 @@ class MarketDataHub {
 
     if (!this.canFetchFromProvider({ bypassGap: true })) {
       if (cached) {
-        return { ...cached, stale: true, refreshError: this.lastRateLimitMessage || 'Provider throttled' };
+        return { ...cached, stale: true, refreshError: this.lastRateLimitMessage || USER_FACING_MARKET_DATA_UNAVAILABLE };
       }
       const fallbackCandles = await fetchHistoricalData(
         TRADINGVIEW_CONFIG,
@@ -446,13 +454,13 @@ class MarketDataHub {
         return {
           ...stored,
           stale: true,
-          refreshError: this.lastRateLimitMessage || 'Provider throttled',
+          refreshError: this.lastRateLimitMessage || USER_FACING_MARKET_DATA_UNAVAILABLE,
           viewers: stream?.viewers || 0
         };
       }
       throw new Error(
         this.lastRateLimitMessage ||
-          'Market data temporarily unavailable. Please wait a moment and try again.'
+          USER_FACING_MARKET_DATA_UNAVAILABLE
       );
     }
 
@@ -462,7 +470,7 @@ class MarketDataHub {
       return { ...payload, viewers: stream?.viewers || 0, stale: Boolean(payload.stale) };
     } catch (error) {
       if (cached) {
-        return { ...cached, stale: true, refreshError: error.message };
+        return { ...cached, stale: true, refreshError: toUserFacingMarketDataError(error.message) };
       }
       throw error;
     }

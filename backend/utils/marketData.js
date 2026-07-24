@@ -12,7 +12,8 @@ const {
   isCreditExhaustedError,
   isEodhdEodOnlyError,
   isRateLimitError,
-  set
+  set,
+  USER_FACING_MARKET_DATA_UNAVAILABLE
 } = require('./marketDataCache');
 
 const TWELVE_DATA_CREDIT_SKIP_MS = Math.max(
@@ -260,13 +261,9 @@ async function fetchHistoricalData(config, symbol, interval = '1h', limit = 100,
     return stale;
   }
 
-  if (errors.some(entry => isRateLimitError(entry))) {
-    throw new Error(
-      `${errors.join(' | ')} (cached data unavailable — wait one minute or check EODHD/Twelve Data keys)`
-    );
-  }
-
-  throw new Error(errors.join(' | ') || 'No market data providers configured');
+  const technical = errors.join(' | ') || 'No market data providers configured';
+  console.error(`[MarketData] All providers failed for ${symbol} ${canonicalInterval}: ${technical}`);
+  throw new Error(USER_FACING_MARKET_DATA_UNAVAILABLE);
 }
 
 module.exports = {

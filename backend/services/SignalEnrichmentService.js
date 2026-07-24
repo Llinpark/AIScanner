@@ -2,12 +2,82 @@ const { computeRiskMetrics } = require('../utils/signalRisk');
 const { generateTradeExplanation } = require('../utils/signalExplanation');
 const { analyzeSignalFactors, normalizeCandles } = require('../utils/signalFactors');
 const { enrichEntrySignal, isEntryAlert } = require('../utils/signalOutcome');
-const TradingViewService = require('../services/TradingViewService');
+const ChartDataService = require('../services/ChartDataService');
 const PatternDetectionService = require('../services/PatternDetectionService');
 const { getMarketDataHub } = require('../services/MarketDataHubService');
 const { buildChartZones, flattenChartZonesForStorage } = require('../utils/smcZones');
 
+const TRADINGVIEW_SOURCES = new Set(['tradingview', 'tradingview_webhook']);
+
+function isTradingViewWebhookOrigin(signalData = {}, options = {}) {
+  if (options.fromTradingViewWebhook || options.skipMarketData) return true;
+  const source = String(signalData.source || options.source || '').toLowerCase();
+  const origin = String(signalData.origin || options.origin || '').toLowerCase();
+  return TRADINGVIEW_SOURCES.has(source) || origin === 'tradingview_webhook';
+}
+
+function preserveTradeLevels(original, payload) {
+  return {
+    ...payload,
+    direction: original.direction,
+    entry: original.entry,
+    stop_loss: original.stop_loss,
+    stop_loss_1: original.stop_loss_1 ?? original.stop_loss,
+    take_profit_1: original.take_profit_1,
+    take_profit_2: original.take_profit_2,
+    take_profit_3: original.take_profit_3
+  };
+}
+
+/**
+ * Metadata-only enrichment for TradingView webhook signals.
+ * Payload levels (entry / SL / TP / direction) are the source of truth — never modified.
+ * Never resolves candles or calls hub.getCandles / fetchHistoricalData / ChartDataService.
+ */
+async function enrichFromTradingViewWebhook(signalData, options = {}) {
+  const original = { ...signalData };
+  const alertType = original.alertType || 'signal';
+  let payload = {
+    ...original,
+    source: original.source || 'tradingview',
+    origin: 'tradingview_webhook',
+    strategy: original.strategy || original.patternLabel || original.pattern || 'TradingView',
+    enrichedAt: new Date().toISOString(),
+    enrichmentMode: 'tradingview_webhook_metadata'
+  };
+
+  if (options.userId != null && payload.userId == null) {
+    payload.userId = options.userId;
+  }
+  if (options.subscriber) {
+    payload.subscriber = {
+      id: options.subscriber.id,
+      email: options.subscriber.email,
+      displayName: options.subscriber.displayName
+    };
+  }
+
+  // Lifecycle metadata only (group id / open status) — does not touch price levels.
+  if (isEntryAlert(alertType)) {
+    payload = enrichEntrySignal(payload);
+  }
+
+  // Statistics derived from webhook levels (does not rewrite those levels).
+  const riskMetrics = computeRiskMetrics(payload, options);
+  if (riskMetrics) {
+    payload.riskMetrics = riskMetrics;
+  }
+
+  payload.tradeExplanation = generateTradeExplanation(payload, riskMetrics);
+
+  return preserveTradeLevels(original, payload);
+}
+
 async function resolveCandles(signal, options = {}) {
+  if (isTradingViewWebhookOrigin(signal, options)) {
+    return normalizeCandles(options.candles || []);
+  }
+
   if (options.candles?.length) {
     return normalizeCandles(options.candles);
   }
@@ -18,6 +88,10 @@ async function resolveCandles(signal, options = {}) {
   const MarketScannerService = require('../services/MarketScannerService');
   const buffered = MarketScannerService.getCandles(symbol);
   if (buffered.length >= 14) {
+    return normalizeCandles(buffered);
+  }
+
+  if (options.allowProviderFetch === false || options.cacheOnly) {
     return normalizeCandles(buffered);
   }
 
@@ -35,7 +109,7 @@ async function resolveCandles(signal, options = {}) {
         volume: c.volume
       }));
     } catch {
-      const historical = await TradingViewService.getHistoricalData(symbol, timeframe, 100);
+      const historical = await ChartDataService.getHistoricalData(symbol, timeframe, 100);
       return historical.map(c => PatternDetectionService.normalizeCandle(c));
     }
   } catch {
@@ -43,7 +117,15 @@ async function resolveCandles(signal, options = {}) {
   }
 }
 
+/**
+ * Full enrichment for scanner / dashboard / non-TV sources (may resolve candles + indicators).
+ * TradingView webhook origins are routed to enrichFromTradingViewWebhook automatically.
+ */
 async function enrichSignal(signalData, options = {}) {
+  if (isTradingViewWebhookOrigin(signalData, options)) {
+    return enrichFromTradingViewWebhook(signalData, options);
+  }
+
   const alertType = signalData.alertType || 'signal';
   let payload = { ...signalData };
 
@@ -96,5 +178,7 @@ async function enrichSignal(signalData, options = {}) {
 
 module.exports = {
   enrichSignal,
+  enrichFromTradingViewWebhook,
+  isTradingViewWebhookOrigin,
   resolveCandles
 };
