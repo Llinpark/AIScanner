@@ -61,10 +61,11 @@ function AppContent() {
     const refCode = params.get('ref');
     const paypalStatus = params.get('paypal');
     const binanceStatus = params.get('binance');
+    const paystackStatus = params.get('paystack');
 
     if (refCode) {
       storeReferralCode(refCode);
-      if (!verifyToken && !resetToken && !paypalStatus && !binanceStatus) {
+      if (!verifyToken && !resetToken && !paypalStatus && !binanceStatus && !paystackStatus) {
         navigateTo('signup', {}, { replace: true });
       } else {
         window.history.replaceState(
@@ -82,6 +83,24 @@ function AppContent() {
 
     if (resetToken) {
       navigateTo('reset-password', { token: resetToken }, { replace: true });
+      return;
+    }
+
+    if (paystackStatus) {
+      if (paystackStatus === 'success') {
+        refreshSubscription().then(() => {
+          setPaymentNotice('Paystack payment successful! Your subscription is now active.');
+          navigateTo('pricing', {}, { replace: true });
+        });
+      } else if (paystackStatus === 'cancelled') {
+        setPaymentNotice('Paystack payment was cancelled.');
+        navigateTo('pricing', {}, { replace: true });
+      } else if (paystackStatus === 'mock') {
+        navigateTo('pricing', {}, { replace: true });
+      } else if (paystackStatus === 'error') {
+        setPaymentNotice(`Paystack payment failed: ${params.get('message') || 'Unknown error'}`);
+        navigateTo('pricing', {}, { replace: true });
+      }
       return;
     }
 

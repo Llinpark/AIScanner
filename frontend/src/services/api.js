@@ -64,6 +64,8 @@ export const subscriptionApi = {
   confirmBinanceMock: payload => api.post('/api/payments/binance/mock-complete', payload),
   getSasaPayStatus: checkoutRequestId => api.get(`/api/payments/sasapay/status/${checkoutRequestId}`),
   confirmSasaPayMock: payload => api.post('/api/payments/sasapay/mock-complete', payload),
+  getPaystackStatus: reference => api.get(`/api/payments/paystack/status/${reference}`),
+  confirmPaystackMock: payload => api.post('/api/payments/paystack/mock-complete', payload),
   getPerformanceSummary: () => api.get('/api/performance/summary')
 };
 

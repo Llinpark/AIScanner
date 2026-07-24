@@ -67,7 +67,10 @@ function assertProductionSecurityConfig() {
       issues.push('WEBHOOK_SIGNING_SECRET (or TRADINGVIEW_WEBHOOK_SECRET) must be set in production.');
     }
     if (process.env.PAYMENTS_MODE === 'mock' || process.env.ALLOW_MOCK_PAYMENTS === 'true') {
-      issues.push('Mock payments must be disabled in production (set PAYMENTS_MODE=live).');
+      issues.push('Mock payments must be disabled in production (set PAYMENTS_MODE=live and unset ALLOW_MOCK_PAYMENTS).');
+    }
+    if (!process.env.PAYSTACK_SECRET_KEY) {
+      issues.push('PAYSTACK_SECRET_KEY should be set in production for live checkout.');
     }
     if (!process.env.PAYMENT_WEBHOOK_SECRET) {
       issues.push('PAYMENT_WEBHOOK_SECRET should be set in production.');

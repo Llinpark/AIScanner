@@ -1,5 +1,12 @@
 // Subscription tier definitions and pricing
-const { WEBHOOK_MPESA_URL, WEBHOOK_BINANCE_URL, WEBHOOK_SASAPAY_URL } = require('./appUrls');
+const {
+  WEBHOOK_MPESA_URL,
+  WEBHOOK_BINANCE_URL,
+  WEBHOOK_SASAPAY_URL,
+  WEBHOOK_PAYSTACK_URL,
+  PAYSTACK_CALLBACK_URL,
+  FRONTEND_URL
+} = require('./appUrls');
 const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
 const ALL_TIMEFRAMES = ['1M', '1W', '1D', '4h', '1h', '30m', '15m', '5m', '1m'];
@@ -216,6 +223,15 @@ const PAYMENT_CONFIG = {
     currency: process.env.SASAPAY_CURRENCY || 'KES',
     callbackUrl: process.env.SASAPAY_CALLBACK_URL || WEBHOOK_SASAPAY_URL,
     baseUrl: process.env.SASAPAY_BASE_URL || 'https://sandbox.sasapay.app/api/v1'
+  },
+  paystack: {
+    secretKey: process.env.PAYSTACK_SECRET_KEY,
+    publicKey: process.env.PAYSTACK_PUBLIC_KEY,
+    // User browser return after checkout (server verifies, then redirects to frontend)
+    callbackUrl: process.env.PAYSTACK_CALLBACK_URL || PAYSTACK_CALLBACK_URL,
+    webhookUrl: process.env.PAYSTACK_WEBHOOK_URL || WEBHOOK_PAYSTACK_URL,
+    // Optional marketing/site URL shown in Paystack dashboard (not used for API verify)
+    siteCallbackUrl: process.env.PAYSTACK_SITE_CALLBACK_URL || FRONTEND_URL
   }
 };
 
@@ -281,7 +297,19 @@ function getPublicTiers() {
 }
 
 function getPublicPaymentMethods() {
-  return {
+  let mockPaymentsAllowed = false;
+  try {
+    mockPaymentsAllowed = require('../utils/security').isMockPaymentsAllowed();
+  } catch {
+    mockPaymentsAllowed = false;
+  }
+
+  const methods = {
+    paystack: {
+      currency: 'KES',
+      publicKey: PAYMENT_CONFIG.paystack.publicKey || null,
+      configured: Boolean(PAYMENT_CONFIG.paystack.secretKey)
+    },
     mpesa: {
       tillNumber: PAYMENT_CONFIG.mpesa.shortcode || '5337170',
       currency: 'KES'
@@ -295,8 +323,13 @@ function getPublicPaymentMethods() {
     },
     paypal: {
       currency: 'USD'
-    }
+    },
+    // Frontend must hide mock when this is false (always false in production)
+    mockPaymentsAllowed,
+    defaultProvider: 'paystack'
   };
+
+  return methods;
 }
 
 module.exports = {

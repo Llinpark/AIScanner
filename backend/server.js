@@ -45,6 +45,7 @@ const MpesaService = require('./services/MpesaService');
 const PayPalService = require('./services/PayPalService');
 const BinanceService = require('./services/BinanceService');
 const SasaPayService = require('./services/SasaPayService');
+const PaystackService = require('./services/PaystackService');
 const {
   activateSubscription,
   createPaymentTransaction,
@@ -751,6 +752,87 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       });
     }
 
+    if (provider === 'paystack') {
+      const email = user.email || req.user?.email;
+      if (!email) {
+        return res.status(400).json({ message: 'Account email is required for Paystack payment' });
+      }
+
+      const callbackUrl = PAYMENT_CONFIG.paystack.callbackUrl;
+      let orderResult;
+
+      if (!PaystackService.isConfigured()) {
+        if (!isMockPaymentsAllowed()) {
+          return res.status(503).json({
+            message: 'Paystack is not configured. Please try again later.'
+          });
+        }
+        const mockRef = `psk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        orderResult = {
+          reference: mockRef,
+          accessCode: mockRef,
+          authorizationUrl: `${FRONTEND_URL}?paystack=mock&reference=${mockRef}&tier=${tier}&billingCycle=${pricing.billingCycle}`,
+          amount: pricing.price,
+          currency: pricing.currency
+        };
+      } else {
+        orderResult = await PaystackService.initializeTransaction({
+          tier,
+          userId: userId.toString(),
+          email,
+          billingCycle: pricing.billingCycle,
+          callbackUrl
+        });
+      }
+
+      await createPaymentTransaction({
+        userId,
+        tier,
+        provider: 'paystack',
+        amount: orderResult.amount,
+        currency: orderResult.currency,
+        providerReference: orderResult.reference
+      });
+
+      user = await UserConfig.findByIdAndUpdate(
+        userId,
+        {
+          subscription: {
+            ...pendingSubscription,
+            provider: 'paystack',
+            providerOrderId: orderResult.reference
+          },
+          updatedAt: new Date()
+        },
+        { new: true }
+      );
+
+      if (!user && !isDbReady()) {
+        user = devUserStore.upsertUser(userId, {
+          subscription: {
+            ...pendingSubscription,
+            provider: 'paystack',
+            providerOrderId: orderResult.reference
+          }
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: 'Paystack checkout session created',
+        user: sanitizeUser(user),
+        checkoutId: orderResult.reference,
+        reference: orderResult.reference,
+        accessCode: orderResult.accessCode,
+        checkoutUrl: orderResult.authorizationUrl,
+        publicKey: PaystackService.getPublicKey(),
+        amount: orderResult.amount,
+        currency: orderResult.currency,
+        billingCycle: pricing.billingCycle,
+        mockMode: isMockPaymentsAllowed() && !PaystackService.isConfigured()
+      });
+    }
+
     return res.status(400).json({ message: 'Unsupported payment provider.' });
   } catch (error) {
     console.error('Subscribe error:', error);
@@ -1105,6 +1187,124 @@ app.post('/api/payments/sasapay/mock-complete', requireAuth, requireMockPayments
   }
 });
 
+app.get('/api/payments/paystack/status/:reference', requireAuth, async (req, res) => {
+  try {
+    const { reference } = req.params;
+    const transaction = await getPaymentStatus(reference, 'paystack', req.userId);
+
+    if (!transaction) {
+      return res.status(404).json({ message: 'Payment not found' });
+    }
+
+    res.json({
+      status: transaction.status,
+      tier: transaction.tier,
+      failureReason: transaction.failureReason,
+      subscriptionActive: req.user.subscription?.status === 'active'
+    });
+  } catch (error) {
+    console.error('Paystack status error:', error);
+    res.status(500).json({ message: 'Unable to check payment status', error: error.message });
+  }
+});
+
+app.get('/api/payments/paystack/callback', async (req, res) => {
+  const frontendUrl = FRONTEND_URL;
+
+  try {
+    const reference = req.query.reference || req.query.trxref;
+    if (!reference) {
+      return res.redirect(`${frontendUrl}?paystack=error&message=missing_reference`);
+    }
+
+    const verified = await PaystackService.verifyTransaction(String(reference));
+    if (!PaystackService.isSuccessful(verified)) {
+      await completePaymentTransaction(String(reference), 'paystack', {
+        rawPayload: verified,
+        failureReason: verified.gateway_response || verified.status || 'Payment not successful'
+      });
+      return res.redirect(`${frontendUrl}?paystack=error&message=payment_not_successful`);
+    }
+
+    const meta = PaystackService.parseMetadata(verified);
+    let transaction = await findPaymentByReference(String(reference), 'paystack');
+
+    if (!transaction && meta.userId && meta.tier) {
+      await createPaymentTransaction({
+        userId: meta.userId,
+        tier: meta.tier,
+        provider: 'paystack',
+        amount: (verified.amount || 0) / 100,
+        currency: verified.currency || 'KES',
+        providerReference: String(reference)
+      });
+      transaction = await findPaymentByReference(String(reference), 'paystack');
+    }
+
+    if (!transaction) {
+      return res.redirect(`${frontendUrl}?paystack=error&message=unknown_order`);
+    }
+
+    if (transaction.status !== 'completed') {
+      await completePaymentTransaction(String(reference), 'paystack', { rawPayload: verified });
+      const payer = await UserConfig.findById(transaction.userId);
+      await activateSubscription(
+        transaction.userId,
+        buildActivationOptions(payer, {
+          tier: meta.tier || transaction.tier,
+          provider: 'paystack',
+          providerOrderId: String(reference),
+          providerCustomerId: verified.customer?.customer_code,
+          billingCycle: meta.billingCycle || payer?.subscription?.billingCycle
+        }),
+        io
+      );
+    }
+
+    return res.redirect(`${frontendUrl}?paystack=success&tier=${meta.tier || transaction.tier}`);
+  } catch (error) {
+    console.error('Paystack callback error:', error);
+    return res.redirect(`${frontendUrl}?paystack=error&message=${encodeURIComponent(error.message)}`);
+  }
+});
+
+app.post('/api/payments/paystack/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
+  try {
+    const { reference, tier, billingCycle } = req.body;
+
+    if (!reference || !tier) {
+      return res.status(400).json({ message: 'reference and tier are required' });
+    }
+
+    const transaction = await getPaymentStatus(reference, 'paystack', req.userId);
+    if (!transaction || transaction.status !== 'pending') {
+      return res.status(400).json({ message: 'No pending Paystack payment found' });
+    }
+
+    await completePaymentTransaction(reference, 'paystack', { rawPayload: { mock: true } });
+
+    const user = await activateSubscription(
+      req.userId,
+      buildActivationOptions(req.user, {
+        tier,
+        provider: 'paystack',
+        providerOrderId: reference,
+        billingCycle
+      }),
+      io
+    );
+
+    res.json({
+      success: true,
+      message: 'Paystack payment confirmed (mock mode — local/dev only)',
+      user: sanitizeUser(user)
+    });
+  } catch (error) {
+    console.error('Paystack mock complete error:', error);
+    res.status(500).json({ message: 'Unable to confirm Paystack payment', error: error.message });
+  }
+});
+
 app.get('/api/subscription/:username', requireAuth, async (req, res) => {
   try {
     const { username } = req.params;
@@ -1315,6 +1515,52 @@ app.post('/api/webhook/sasapay', async (req, res) => {
   } catch (error) {
     console.error('SasaPay webhook error:', error);
     res.status(200).json({ ResultCode: 1, ResultDesc: 'Error' });
+  }
+});
+
+app.post('/api/webhook/paystack', webhookLimiter, async (req, res) => {
+  try {
+    const verification = PaystackService.verifyWebhookSignature(req);
+    if (!verification.ok) {
+      console.warn('Paystack webhook rejected:', verification.reason);
+      return res.status(verification.reason === 'paystack_not_configured' ? 503 : 401).json({
+        message: 'Invalid Paystack webhook signature'
+      });
+    }
+
+    const parsed = PaystackService.parseWebhookEvent(req.body);
+    console.log('Paystack webhook received:', parsed.event, parsed.reference);
+
+    if (parsed.event === 'charge.success' && parsed.reference) {
+      const transaction = await findPaymentByReference(String(parsed.reference), 'paystack');
+      if (!transaction) {
+        console.warn('Paystack webhook for unknown transaction:', parsed.reference);
+        return res.status(200).json({ received: true });
+      }
+
+      if (transaction.status === 'pending') {
+        await completePaymentTransaction(String(parsed.reference), 'paystack', {
+          rawPayload: req.body
+        });
+        const payer = await UserConfig.findById(transaction.userId);
+        await activateSubscription(
+          transaction.userId,
+          buildActivationOptions(payer, {
+            tier: parsed.tier || transaction.tier,
+            provider: 'paystack',
+            providerOrderId: String(parsed.reference),
+            providerCustomerId: parsed.customerCode,
+            billingCycle: parsed.billingCycle || payer?.subscription?.billingCycle
+          }),
+          io
+        );
+      }
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    console.error('Paystack webhook error:', error);
+    return res.status(500).json({ message: 'Paystack webhook processing failed' });
   }
 });
 

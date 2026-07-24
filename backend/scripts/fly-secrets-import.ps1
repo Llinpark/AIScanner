@@ -17,7 +17,8 @@ function Get-EnvValue($name) {
 $keys = @(
   'MONGODB_URI', 'REDIS_URL', 'JWT_SECRET', 'WEBHOOK_SIGNING_SECRET',
   'PAYMENT_WEBHOOK_SECRET', 'TELEGRAM_WEBHOOK_SECRET', 'TRADINGVIEW_WEBHOOK_SECRET',
-  'TWELVE_DATA_API_KEY', 'EODHD_API_KEY'
+  'TWELVE_DATA_API_KEY', 'EODHD_API_KEY',
+  'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY'
 )
 
 $lines = New-Object System.Collections.Generic.List[string]
@@ -33,6 +34,9 @@ $overrides = @{
   PUBLIC_BACKEND_URL = 'https://api.kachingscanner.com'
   COOKIE_DOMAIN = '.kachingscanner.com'
   PAYMENTS_MODE = 'live'
+  PAYSTACK_CALLBACK_URL = 'https://api.kachingscanner.com/api/payments/paystack/callback'
+  PAYSTACK_WEBHOOK_URL = 'https://api.kachingscanner.com/api/webhook/paystack'
+  PAYSTACK_SITE_CALLBACK_URL = 'https://kachingscanner.com'
   ADMIN_EMAILS = 'collinspark1985@gmail.com,barasajohn1985@gmail.com,lilianmonari15@gmail.com'
   REDIS_ENABLED = 'true'
   TELEGRAM_USE_POLLING = 'false'

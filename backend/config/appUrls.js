@@ -27,7 +27,9 @@ const WEBHOOK_TRADINGVIEW_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/we
 const WEBHOOK_MPESA_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/mpesa`;
 const WEBHOOK_BINANCE_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/binance`;
 const WEBHOOK_SASAPAY_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/sasapay`;
+const WEBHOOK_PAYSTACK_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/paystack`;
 const WEBHOOK_TELEGRAM_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/telegram`;
+const PAYSTACK_CALLBACK_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/payments/paystack/callback`;
 const TRADINGVIEW_OAUTH_CALLBACK_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/tradingview/oauth-callback`;
 
 module.exports = {
@@ -39,6 +41,8 @@ module.exports = {
   WEBHOOK_MPESA_URL,
   WEBHOOK_BINANCE_URL,
   WEBHOOK_SASAPAY_URL,
+  WEBHOOK_PAYSTACK_URL,
   WEBHOOK_TELEGRAM_URL,
+  PAYSTACK_CALLBACK_URL,
   TRADINGVIEW_OAUTH_CALLBACK_URL
 };

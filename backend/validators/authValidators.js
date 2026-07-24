@@ -83,7 +83,7 @@ const subscribeValidators = [
     .isIn(['basic', 'professional', 'premium'])
     .withMessage('Invalid subscription tier.'),
   body('provider')
-    .isIn(['mpesa', 'paypal', 'mock', 'binance', 'sasapay'])
+    .isIn(['mpesa', 'paypal', 'mock', 'binance', 'sasapay', 'paystack'])
     .withMessage('Invalid payment provider.'),
   body('phone')
     .if(body('provider').isIn(['mpesa', 'sasapay']))
