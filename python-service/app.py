@@ -1,4 +1,5 @@
 from datetime import datetime
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,15 +13,18 @@ from market_data.service import MarketDataUnavailableError
 from model import LSTMSignalModel, generate_signals
 
 app = FastAPI(title='KachingScanner AI Analytics Service')
+_default_cors = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:4000',
+    'https://kachingscanner.com',
+    'https://www.kachingscanner.com',
+    'https://api.kachingscanner.com',
+]
+_extra_cors = [o.strip() for o in os.getenv('CORS_ORIGINS', '').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://localhost:4000',
-        'https://kachingscanner.com',
-        'https://www.kachingscanner.com',
-    ],
+    allow_origins=[*_default_cors, *_extra_cors],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],

@@ -149,14 +149,19 @@ async function publishEntrySignal(io, symbol, detection) {
   return saved;
 }
 
-async function fetchHtfCandles(symbol) {
+async function fetchHtfCandles(symbol, options = {}) {
   if (!PATTERN_SCANNER_CONFIG.pipeline?.enabled) return [];
 
   const htfTimeframe = PATTERN_SCANNER_CONFIG.pipeline.htf?.timeframe || '4h';
   try {
     const hub = getMarketDataHub();
-    // Soft-decouple: HTF assist uses cache only — never a provider fetch on this path.
-    const payload = await hub.getCandles(symbol, htfTimeframe, 60, { cacheOnly: true });
+    // Manual/internal scanner may live-fetch; timer/background assist stays cache-only.
+    const allowLive = options.allowProviderFetch === true;
+    const payload = await hub.getCandles(symbol, htfTimeframe, 60, {
+      allowProviderFetch: allowLive,
+      cacheOnly: !allowLive
+    });
+    if (!payload?.candles?.length) return [];
     return (payload.candles || [])
       .map(c =>
         PatternDetectionService.normalizeCandle({
@@ -174,7 +179,7 @@ async function fetchHtfCandles(symbol) {
   }
 }
 
-async function processCandles(symbol, candles, io) {
+async function processCandles(symbol, candles, io, options = {}) {
   if (candles.length < 3) {
     return { processed: false, reason: 'insufficient_candles' };
   }
@@ -182,7 +187,11 @@ async function processCandles(symbol, candles, io) {
   const key = bufferKey(symbol);
   const normalizedSymbol = normalizeSymbol(symbol);
   const c3 = candles[candles.length - 1];
-  const htfCandles = await fetchHtfCandles(normalizedSymbol);
+  // processCandles is used by ingestCandle (TV bar inject) and scanSymbol (live hub).
+  // Live HTF only when the caller already loaded primary bars via allowProviderFetch.
+  const htfCandles = await fetchHtfCandles(normalizedSymbol, {
+    allowProviderFetch: Boolean(options.allowProviderFetch)
+  });
 
   const pending = pendingSetups.get(key);
   if (pending) {
@@ -248,6 +257,7 @@ async function ingestCandle(io, { symbol, ...ohlc }) {
 
 async function scanSymbol(io, symbol) {
   const hub = getMarketDataHub();
+  // Dashboard / manual / internal scanner: live hub fetch (independent of TV webhooks).
   const payload = await hub.getCandles(symbol, '1h', 100, { allowProviderFetch: true });
   const normalized = (payload.candles || [])
     .map(c => PatternDetectionService.normalizeCandle({
@@ -261,7 +271,7 @@ async function scanSymbol(io, symbol) {
     .sort((a, b) => a.time - b.time);
 
   candleBuffers.set(bufferKey(symbol), normalized);
-  return processCandles(symbol, normalized, io);
+  return processCandles(symbol, normalized, io, { allowProviderFetch: true });
 }
 
 async function runFullScan(io) {
@@ -295,7 +305,10 @@ function startAutoScanner(io) {
       clearInterval(autoScanTimer);
       autoScanTimer = null;
     }
-    console.log('[Scanner] Auto-scan disabled — signals publish via TradingView webhooks only');
+    console.log(
+      '[Scanner] Auto-scan disabled — production signals via TradingView webhooks; ' +
+        'dashboard/manual scan still uses live MarketDataHub (allowProviderFetch)'
+    );
     return;
   }
   if (autoScanTimer) {
@@ -377,7 +390,8 @@ async function analyzeSymbol(symbol, interval = '1h') {
     };
   }
 
-  const htfCandles = await fetchHtfCandles(normalizedSymbol);
+  // Dashboard chart analyze path: live HTF assist when primary bars were live-fetched.
+  const htfCandles = await fetchHtfCandles(normalizedSymbol, { allowProviderFetch: true });
   const key = bufferKey(normalizedSymbol);
   const c3 = candles[candles.length - 1];
 
@@ -493,8 +507,18 @@ function getScannerStatus() {
     autoScanRunning: Boolean(autoScanTimer),
     autoScanIntervalMs: PATTERN_SCANNER_CONFIG.autoScanIntervalMs,
     scanBatchSize: PATTERN_SCANNER_CONFIG.scanBatchSize,
-    // Primary production path for live signals (not timer-based scanSymbol).
+    // Production broadcast path (timer auto-scan stays off unless SCANNER_AUTO_ENABLED=true).
     signalPublication: 'tradingview_webhook',
+    // Dashboard /api/scanner/analyze + /api/scanner/run: live hub candles, not TV-dependent.
+    internalManualScan: {
+      usesLiveMarketData: true,
+      allowProviderFetch: true,
+      endpoints: ['GET /api/scanner/analyze', 'POST /api/scanner/run']
+    },
+    tradingViewWebhook: {
+      publishOnly: true,
+      fetchesCandles: false
+    },
     symbols: PATTERN_SCANNER_CONFIG.symbols,
     buffers: PATTERN_SCANNER_CONFIG.symbols.map(symbol => ({
       symbol,
@@ -515,7 +539,9 @@ function getScannerStatus() {
  * TradingView webhook path (inject / publish only).
  * Validates + publishes alerts to sockets / Telegram / storage.
  * NEVER calls hub.getCandles, fetchHistoricalData, indicator, liquidity, or FVG pipelines.
- * Manual/on-demand: scanSymbol / analyzeSymbol / runFullScan (API). Timer auto-scan is opt-in.
+ * Manual/on-demand (dashboard Internal Scanner): scanSymbol / analyzeSymbol / runFullScan —
+ * those use MarketDataHub with allowProviderFetch:true (live candles, independent of TV).
+ * Timer auto-scan remains opt-in via SCANNER_AUTO_ENABLED (keep false in production).
  */
 async function publishTradingViewAlert(io, rawBody, inMemorySignals = []) {
   return TradingViewService.publishWebhookEvent(io, rawBody, inMemorySignals);

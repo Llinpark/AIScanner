@@ -1,0 +1,41 @@
+# fly.toml for kaching-python (FastAPI AI analytics)
+# Deploy from this directory:  fly deploy -a kaching-python
+
+app = 'kaching-python'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  HOST = '0.0.0.0'
+  PORT = '8080'
+  REDIS_ENABLED = 'true'
+  MARKET_DATA_CACHE_TTL_SECONDS = '300'
+  MARKET_DATA_STALE_CACHE_SECONDS = '900'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 250
+    soft_limit = 200
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '20s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512
