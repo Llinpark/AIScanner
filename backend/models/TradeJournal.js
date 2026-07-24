@@ -12,6 +12,13 @@ const TradeJournalSchema = new mongoose.Schema({
   outcomeR: { type: Number },
   pnl: { type: Number },
   notes: { type: String, default: '' },
+  // Extended journal fields (backward compatible; notes remains the primary free-text field).
+  userNotes: { type: String, default: '' },
+  tradeRating: { type: Number, min: 1, max: 5 },
+  emotion: { type: String, default: '' },
+  lessonsLearned: { type: String, default: '' },
+  screenshotUrl: { type: String, default: '' },
+  executionNotes: { type: String, default: '' },
   tags: [{ type: String }],
   openedAt: { type: Date, default: Date.now },
   closedAt: { type: Date },

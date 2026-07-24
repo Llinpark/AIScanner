@@ -6127,3 +6127,155 @@ h1, h2, h3, h4, h5, h6,
     font-size: 0.84rem;
   }
 }
+
+/* —— Signal distribution dashboard —— */
+.dashboard-hero-copy {
+  margin-bottom: 1.25rem;
+}
+
+.dashboard-eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-color, #c9a227);
+  font-weight: 600;
+}
+
+.dashboard-lead {
+  margin: 0.55rem 0 0;
+  max-width: 46rem;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.55;
+  font-size: 0.98rem;
+}
+
+.dashboard-status-row {
+  margin: 1rem 0 1.25rem;
+}
+
+.signal-status-panel {
+  padding: 1rem 1.15rem;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: linear-gradient(180deg, rgba(201, 162, 39, 0.06), transparent 70%),
+    var(--surface-muted, #fafafa);
+}
+
+.signal-status-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.signal-status-header p {
+  margin: 0.2rem 0 0.75rem;
+  font-size: 0.85rem;
+  color: var(--text-muted, #6b7280);
+}
+
+.signal-status-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.65rem;
+}
+
+.signal-status-item {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  padding: 0.55rem 0.65rem;
+  border-radius: 10px;
+  background: var(--surface-color, #fff);
+  border: 1px solid var(--border-color);
+}
+
+.signal-status-item strong {
+  display: block;
+  font-size: 0.86rem;
+}
+
+.signal-status-item small {
+  text-transform: capitalize;
+  color: var(--text-muted, #6b7280);
+}
+
+.signal-status-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 0.35rem;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex-shrink: 0;
+}
+
+.signal-status-item.status-ok .signal-status-dot {
+  background: #16a34a;
+}
+
+.signal-status-item.status-warn .signal-status-dot {
+  background: #d97706;
+}
+
+.signal-status-item.status-bad .signal-status-dot {
+  background: #dc2626;
+}
+
+.signal-status-banner,
+.chart-isolated-notice {
+  margin: 0.85rem 0 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(201, 162, 39, 0.35);
+  background: rgba(201, 162, 39, 0.08);
+  color: var(--heading-color, #1f2937);
+  font-size: 0.9rem;
+}
+
+.signal-meta-row {
+  font-size: 0.86rem;
+  opacity: 0.9;
+}
+
+.signal-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.65rem;
+  margin: 0 0 0.85rem;
+}
+
+.signal-meta-grid dt {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted, #6b7280);
+}
+
+.signal-meta-grid dd {
+  margin: 0.15rem 0 0;
+  font-weight: 600;
+}
+
+.ai-commentary-heading {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.ai-commentary-body {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--text-color, #374151);
+}
+
+@media (max-width: 768px) {
+  .signal-status-list {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .insights-history-table {
+    overflow-x: auto;
+  }
+}

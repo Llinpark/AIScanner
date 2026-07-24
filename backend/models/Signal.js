@@ -41,7 +41,25 @@ const SignalSchema = new mongoose.Schema({
   },
   userId: { type: String, index: true },
   isBroadcast: { type: Boolean, default: false },
-  source: { type: String, default: 'scanner' },
+  // Legacy field; prefer signalSource. Kept for backward-compatible queries.
+  source: { type: String, default: 'tradingview' },
+  // Distribution metadata (TradingView webhook is the sole production signal source).
+  signalSource: { type: String, default: 'tradingview' },
+  strategyName: { type: String },
+  timeframe: { type: String },
+  deliveryStatus: {
+    type: String,
+    enum: ['pending', 'delivered', 'partial', 'failed'],
+    default: 'pending'
+  },
+  executionStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'executed', 'skipped', 'failed'],
+    default: 'pending'
+  },
+  telegramSent: { type: Boolean, default: false },
+  mt5Sent: { type: Boolean, default: false },
+  chartSnapshot: { type: String },
   pattern: { type: String },
   patternLabel: { type: String },
   gapTop: { type: Number },

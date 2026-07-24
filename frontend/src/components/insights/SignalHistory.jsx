@@ -95,18 +95,22 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
               <th>Time</th>
               <th>Symbol</th>
               <th>Dir</th>
-              <th>Type</th>
+              <th>Timeframe</th>
+              <th>Signal Source</th>
+              <th>Strategy</th>
               <th>Outcome</th>
+              <th>Execution</th>
+              <th>Delivery</th>
               <th>R</th>
               <th>Conf.</th>
               <th>Levels</th>
-              <th></th>
+              <th>Journal</th>
             </tr>
           </thead>
           <tbody>
             {signals.length === 0 ? (
               <tr>
-                <td colSpan={9} className="empty-cell">
+                <td colSpan={13} className="empty-cell">
                   {loading ? 'Loading…' : 'No signals match your filters.'}
                 </td>
               </tr>

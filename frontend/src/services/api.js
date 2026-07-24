@@ -112,6 +112,10 @@ export const marketDataApi = {
   getStatus: () => api.get('/api/market-data/status')
 };
 
+export const systemApi = {
+  getStatus: () => api.get('/api/system/status')
+};
+
 export const scannerApi = {
   getStatus: () => api.get('/api/scanner/status'),
   getPatterns: () => api.get('/api/scanner/patterns'),

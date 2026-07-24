@@ -97,6 +97,13 @@ function toLiveAlertPayload(signalDoc) {
     outcome: signal.outcome,
     tradeStatus: signal.tradeStatus,
     outcomeR: signal.outcomeR,
+    signalSource: signal.signalSource || signal.source || 'tradingview',
+    strategyName: signal.strategyName || signal.strategy || signal.patternLabel || null,
+    timeframe: signal.timeframe || null,
+    deliveryStatus: signal.deliveryStatus || 'pending',
+    executionStatus: signal.executionStatus || 'pending',
+    telegramSent: Boolean(signal.telegramSent),
+    mt5Sent: Boolean(signal.mt5Sent),
     userId: signal.userId,
     createdAt: signal.createdAt,
     message: formatLiveAlertMessage(signal)
@@ -158,19 +165,62 @@ async function saveSignal(signalData, inMemorySignals) {
 }
 
 async function deliverLiveAlert(io, signalDoc, subscriber = null) {
-  const payload = toLiveAlertPayload(signalDoc);
+  let telegramSent = Boolean(signalDoc.telegramSent);
+  let mt5Sent = Boolean(signalDoc.mt5Sent);
+  let executionStatus = signalDoc.executionStatus || 'pending';
+
+  if (subscriber) {
+    try {
+      const tgResult = await TelegramService.notifySubscriber(subscriber, signalDoc);
+      if (tgResult !== false) {
+        telegramSent = true;
+      }
+    } catch (err) {
+      console.warn('[Telegram] notify failed:', err.message);
+    }
+
+    try {
+      const Mt5TradeCopierService = require('./Mt5TradeCopierService');
+      if (subscriber?.id && signalDoc?._id && typeof Mt5TradeCopierService.queueExecutionForUser === 'function') {
+        const mt5Result = await Mt5TradeCopierService.queueExecutionForUser(subscriber.id, signalDoc._id);
+        if (mt5Result?.ok) {
+          mt5Sent = true;
+          executionStatus = 'sent';
+        } else if (mt5Result?.reason === 'mt5_not_linked' || mt5Result?.reason === 'mt5_disabled') {
+          executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
+        }
+      }
+    } catch (err) {
+      // MT5 is optional; never fail webhook distribution because of copier errors.
+      console.warn('[MT5] queue failed:', err.message);
+    }
+  }
+
+  const enrichedDoc = {
+    ...(signalDoc.toObject ? signalDoc.toObject() : signalDoc),
+    telegramSent,
+    mt5Sent,
+    executionStatus,
+    deliveryStatus: 'delivered'
+  };
+
+  // Persist delivery flags when we have a real Mongo document id.
+  if (isDbConnected() && enrichedDoc._id && !String(enrichedDoc._id).startsWith('mem_')) {
+    Signal.findByIdAndUpdate(enrichedDoc._id, {
+      telegramSent,
+      mt5Sent,
+      executionStatus,
+      deliveryStatus: 'delivered'
+    }).catch(err => console.warn('[Alerts] delivery status update failed:', err.message));
+  }
+
+  const payload = toLiveAlertPayload(enrichedDoc);
 
   if (payload.userId) {
     io.to(`user:${payload.userId}`).emit('tv:live-alert', payload);
   }
 
-  io.emit('signal:update', signalDoc);
-
-  if (subscriber) {
-    TelegramService.notifySubscriber(subscriber, signalDoc).catch(err =>
-      console.warn('[Telegram] notify failed:', err.message)
-    );
-  }
+  io.emit('signal:update', enrichedDoc);
 
   return payload;
 }
@@ -193,9 +243,6 @@ async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
 
 async function broadcastToSubscribers(io, signalData, inMemorySignals = [], options = {}) {
   const subscribers = await findActiveSubscribers();
-  const fromTradingViewWebhook = Boolean(
-    options.fromTradingViewWebhook || options.skipMarketData
-  );
 
   if (options.existingSaved) {
     const delivery = await deliverBroadcastToSubscribers(io, options.existingSaved, subscribers);
@@ -214,26 +261,16 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
     const mt5 = subscriber.mt5 || {};
     const basePayload = { ...signalData, userId: subscriber.id, isBroadcast: true };
 
-    let enriched;
-    if (fromTradingViewWebhook) {
-      // Metadata + per-user risk stats only — never candles / live market data.
-      enriched = await SignalEnrichmentService.enrichFromTradingViewWebhook(basePayload, {
-        fromTradingViewWebhook: true,
-        userId: subscriber.id,
-        subscriber,
-        accountBalance: mt5.accountBalance,
-        riskPercent: mt5.riskPercent || 1,
-        timeframe: signalData.timeframe || '1h'
-      });
-    } else {
-      const MarketScannerService = require('../services/MarketScannerService');
-      enriched = await SignalEnrichmentService.enrichSignal(basePayload, {
-        accountBalance: mt5.accountBalance,
-        riskPercent: mt5.riskPercent || 1,
-        candles: MarketScannerService.getCandles(signalData.symbol),
-        timeframe: signalData.timeframe || '1h'
-      });
-    }
+    // Always metadata enrichment for distributed signals — never candles / live providers.
+    const enriched = await SignalEnrichmentService.enrichFromTradingViewWebhook(basePayload, {
+      fromTradingViewWebhook: true,
+      skipMarketData: true,
+      userId: subscriber.id,
+      subscriber,
+      accountBalance: mt5.accountBalance,
+      riskPercent: mt5.riskPercent || 1,
+      timeframe: signalData.timeframe || '1h'
+    });
 
     const saved = await saveSignal(enriched, inMemorySignals);
 
@@ -247,6 +284,14 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
 function buildSignalData(body) {
   const direction = String(body.direction || body.action || 'neutral').toLowerCase();
   const levels = normalizeSignalLevels(body, direction);
+  const strategyName =
+    body.strategyName ||
+    body.strategy_name ||
+    body.strategy ||
+    body.patternLabel ||
+    body.pattern_label ||
+    null;
+  const timeframe = body.timeframe || body.interval || body.tf || '1h';
 
   const signalData = {
     symbol: normalizeSymbol(body.symbol || body.ticker || 'UNKNOWN'),
@@ -259,9 +304,17 @@ function buildSignalData(body) {
     patternLabel: body.patternLabel || body.pattern_label || null,
     gapTop: parseFloat(body.gapTop || body.gap_top || 0) || undefined,
     gapBottom: parseFloat(body.gapBottom || body.gap_bottom || 0) || undefined,
-    strategy: body.strategy || body.strategy_name || body.patternLabel || body.pattern_label || null,
+    strategy: strategyName,
+    strategyName,
+    timeframe,
+    signalSource: 'tradingview',
     source: 'tradingview',
-    origin: 'tradingview_webhook'
+    origin: 'tradingview_webhook',
+    deliveryStatus: 'pending',
+    executionStatus: 'pending',
+    telegramSent: false,
+    mt5Sent: false,
+    chartSnapshot: body.chartSnapshot || body.chart_snapshot || undefined
   };
 
   if (signalData.pattern === 'perfect_fvg' && !signalData.patternLabel) {

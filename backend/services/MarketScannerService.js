@@ -95,58 +95,13 @@ function resolveActiveLevelOutcome(symbol, interval, candles) {
 }
 
 async function publishEntrySignal(io, symbol, detection) {
-  const normalizedSymbol = normalizeSymbol(symbol);
-  const candles = getCandles(normalizedSymbol);
-  const payload = await SignalEnrichmentService.enrichSignal(
-    {
-      symbol: normalizedSymbol,
-      direction: detection.direction,
-      entry: detection.entry,
-      stop_loss: detection.stop_loss,
-      stop_loss_1: detection.stop_loss_1 ?? detection.stop_loss,
-      take_profit_1: detection.take_profit_1,
-      take_profit_2: detection.take_profit_2,
-      take_profit_3: detection.take_profit_3,
-      confidence: detection.confidence,
-      notes: detection.notes,
-      alertType: 'entry',
-      pattern: detection.pattern,
-      patternLabel: detection.patternLabel,
-      gapTop: detection.gapTop,
-      gapBottom: detection.gapBottom,
-      pipelineSteps: detection.pipelineSteps,
-      pipelineVersion: detection.pipelineVersion,
-      pipelineScore: detection.pipelineScore,
-      pipelineScoreBreakdown: detection.pipelineScoreBreakdown,
-      signalQuality: detection.signalQuality,
-      isPremiumSignal: detection.isPremiumSignal,
-      source: 'pattern_scanner',
-      broadcast: true,
-      timeframe: '1h'
-    },
-    { candles, timeframe: '1h' }
+  // Architecture lock: trading signals must never be generated from live providers.
+  // Production path is TradingView webhook → TradingViewAlertService only.
+  console.warn(
+    `[Scanner] Refusing live-candle publish for ${symbol} (${detection?.pattern || 'n/a'}) — ` +
+      'TradingView webhook is the sole signal source'
   );
-
-  const barTime = candles.length ? candles[candles.length - 1].time : Date.now();
-  storeActiveChartLevel(normalizedSymbol, '1h', payload, barTime);
-
-  const saved = await TradingViewAlertService.saveSignal({ ...payload, isBroadcast: true });
-
-  io.emit('signal:update', saved);
-  io.emit('scanner:entry', {
-    symbol: normalizedSymbol,
-    pattern: detection.pattern,
-    patternLabel: detection.patternLabel,
-    direction: detection.direction,
-    ...payload
-  });
-
-  await TradingViewAlertService.broadcastToSubscribers(io, payload, [], { existingSaved: saved });
-
-  console.log(
-    `[Scanner] PREMIUM ENTRY ${detection.pattern} ${normalizedSymbol} ${detection.direction} @ ${detection.entry} (score ${detection.pipelineScore}%)`
-  );
-  return saved;
+  return null;
 }
 
 async function fetchHtfCandles(symbol, options = {}) {
@@ -255,71 +210,46 @@ async function ingestCandle(io, { symbol, ...ohlc }) {
   return processCandles(symbol, candles, io);
 }
 
-async function scanSymbol(io, symbol) {
-  const hub = getMarketDataHub();
-  // Dashboard / manual / internal scanner: live hub fetch (independent of TV webhooks).
-  const payload = await hub.getCandles(symbol, '1h', 100, { allowProviderFetch: true });
-  const normalized = (payload.candles || [])
-    .map(c => PatternDetectionService.normalizeCandle({
-      time: Date.parse(c.timestamp),
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-      volume: c.volume
-    }))
-    .sort((a, b) => a.time - b.time);
-
-  candleBuffers.set(bufferKey(symbol), normalized);
-  return processCandles(symbol, normalized, io, { allowProviderFetch: true });
+async function scanSymbol(_io, symbol) {
+  // Live market data is chart-only. Do not fetch providers or publish signals here.
+  return {
+    processed: false,
+    symbol: normalizeSymbol(symbol),
+    reason: 'tradingview_only',
+    message:
+      'Trading signals are published exclusively via TradingView webhooks. Live market data is used only for chart candles.'
+  };
 }
 
-async function runFullScan(io) {
-  const symbols = PATTERN_SCANNER_CONFIG.symbols;
-  const batchSize = PATTERN_SCANNER_CONFIG.scanBatchSize || 2;
-  const batch = [];
-
-  for (let i = 0; i < batchSize; i += 1) {
-    batch.push(symbols[(scanRotationIndex + i) % symbols.length]);
-  }
-  scanRotationIndex = (scanRotationIndex + batchSize) % symbols.length;
-
-  const results = [];
-  for (const symbol of batch) {
-    try {
-      const result = await scanSymbol(io, symbol);
-      results.push({ symbol, ...result });
-    } catch (error) {
-      results.push({ symbol, error: toUserFacingMarketDataError(error.message) });
-    }
-  }
-  return results;
+async function runFullScan(_io) {
+  return PATTERN_SCANNER_CONFIG.symbols.map(symbol => ({
+    symbol,
+    processed: false,
+    reason: 'tradingview_only',
+    message:
+      'Scanner publishing is disabled. Signals arrive from TradingView webhooks only.'
+  }));
 }
 
 function startAutoScanner(io) {
   ioRef = io;
-  // Keep boot/admin plumbing; gate the timer so signal generation is webhook-driven.
+  // Keep boot/admin plumbing; timer must stay off — TV webhooks publish production signals.
   // Chart/cache polling lives in MarketDataHubService and is unaffected.
+  if (autoScanTimer) {
+    clearInterval(autoScanTimer);
+    autoScanTimer = null;
+  }
   if (!PATTERN_SCANNER_CONFIG.autoScanEnabled) {
-    if (autoScanTimer) {
-      clearInterval(autoScanTimer);
-      autoScanTimer = null;
-    }
     console.log(
-      '[Scanner] Auto-scan disabled — production signals via TradingView webhooks; ' +
-        'dashboard/manual scan still uses live MarketDataHub (allowProviderFetch)'
+      '[Scanner] Auto-scan disabled — TradingView webhooks are the sole signal source; ' +
+        'live providers are chart-only'
     );
     return;
   }
-  if (autoScanTimer) {
-    return;
-  }
-
-  autoScanTimer = setInterval(() => {
-    runFullScan(io).catch(err => console.error('[Scanner] auto-scan error:', err.message));
-  }, PATTERN_SCANNER_CONFIG.autoScanIntervalMs);
-
-  console.log(`[Scanner] Auto-scan every ${PATTERN_SCANNER_CONFIG.autoScanIntervalMs}ms (legacy polling)`);
+  // Even if env flips on, do not publish from live candles.
+  console.warn(
+    '[Scanner] SCANNER_AUTO_ENABLED=true ignored for signal publishing — architecture is TradingView-only'
+  );
 }
 
 function stopAutoScanner() {
@@ -362,162 +292,37 @@ async function buildAnalyzeEntry(symbol, detection, candles, interval) {
 
 async function analyzeSymbol(symbol, interval = '1h') {
   const normalizedSymbol = normalizeSymbol(symbol);
-  const hub = getMarketDataHub();
-  const payload = await hub.getCandles(normalizedSymbol, interval, 100, { allowProviderFetch: true });
-  const candles = (payload.candles || [])
-    .map(c =>
-      PatternDetectionService.normalizeCandle({
-        time: Date.parse(c.timestamp),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-        volume: c.volume
-      })
-    )
-    .sort((a, b) => a.time - b.time);
-
-  if (candles.length < 3) {
-    const { active, closed } = resolveActiveLevelOutcome(normalizedSymbol, interval, candles);
-    return {
-      symbol: normalizedSymbol,
-      interval,
-      stage: closed ? 'closed' : active ? 'active_trade' : 'insufficient_candles',
-      entry: active,
-      closedLevel: closed,
-      outcome: closed?.outcome || null,
-      candleCount: candles.length
-    };
-  }
-
-  // Dashboard chart analyze path: live HTF assist when primary bars were live-fetched.
-  const htfCandles = await fetchHtfCandles(normalizedSymbol, { allowProviderFetch: true });
-  const key = bufferKey(normalizedSymbol);
-  const c3 = candles[candles.length - 1];
-
-  const { active: existingActive, closed: closedLevel } = resolveActiveLevelOutcome(
-    normalizedSymbol,
-    interval,
-    candles
-  );
-
-  if (closedLevel) {
-    return {
-      symbol: normalizedSymbol,
-      interval,
-      stage: 'closed',
-      entry: null,
-      closedLevel,
-      outcome: closedLevel.outcome,
-      barTime: c3.time
-    };
-  }
-
-  let activeLevel = existingActive;
-
-  if (interval === '1h') {
-    const pending = pendingSetups.get(key);
-    if (pending) {
-      const pendingResult = TradingPipelineService.checkPendingRetracement(candles, pending, {
-        symbol: normalizedSymbol,
-        htfCandles
-      });
-
-      if (pendingResult.passed && pendingResult.stage === 'entry') {
-        const entry = await buildAnalyzeEntry(normalizedSymbol, pendingResult.entry, candles, interval);
-        storeActiveChartLevel(normalizedSymbol, interval, entry, c3.time);
-        return {
-          symbol: normalizedSymbol,
-          interval,
-          stage: 'entry',
-          via: 'pending_retrace',
-          entry,
-          barTime: c3.time
-        };
-      }
-    }
-  }
-
-  const result = PatternDetectionService.scanLastCandles(candles, undefined, normalizedSymbol, {
-    htfCandles
-  });
-
-  if (result.entry) {
-    const entry = await buildAnalyzeEntry(normalizedSymbol, result.entry, candles, interval);
-    storeActiveChartLevel(normalizedSymbol, interval, entry, c3.time);
-    return {
-      symbol: normalizedSymbol,
-      interval,
-      stage: 'entry',
-      entry,
-      pipelineScore: result.entry.pipelineScore ?? result.pipeline?.pipelineScore,
-      barTime: c3.time
-    };
-  }
-
-  if (activeLevel) {
-    return {
-      symbol: normalizedSymbol,
-      interval,
-      stage: 'active_trade',
-      entry: activeLevel,
-      barTime: c3.time
-    };
-  }
-
-  if (result.pending) {
-    return {
-      symbol: normalizedSymbol,
-      interval,
-      stage: 'pending_retrace',
-      pending: {
-        pattern: result.pending.pattern,
-        direction: result.pending.direction,
-        gapTop: result.pending.gapTop,
-        gapBottom: result.pending.gapBottom
-      },
-      entry: null,
-      barTime: c3.time
-    };
-  }
-
-  if (result.stage === 'below_premium_threshold' || result.pipeline?.stage === 'below_premium_threshold') {
-    return {
-      symbol: normalizedSymbol,
-      interval,
-      stage: 'below_premium_threshold',
-      pipelineScore: result.pipelineScore ?? result.pipeline?.pipelineScore,
-      entry: null,
-      barTime: c3.time
-    };
-  }
-
+  // Chart Entry/SL/TP overlays come from webhook-stored signals on the client.
+  // This endpoint no longer recalculates setups from live provider candles.
   return {
     symbol: normalizedSymbol,
     interval,
-    stage: result.pipeline?.stage || 'no_setup',
+    stage: 'webhook_distribution',
     entry: null,
-    barTime: c3.time
+    message:
+      'Chart levels are drawn from TradingView webhook signals. Live market data providers are chart-only.'
   };
 }
 
 function getScannerStatus() {
   return {
-    autoScanEnabled: PATTERN_SCANNER_CONFIG.autoScanEnabled,
-    autoScanRunning: Boolean(autoScanTimer),
+    autoScanEnabled: false,
+    autoScanRunning: false,
     autoScanIntervalMs: PATTERN_SCANNER_CONFIG.autoScanIntervalMs,
     scanBatchSize: PATTERN_SCANNER_CONFIG.scanBatchSize,
-    // Production broadcast path (timer auto-scan stays off unless SCANNER_AUTO_ENABLED=true).
+    architecture: 'tradingview_webhook_distribution',
     signalPublication: 'tradingview_webhook',
-    // Dashboard /api/scanner/analyze + /api/scanner/run: live hub candles, not TV-dependent.
+    liveProviderRole: 'chart_candles_only',
     internalManualScan: {
-      usesLiveMarketData: true,
-      allowProviderFetch: true,
-      endpoints: ['GET /api/scanner/analyze', 'POST /api/scanner/run']
+      usesLiveMarketData: false,
+      publishesSignals: false,
+      endpoints: ['GET /api/scanner/analyze', 'POST /api/scanner/run'],
+      note: 'Manual/analyze/run do not generate trading signals from providers'
     },
     tradingViewWebhook: {
       publishOnly: true,
-      fetchesCandles: false
+      fetchesCandles: false,
+      isSoleSignalSource: true
     },
     symbols: PATTERN_SCANNER_CONFIG.symbols,
     buffers: PATTERN_SCANNER_CONFIG.symbols.map(symbol => ({
@@ -539,9 +344,8 @@ function getScannerStatus() {
  * TradingView webhook path (inject / publish only).
  * Validates + publishes alerts to sockets / Telegram / storage.
  * NEVER calls hub.getCandles, fetchHistoricalData, indicator, liquidity, or FVG pipelines.
- * Manual/on-demand (dashboard Internal Scanner): scanSymbol / analyzeSymbol / runFullScan —
- * those use MarketDataHub with allowProviderFetch:true (live candles, independent of TV).
- * Timer auto-scan remains opt-in via SCANNER_AUTO_ENABLED (keep false in production).
+ * Live market-data providers are chart-only — they must never generate trading signals.
+ * Timer auto-scan remains off; scanSymbol / analyzeSymbol / runFullScan do not publish.
  */
 async function publishTradingViewAlert(io, rawBody, inMemorySignals = []) {
   return TradingViewService.publishWebhookEvent(io, rawBody, inMemorySignals);

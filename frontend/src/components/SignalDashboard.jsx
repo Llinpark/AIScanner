@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { getSharedSocket } from '../services/marketDataSocket';
 import OutcomeBadge, { RiskAnalysisCard } from './insights/RiskAnalysisCard';
 import AiExplanationCard from './insights/AiExplanationCard';
 import MarketChartPanel from './charts/MarketChartPanel';
+import SignalStatusPanel from './SignalStatusPanel';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -15,7 +16,7 @@ const FEATURE_LABELS = [
   { key: 'tradeJournal', label: 'Trade Journal', minTier: 'Pro' },
   { key: 'newsFilter', label: 'News Filter', minTier: 'Pro' },
   { key: 'telegramAlerts', label: 'Telegram Alerts', minTier: 'Pro' },
-  { key: 'multiMarketScanner', label: 'Multi-Market Scanner', minTier: 'Premium' },
+  { key: 'multiMarketScanner', label: 'Multi-Market Distribution', minTier: 'Premium' },
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', minTier: 'Premium' },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', minTier: 'Premium' },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', minTier: 'Premium' },
@@ -30,6 +31,13 @@ function isActiveSubscription(subscription) {
   return subscription.status === 'active';
 }
 
+function signalStatusLabel(signal) {
+  if (signal.outcome && signal.outcome !== 'pending') {
+    return String(signal.outcome).toUpperCase();
+  }
+  return signal.tradeStatus === 'open' || !signal.tradeStatus ? 'Open' : signal.tradeStatus;
+}
+
 export default function SignalDashboard({ initialSignals, subscription, onNavigateReferrals }) {
   const { isAuthenticated } = useAuth();
   const [signals, setSignals] = useState(initialSignals || []);
@@ -40,6 +48,9 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
   const [accountBalance, setAccountBalance] = useState(10000);
   const [expandedId, setExpandedId] = useState(null);
   const [chartSymbol, setChartSymbol] = useState('EUR/USD');
+  const [chartError, setChartError] = useState(null);
+
+  const onChartErrorChange = useCallback(err => setChartError(err), []);
 
   useEffect(() => {
     if (allowedPairs.length && !allowedPairs.includes(chartSymbol)) {
@@ -61,8 +72,6 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
           if (res.data.tierDisplayName) setTierDisplayName(res.data.tierDisplayName);
         })
         .catch(() => {
-          // Don't let a transient failure permanently strand the UI on the
-          // fallback 2-pair default — retry a few seconds later.
           if (!cancelled) retryTimer = window.setTimeout(loadMe, 5000);
         });
     };
@@ -88,6 +97,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
     const socket = getSharedSocket();
 
+    // Dashboard updates exclusively from TradingView webhook fan-out — no signal polling.
     socket.on('signal:update', newSignal => {
       setSignals(prev => [newSignal, ...prev].slice(0, tierLimits.maxSignals || 50));
     });
@@ -109,7 +119,14 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
   return (
     <div className="dashboard-card">
-      <h2>Recent Trade Signals</h2>
+      <div className="dashboard-hero-copy">
+        <p className="dashboard-eyebrow">Kaching AI · Signal distribution</p>
+        <h2>Recent Trade Signals</h2>
+        <p className="dashboard-lead">
+          TradingView is the signal source. Kaching distributes Entry, SL, TP, confidence, and commentary to your
+          dashboard, Telegram, and MT5 — without regenerating trades from live market data.
+        </p>
+      </div>
 
       {!hasAccess && (
         <div className="subscription-banner">
@@ -137,6 +154,12 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
       </div>
 
       {hasAccess && (
+        <div className="dashboard-status-row">
+          <SignalStatusPanel chartError={chartError} />
+        </div>
+      )}
+
+      {hasAccess && (
         <div className="dashboard-chart-section">
           <MarketChartPanel
             symbol={chartSymbol}
@@ -146,6 +169,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
             subscribed={hasAccess}
             liveEnabled
             height={600}
+            onChartErrorChange={onChartErrorChange}
           />
         </div>
       )}
@@ -176,49 +200,57 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
       <div className="signal-list">
         {signals.length === 0 ? (
-          <div className="signal-empty">No signals available for your plan pairs.</div>
+          <div className="signal-empty">No TradingView signals yet for your plan pairs.</div>
         ) : (
           signals.map(signal => {
             const signalId = signal._id || signal.timestamp;
             const expanded = expandedId === signalId;
+            const strategy =
+              signal.strategyName || signal.strategy || signal.patternLabel || signal.pattern;
 
             return (
               <div key={signalId} className="signal-item" onClick={() => setChartSymbol(signal.symbol)}>
                 <div className="signal-header">
                   <span>{signal.symbol}</span>
-                  {signal.pattern && (
-                    <span className="pattern-badge">{signal.patternLabel || signal.pattern}</span>
-                  )}
+                  {strategy && <span className="pattern-badge">{strategy}</span>}
                   <OutcomeBadge outcome={signal.outcome} tradeStatus={signal.tradeStatus} />
                   <strong>{signal.direction.toUpperCase()}</strong>
                 </div>
-                <div className="signal-row">
-                  <span>Kaching Entry: {signal.entry.toFixed(5)}</span>
-                  <span>Kaching SL: {(signal.stop_loss_1 ?? signal.stop_loss).toFixed(5)}</span>
+                <div className="signal-row signal-meta-row">
+                  <span>Status: {signalStatusLabel(signal)}</span>
+                  <span>TF: {signal.timeframe || '1h'}</span>
+                  <span>Source: {signal.signalSource || signal.source || 'tradingview'}</span>
                 </div>
                 <div className="signal-row">
-                  <span>Kaching TP1: {signal.take_profit_1.toFixed(5)}</span>
-                  <span>Kaching TP2: {signal.take_profit_2.toFixed(5)}</span>
-                  <span>Kaching TP3: {signal.take_profit_3.toFixed(5)}</span>
+                  <span>Kaching Entry: {Number(signal.entry).toFixed(5)}</span>
+                  <span>Kaching SL: {Number(signal.stop_loss_1 ?? signal.stop_loss).toFixed(5)}</span>
+                </div>
+                <div className="signal-row">
+                  <span>Kaching TP1: {Number(signal.take_profit_1).toFixed(5)}</span>
+                  <span>Kaching TP2: {Number(signal.take_profit_2).toFixed(5)}</span>
+                  <span>Kaching TP3: {Number(signal.take_profit_3).toFixed(5)}</span>
                 </div>
                 <div className="signal-footer">
                   {tierLimits.showConfidence && signal.confidence != null ? (
-                    <small>Confidence: {(signal.confidence * 100).toFixed(0)}%</small>
+                    <small>Confidence: {(Number(signal.confidence) * 100).toFixed(0)}%</small>
                   ) : (
                     <small>Confidence: upgrade to Pro</small>
                   )}
                   {signal.outcomeR != null && <small>Result: {signal.outcomeR}R</small>}
                   <span>{signal.notes}</span>
                 </div>
-                {tierLimits.aiTradeExplanation && (signal.aiFactors || signal.tradeExplanation) && (
-                  <AiExplanationCard aiFactors={signal.aiFactors} tradeExplanation={signal.tradeExplanation} />
+                {tierLimits.aiTradeExplanation && (
+                  <AiExplanationCard signal={signal} aiFactors={signal.aiFactors} tradeExplanation={signal.tradeExplanation} />
                 )}
                 {tierLimits.riskAnalysis && (
                   <>
                     <button
                       type="button"
                       className="btn-small signal-expand-btn"
-                      onClick={() => setExpandedId(expanded ? null : signalId)}
+                      onClick={e => {
+                        e.stopPropagation();
+                        setExpandedId(expanded ? null : signalId);
+                      }}
                     >
                       {expanded ? 'Hide risk analysis' : 'Show risk analysis'}
                     </button>

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { subscriptionApi } from '../services/api';
 import SignalHistory from './insights/SignalHistory';
-import AnalyticsDashboard from './insights/AnalyticsDashboard';
 import TradeJournal from './insights/TradeJournal';
+
+const AnalyticsDashboard = lazy(() => import('./insights/AnalyticsDashboard'));
 
 const TABS = [
   { id: 'history', label: 'Signal History' },
@@ -33,7 +34,8 @@ export default function InsightsHub({ subscription, onNavigatePricing }) {
     <div className="dashboard-card insights-hub">
       <h2>Insights</h2>
       <p className="insights-intro">
-        Signal history, real win-rate analytics, risk analysis, AI explanations, and your trade journal.
+        TradingView signal history, performance analytics, and your trade journal — distribution metrics, not live
+        scanner scores.
       </p>
 
       <div className="insights-tabs">
@@ -53,7 +55,9 @@ export default function InsightsHub({ subscription, onNavigatePricing }) {
         <SignalHistory tierLimits={tierLimits} onAddToJournal={handleAddToJournal} />
       )}
       {activeTab === 'analytics' && (
-        <AnalyticsDashboard tierLimits={tierLimits} onNavigatePricing={onNavigatePricing} />
+        <Suspense fallback={<div className="loading-state">Loading analytics…</div>}>
+          <AnalyticsDashboard tierLimits={tierLimits} onNavigatePricing={onNavigatePricing} />
+        </Suspense>
       )}
       {activeTab === 'journal' && (
         <TradeJournal

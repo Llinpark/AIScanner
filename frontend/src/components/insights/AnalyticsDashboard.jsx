@@ -93,8 +93,8 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
   return (
     <div className="insights-section">
       <div className="insights-section-header">
-        <h3>Analytics</h3>
-        <p>Real win rate based on closed TP/SL outcomes</p>
+        <h3>Signal Performance</h3>
+        <p>Win rate, R multiples, and breakdowns by pair, timeframe, strategy, and session</p>
       </div>
 
       <div className="analytics-grid">
@@ -124,37 +124,74 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
           <span>Avg R / trade</span>
           <strong>{summary.avgR}R</strong>
         </div>
+        <div className="analytics-stat">
+          <span>Avg hold time</span>
+          <strong>
+            {summary.avgHoldTimeMs != null
+              ? `${Math.round(summary.avgHoldTimeMs / 3600000)}h`
+              : '—'}
+          </strong>
+        </div>
       </div>
 
       <div className="analytics-panels">
         <div className="analytics-panel">
           <h4>Equity curve (R multiples)</h4>
-          <EquityChart points={timeseries?.equityCurve || []} />
+          <EquityChart points={timeseries?.equityCurve || summary.equityCurve || []} />
         </div>
 
         <div className="analytics-panel">
-          <h4>Daily closed trades</h4>
-          <BarChart rows={timeseries?.timeseries || []} valueKey="closed" labelKey="date" />
+          <h4>Success by day</h4>
+          <BarChart
+            rows={summary.successByDay || timeseries?.timeseries || []}
+            valueKey="wins"
+            labelKey="date"
+          />
         </div>
 
         <div className="analytics-panel">
-          <h4>Pattern performance</h4>
-          {(timeseries?.patternStats || []).length === 0 ? (
-            <div className="chart-empty">No closed pattern trades yet.</div>
+          <h4>By strategy</h4>
+          <BarChart rows={summary.byStrategy || []} valueKey="winRate" labelKey="label" />
+        </div>
+
+        <div className="analytics-panel">
+          <h4>By pair</h4>
+          <BarChart rows={summary.byPair || []} valueKey="winRate" labelKey="label" />
+        </div>
+
+        <div className="analytics-panel">
+          <h4>By timeframe</h4>
+          <BarChart rows={summary.byTimeframe || []} valueKey="winRate" labelKey="label" />
+        </div>
+
+        <div className="analytics-panel">
+          <h4>By session (UTC)</h4>
+          <BarChart rows={summary.bySession || []} valueKey="winRate" labelKey="label" />
+        </div>
+
+        <div className="analytics-panel">
+          <h4>Confidence vs win rate</h4>
+          <BarChart rows={summary.confidenceVsWinRate || []} valueKey="winRate" labelKey="bucket" />
+        </div>
+
+        <div className="analytics-panel">
+          <h4>Strategy / pattern performance</h4>
+          {(summary.patternStats || timeseries?.patternStats || []).length === 0 ? (
+            <div className="chart-empty">No closed strategy trades yet.</div>
           ) : (
             <div className="pattern-stats-table">
               <table>
                 <thead>
                   <tr>
-                    <th>Pattern</th>
+                    <th>Strategy</th>
                     <th>Trades</th>
                     <th>Win rate</th>
                     <th>Avg R</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(timeseries?.patternStats || []).map(row => (
-                    <tr key={row.pattern}>
+                  {(summary.patternStats || timeseries?.patternStats || []).map(row => (
+                    <tr key={row.pattern || row.key}>
                       <td>{row.label || row.pattern}</td>
                       <td>{row.total}</td>
                       <td>{row.winRate}%</td>

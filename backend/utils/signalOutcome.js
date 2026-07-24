@@ -73,11 +73,48 @@ function buildAnalytics(signals) {
   const losses = closed.filter(s => s.outcome === 'sl');
   const totalR = closed.reduce((sum, s) => sum + (Number(s.outcomeR) || 0), 0);
 
+  const holdTimes = closed
+    .map(s => {
+      if (!s.closedAt || !s.createdAt) return null;
+      const ms = new Date(s.closedAt) - new Date(s.createdAt);
+      return Number.isFinite(ms) && ms >= 0 ? ms : null;
+    })
+    .filter(v => v != null);
+  const avgHoldTimeMs = holdTimes.length
+    ? Math.round(holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length)
+    : null;
+
+  function groupStats(keyFn, labelFn) {
+    const map = {};
+    for (const signal of closed) {
+      const key = keyFn(signal) || 'unknown';
+      if (!map[key]) {
+        map[key] = { key, label: labelFn(signal, key), total: 0, wins: 0, losses: 0, totalR: 0 };
+      }
+      map[key].total += 1;
+      if (WIN_OUTCOMES.has(signal.outcome)) map[key].wins += 1;
+      if (signal.outcome === 'sl') map[key].losses += 1;
+      map[key].totalR += Number(signal.outcomeR) || 0;
+    }
+    return Object.values(map).map(row => ({
+      ...row,
+      winRate: row.total ? Math.round((row.wins / row.total) * 100) : 0,
+      avgR: row.total ? Number((row.totalR / row.total).toFixed(2)) : 0
+    }));
+  }
+
   const byPattern = {};
   for (const signal of closed) {
-    const key = signal.pattern || 'unknown';
+    const key = signal.strategyName || signal.pattern || 'unknown';
     if (!byPattern[key]) {
-      byPattern[key] = { pattern: key, label: signal.patternLabel || key, total: 0, wins: 0, losses: 0, totalR: 0 };
+      byPattern[key] = {
+        pattern: key,
+        label: signal.strategyName || signal.patternLabel || key,
+        total: 0,
+        wins: 0,
+        losses: 0,
+        totalR: 0
+      };
     }
     byPattern[key].total += 1;
     if (WIN_OUTCOMES.has(signal.outcome)) byPattern[key].wins += 1;
@@ -90,6 +127,48 @@ function buildAnalytics(signals) {
     winRate: row.total ? Math.round((row.wins / row.total) * 100) : 0,
     avgR: row.total ? Number((row.totalR / row.total).toFixed(2)) : 0
   }));
+
+  const byPair = groupStats(
+    s => s.symbol,
+    (s, key) => key
+  );
+  const byTimeframe = groupStats(
+    s => s.timeframe || '1h',
+    (s, key) => key
+  );
+  const byStrategy = groupStats(
+    s => s.strategyName || s.strategy || s.pattern || 'TradingView',
+    (s, key) => s.strategyName || s.patternLabel || key
+  );
+
+  const sessionOf = createdAt => {
+    const hour = new Date(createdAt).getUTCHours();
+    if (hour >= 0 && hour < 7) return 'Asia';
+    if (hour >= 7 && hour < 12) return 'London';
+    if (hour >= 12 && hour < 17) return 'New York';
+    return 'Late';
+  };
+  const bySession = groupStats(
+    s => sessionOf(s.createdAt),
+    (s, key) => key
+  );
+
+  const confidenceBuckets = {};
+  for (const signal of closed) {
+    const pct = Math.round((Number(signal.confidence) || 0) * 100);
+    const bucket = pct >= 80 ? '80-100' : pct >= 60 ? '60-79' : pct >= 40 ? '40-59' : '0-39';
+    if (!confidenceBuckets[bucket]) {
+      confidenceBuckets[bucket] = { bucket, total: 0, wins: 0 };
+    }
+    confidenceBuckets[bucket].total += 1;
+    if (WIN_OUTCOMES.has(signal.outcome)) confidenceBuckets[bucket].wins += 1;
+  }
+  const confidenceVsWinRate = Object.values(confidenceBuckets)
+    .map(row => ({
+      ...row,
+      winRate: row.total ? Math.round((row.wins / row.total) * 100) : 0
+    }))
+    .sort((a, b) => a.bucket.localeCompare(b.bucket));
 
   const byDay = {};
   for (const signal of closed) {
@@ -115,6 +194,7 @@ function buildAnalytics(signals) {
   });
 
   return {
+    focus: 'signal_performance',
     totalEntries: entries.length,
     openTrades: entries.filter(s => !s.outcome || s.outcome === 'pending').length,
     closedTrades: closed.length,
@@ -123,7 +203,14 @@ function buildAnalytics(signals) {
     winRate: closed.length ? Math.round((wins.length / closed.length) * 100) : 0,
     totalR: Number(totalR.toFixed(2)),
     avgR: closed.length ? Number((totalR / closed.length).toFixed(2)) : 0,
+    avgHoldTimeMs,
     patternStats,
+    byPair,
+    byTimeframe,
+    byStrategy,
+    bySession,
+    confidenceVsWinRate,
+    successByDay: timeseries,
     timeseries,
     equityCurve
   };

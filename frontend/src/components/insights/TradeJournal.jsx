@@ -10,7 +10,13 @@ const EMPTY_FORM = {
   outcome: 'open',
   outcomeR: '',
   pnl: '',
-  notes: ''
+  notes: '',
+  userNotes: '',
+  tradeRating: '',
+  emotion: '',
+  lessonsLearned: '',
+  screenshotUrl: '',
+  executionNotes: ''
 };
 
 export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, onPrefillConsumed }) {
@@ -49,7 +55,13 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
       outcome: prefill.outcome === 'sl' ? 'loss' : prefill.outcome?.startsWith('tp') ? 'win' : 'open',
       outcomeR: prefill.outcomeR ?? '',
       pnl: '',
-      notes: prefill.tradeExplanation || prefill.notes || ''
+      notes: '',
+      userNotes: '',
+      tradeRating: '',
+      emotion: '',
+      lessonsLearned: '',
+      screenshotUrl: '',
+      executionNotes: prefill.tradeExplanation || prefill.notes || ''
     });
     onPrefillConsumed?.();
   }, [prefill, onPrefillConsumed]);
@@ -79,6 +91,9 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
         lotSize: form.lotSize !== '' ? Number(form.lotSize) : undefined,
         outcomeR: form.outcomeR !== '' ? Number(form.outcomeR) : undefined,
         pnl: form.pnl !== '' ? Number(form.pnl) : undefined,
+        tradeRating: form.tradeRating !== '' ? Number(form.tradeRating) : undefined,
+        notes: form.userNotes || form.notes || '',
+        userNotes: form.userNotes || form.notes || '',
         signalId: prefill?._id || undefined
       };
 
@@ -109,7 +124,13 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
       outcome: entry.outcome || 'open',
       outcomeR: entry.outcomeR ?? '',
       pnl: entry.pnl ?? '',
-      notes: entry.notes || ''
+      notes: entry.notes || '',
+      userNotes: entry.userNotes || entry.notes || '',
+      tradeRating: entry.tradeRating ?? '',
+      emotion: entry.emotion || '',
+      lessonsLearned: entry.lessonsLearned || '',
+      screenshotUrl: entry.screenshotUrl || '',
+      executionNotes: entry.executionNotes || ''
     });
   };
 
@@ -127,7 +148,7 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
     <div className="insights-section">
       <div className="insights-section-header">
         <h3>Trade Journal</h3>
-        <p>Log trades manually or import from signal history</p>
+        <p>Per-signal notes, rating, emotion, lessons, and execution context</p>
       </div>
 
       {error && <div className="feature-lock">{error}</div>}
@@ -185,12 +206,45 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             value={form.pnl}
             onChange={e => setForm(f => ({ ...f, pnl: e.target.value }))}
           />
+          <select
+            value={form.tradeRating}
+            onChange={e => setForm(f => ({ ...f, tradeRating: e.target.value }))}
+          >
+            <option value="">Trade rating</option>
+            <option value="1">1 · Poor</option>
+            <option value="2">2</option>
+            <option value="3">3 · OK</option>
+            <option value="4">4</option>
+            <option value="5">5 · Excellent</option>
+          </select>
+          <input
+            placeholder="Emotion"
+            value={form.emotion}
+            onChange={e => setForm(f => ({ ...f, emotion: e.target.value }))}
+          />
+          <input
+            placeholder="Screenshot URL"
+            value={form.screenshotUrl}
+            onChange={e => setForm(f => ({ ...f, screenshotUrl: e.target.value }))}
+          />
         </div>
         <textarea
-          placeholder="Notes / lessons learned"
-          value={form.notes}
-          onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-          rows={3}
+          placeholder="User notes"
+          value={form.userNotes}
+          onChange={e => setForm(f => ({ ...f, userNotes: e.target.value }))}
+          rows={2}
+        />
+        <textarea
+          placeholder="Lessons learned"
+          value={form.lessonsLearned}
+          onChange={e => setForm(f => ({ ...f, lessonsLearned: e.target.value }))}
+          rows={2}
+        />
+        <textarea
+          placeholder="Execution notes"
+          value={form.executionNotes}
+          onChange={e => setForm(f => ({ ...f, executionNotes: e.target.value }))}
+          rows={2}
         />
         <div className="journal-form-actions">
           <button type="submit" className="btn-fetch" disabled={saving}>
@@ -220,12 +274,12 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
               <tr>
                 <th>Symbol</th>
                 <th>Dir</th>
-                <th>Entry</th>
-                <th>Exit</th>
+                <th>Rating</th>
+                <th>Emotion</th>
                 <th>Outcome</th>
                 <th>R</th>
-                <th>PnL</th>
                 <th>Notes</th>
+                <th>Lessons</th>
                 <th></th>
               </tr>
             </thead>
@@ -241,12 +295,12 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
                   <tr key={entry._id}>
                     <td>{entry.symbol}</td>
                     <td>{entry.direction?.toUpperCase()}</td>
-                    <td>{entry.entry != null ? Number(entry.entry).toFixed(5) : '—'}</td>
-                    <td>{entry.exit != null ? Number(entry.exit).toFixed(5) : '—'}</td>
+                    <td>{entry.tradeRating ?? '—'}</td>
+                    <td>{entry.emotion || '—'}</td>
                     <td>{entry.outcome}</td>
                     <td>{entry.outcomeR != null ? `${entry.outcomeR}R` : '—'}</td>
-                    <td>{entry.pnl != null ? entry.pnl : '—'}</td>
-                    <td className="notes-cell">{entry.notes}</td>
+                    <td className="notes-cell">{entry.userNotes || entry.notes}</td>
+                    <td className="notes-cell">{entry.lessonsLearned || '—'}</td>
                     <td className="actions-cell">
                       <button type="button" className="btn-small" onClick={() => startEdit(entry)}>
                         Edit

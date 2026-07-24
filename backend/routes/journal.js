@@ -15,6 +15,12 @@ const JOURNAL_PATCH_FIELDS = new Set([
   'outcomeR',
   'pnl',
   'notes',
+  'userNotes',
+  'tradeRating',
+  'emotion',
+  'lessonsLearned',
+  'screenshotUrl',
+  'executionNotes',
   'tags',
   'signalId',
   'openedAt',
@@ -60,8 +66,27 @@ function createJournalRouter() {
   router.post('/', async (req, res) => {
     try {
       const userId = req.userId;
-      const { symbol, direction, entry, exit, lotSize, outcome, outcomeR, pnl, notes, tags, signalId, openedAt, closedAt } =
-        req.body;
+      const {
+        symbol,
+        direction,
+        entry,
+        exit,
+        lotSize,
+        outcome,
+        outcomeR,
+        pnl,
+        notes,
+        userNotes,
+        tradeRating,
+        emotion,
+        lessonsLearned,
+        screenshotUrl,
+        executionNotes,
+        tags,
+        signalId,
+        openedAt,
+        closedAt
+      } = req.body;
 
       if (!symbol || !direction) {
         return res.status(400).json({ message: 'symbol and direction are required' });
@@ -76,7 +101,13 @@ function createJournalRouter() {
         outcome: outcome || 'open',
         outcomeR: outcomeR != null ? Number(outcomeR) : undefined,
         pnl: pnl != null ? Number(pnl) : undefined,
-        notes: notes || '',
+        notes: notes || userNotes || '',
+        userNotes: userNotes || notes || '',
+        tradeRating: tradeRating != null ? Number(tradeRating) : undefined,
+        emotion: emotion || '',
+        lessonsLearned: lessonsLearned || '',
+        screenshotUrl: screenshotUrl || '',
+        executionNotes: executionNotes || '',
         tags: Array.isArray(tags) ? tags : [],
         signalId: signalId || null,
         openedAt: openedAt ? new Date(openedAt) : new Date(),

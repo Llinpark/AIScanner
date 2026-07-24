@@ -1,53 +1,61 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getSharedSocket } from '../services/marketDataSocket';
-import { scannerApi } from '../services/api';
 import { normalizeInterval, symbolsMatch } from '../utils/chartLevels';
 import { attachActivation, detectTradeOutcome } from '../utils/tradeLevelLifecycle';
 
-const ANALYZE_DEBOUNCE_MS = 350;
-
-function candleBarKey(candles) {
-  if (!candles?.length) return '';
-  const last = candles[candles.length - 1];
-  const ts = last.timestamp || last.time || '';
-  return `${ts}:${candles.length}:${last.close}`;
-}
-
-function latestBarTime(candles) {
-  if (!candles?.length) return Date.now();
-  const last = candles[candles.length - 1];
-  const raw = last.timestamp || last.time;
-  const parsed = Number(raw);
-  if (Number.isFinite(parsed)) return parsed > 1e12 ? parsed : parsed * 1000;
-  const dateParsed = Date.parse(raw);
-  return Number.isFinite(dateParsed) ? dateParsed : Date.now();
-}
-
+/**
+ * Chart overlays come from TradingView webhook signals (props + socket), never from
+ * live-provider recalculation /scanner/analyze.
+ */
 export default function useLiveChartLevels({
   symbol,
   interval = '1h',
   candles = [],
+  overlaySignals = [],
   subscribed = true,
   isAuthenticated = false
 }) {
   const [liveSignal, setLiveSignal] = useState(null);
   const [stage, setStage] = useState(null);
   const [closedOutcome, setClosedOutcome] = useState(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const lastBarRef = useRef('');
-  const requestIdRef = useRef(0);
   const liveSignalRef = useRef(null);
 
   useEffect(() => {
     liveSignalRef.current = liveSignal;
   }, [liveSignal]);
 
+  const matchingOverlay = useMemo(() => {
+    if (!symbol || !overlaySignals?.length) return null;
+    const normalizedInterval = normalizeInterval(interval);
+    const open = overlaySignals.find(s => {
+      if (!symbolsMatch(s.symbol, symbol)) return false;
+      const alertType = s.alertType || 'signal';
+      if (alertType !== 'entry' && alertType !== 'signal') return false;
+      if (s.outcome && s.outcome !== 'pending') return false;
+      if (s.tradeStatus && !['open', 'partial'].includes(s.tradeStatus)) return false;
+      if (s.timeframe && normalizeInterval(s.timeframe) !== normalizedInterval) {
+        // Allow overlay when timeframe missing on legacy signals.
+        return false;
+      }
+      return s.entry != null && (s.stop_loss != null || s.stop_loss_1 != null);
+    });
+    return open || null;
+  }, [overlaySignals, symbol, interval]);
+
   useEffect(() => {
-    setLiveSignal(null);
-    setStage(null);
     setClosedOutcome(null);
-    lastBarRef.current = '';
-  }, [symbol, interval]);
+    if (!subscribed || !matchingOverlay) {
+      setLiveSignal(null);
+      setStage(null);
+      return;
+    }
+    setLiveSignal(
+      matchingOverlay.activatedAtBarTime
+        ? matchingOverlay
+        : attachActivation(matchingOverlay, Date.now())
+    );
+    setStage(matchingOverlay.tradeStatus === 'open' || !matchingOverlay.outcome ? 'active_trade' : 'entry');
+  }, [subscribed, matchingOverlay, symbol, interval]);
 
   useEffect(() => {
     if (!subscribed || !symbol || !candles.length || !liveSignalRef.current) return undefined;
@@ -62,87 +70,39 @@ export default function useLiveChartLevels({
   }, [subscribed, symbol, candles]);
 
   useEffect(() => {
-    if (!subscribed || !symbol || !candles.length) {
-      return undefined;
-    }
-
-    const barKey = candleBarKey(candles);
-    if (barKey === lastBarRef.current) {
-      return undefined;
-    }
-    lastBarRef.current = barKey;
-
-    const requestId = requestIdRef.current + 1;
-    requestIdRef.current = requestId;
-    setAnalyzing(true);
-
-    const timer = setTimeout(() => {
-      scannerApi
-        .analyze(symbol, { interval: normalizeInterval(interval) })
-        .then(response => {
-          if (requestIdRef.current !== requestId) return;
-          const data = response.data || {};
-          setStage(data.stage || null);
-
-          if (data.stage === 'closed') {
-            setLiveSignal(null);
-            setClosedOutcome(data.outcome || data.closedLevel?.outcome || null);
-            return;
-          }
-
-          if (data.entry) {
-            setClosedOutcome(null);
-            setLiveSignal(
-              data.entry.activatedAtBarTime
-                ? data.entry
-                : attachActivation(data.entry, latestBarTime(candles))
-            );
-            return;
-          }
-
-          if (data.stage !== 'active_trade') {
-            const hit = detectTradeOutcome(liveSignalRef.current, candles);
-            if (hit) {
-              setLiveSignal(null);
-              setStage('closed');
-              setClosedOutcome(hit.outcome);
-            }
-          }
-        })
-        .catch(() => {
-          if (requestIdRef.current !== requestId) return;
-        })
-        .finally(() => {
-          if (requestIdRef.current === requestId) {
-            setAnalyzing(false);
-          }
-        });
-    }, ANALYZE_DEBOUNCE_MS);
-
-    return () => clearTimeout(timer);
-  }, [subscribed, symbol, interval, candles]);
-
-  useEffect(() => {
     if (!subscribed || !isAuthenticated || !symbol) return undefined;
 
     const socket = getSharedSocket();
     if (!socket) return undefined;
 
-    const handleScannerEntry = payload => {
+    const handleSignalUpdate = payload => {
       if (!payload || !symbolsMatch(payload.symbol, symbol)) return;
+      const alertType = payload.alertType || 'signal';
+      if (alertType !== 'entry' && alertType !== 'signal') return;
       setClosedOutcome(null);
       setStage('entry');
-      setLiveSignal(
-        attachActivation(payload, payload.activatedAtBarTime || latestBarTime(candles))
-      );
+      setLiveSignal(attachActivation(payload, payload.activatedAtBarTime || Date.now()));
     };
 
-    socket.on('scanner:entry', handleScannerEntry);
+    const handleOutcome = payload => {
+      if (!payload || !symbolsMatch(payload.symbol, symbol)) return;
+      if (payload.outcome && payload.outcome !== 'pending') {
+        setLiveSignal(null);
+        setStage('closed');
+        setClosedOutcome(payload.outcome);
+      }
+    };
+
+    socket.on('signal:update', handleSignalUpdate);
+    socket.on('signal:outcome', handleOutcome);
+    socket.on('tv:live-alert', handleSignalUpdate);
 
     return () => {
-      socket.off('scanner:entry', handleScannerEntry);
+      socket.off('signal:update', handleSignalUpdate);
+      socket.off('signal:outcome', handleOutcome);
+      socket.off('tv:live-alert', handleSignalUpdate);
     };
-  }, [subscribed, isAuthenticated, symbol, candles]);
+  }, [subscribed, isAuthenticated, symbol]);
 
   useEffect(() => {
     if (!closedOutcome) return undefined;
@@ -150,5 +110,5 @@ export default function useLiveChartLevels({
     return () => clearTimeout(timer);
   }, [closedOutcome]);
 
-  return { liveSignal, stage, analyzing, closedOutcome };
+  return { liveSignal, stage, analyzing: false, closedOutcome };
 }

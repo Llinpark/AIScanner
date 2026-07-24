@@ -218,6 +218,7 @@ app.get('/api/health', (req, res) => {
     domain: APP_DOMAIN,
     frontendUrl: FRONTEND_URL,
     publicBackendUrl: PUBLIC_BACKEND_URL,
+    architecture: 'tradingview_webhook_distribution',
     pythonAi: {
       configured: PythonAiService.isConfigured(),
       url: PythonAiService.isConfigured() ? PythonAiService.getPythonServiceUrl() : null
@@ -1938,6 +1939,26 @@ app.get('/api/scanner/status', (req, res) => {
   res.json(MarketScannerService.getScannerStatus());
 });
 
+app.get('/api/system/status', requireAuth, async (req, res) => {
+  try {
+    const { createSystemStatusService } = require('./services/SystemStatusService');
+    const Mt5TradeCopierService = require('./services/Mt5TradeCopierService');
+    const statusService = createSystemStatusService({
+      PythonAiService,
+      TelegramService,
+      Mt5TradeCopierService,
+      MarketScannerService,
+      getMarketDataHub,
+      mongoose
+    });
+    const status = await statusService.getDistributionStatus(req.user || null);
+    return res.json(status);
+  } catch (error) {
+    console.error('System status error:', error);
+    return res.status(500).json({ message: 'Unable to load system status', error: safeErrorMessage(error) });
+  }
+});
+
 app.get('/api/scanner/patterns', requireAuth, (req, res) => {
   const allowed = req.user
     ? getAllowedCurrencyPairs(req.user.subscription)
@@ -2066,20 +2087,15 @@ app.post('/api/ai/signal', scannerLimiter, requireAuth, requireSubscription, asy
 
 app.post('/api/scanner/run', requireAuth, requireSubscription, requireTierFeature('multiMarketScanner'), async (req, res) => {
   try {
-    const { symbol } = req.body;
-
-    if (symbol && !isCurrencyPairAllowed(symbol, req.user.subscription)) {
-      return res.status(403).json({
-        message: `Currency pair ${symbol} is not included in your plan.`,
-        allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription)
-      });
-    }
-
-    const allowed = getAllowedCurrencyPairs(req.user.subscription);
-    const results = symbol
-      ? [await MarketScannerService.scanSymbol(io, symbol)]
-      : await Promise.all(allowed.map(s => MarketScannerService.scanSymbol(io, s)));
-    return res.json({ success: true, results });
+    // Architecture: do not generate or publish signals from live market data.
+    return res.json({
+      success: true,
+      architecture: 'tradingview_webhook_distribution',
+      published: false,
+      message:
+        'Trading signals are published exclusively via TradingView webhooks. Live market data is chart-only.',
+      results: await MarketScannerService.runFullScan(io)
+    });
   } catch (error) {
     console.error('Scanner run error:', error);
     return res.status(500).json({ message: 'Scanner run failed', error: error.message });

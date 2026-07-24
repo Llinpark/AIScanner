@@ -11,6 +11,9 @@ import { formatMarketDataProvider } from '../../utils/marketDataProviders';
 import ChartTimeframeToolbar from './ChartTimeframeToolbar';
 import KachingLightweightChart from './KachingLightweightChart';
 
+const CHART_FAILURE_COPY =
+  'Live chart temporarily unavailable. Trading alerts continue normally.';
+
 export default function MarketChartPanel({
   symbol,
   interval: controlledInterval,
@@ -22,7 +25,8 @@ export default function MarketChartPanel({
   useLiveLevels = true,
   subscribed = true,
   liveEnabled = true,
-  height = 600
+  height = 600,
+  onChartErrorChange
 }) {
   const SYMBOL_DEBOUNCE_MS = 400;
   const { subscription, isAuthenticated } = useAuth();
@@ -76,15 +80,21 @@ export default function MarketChartPanel({
       liveEnabled
     });
 
-  const { liveSignal, stage, analyzing, closedOutcome } = useLiveChartLevels({
+  useEffect(() => {
+    onChartErrorChange?.(error || null);
+  }, [error, onChartErrorChange]);
+
+  const { liveSignal, stage, closedOutcome } = useLiveChartLevels({
     symbol: debouncedSymbol,
     interval,
     candles,
+    overlaySignals,
     subscribed: subscribed && useLiveLevels,
     isAuthenticated
   });
 
   const overlaySignal = useLiveLevels ? liveSignal : null;
+  const chartFailed = Boolean(error && candles.length === 0);
 
   if (!subscribed) {
     return <div className="empty-state">Subscribe to view live Kaching charts.</div>;
@@ -103,40 +113,42 @@ export default function MarketChartPanel({
       />
 
       {loading && candles.length === 0 && <div className="loading-state">Loading chart data…</div>}
-      {error && candles.length === 0 && <div className="feature-lock">{error}</div>}
+      {chartFailed && (
+        <div className="page-notice chart-isolated-notice" role="status">
+          {CHART_FAILURE_COPY}
+        </div>
+      )}
       {liveStatus === 'stale' && candles.length > 0 && (
         <div className="page-notice info-box">
-          Live refresh delayed — showing cached candles while the data provider catches up.
+          Live refresh delayed — showing cached candles. Trading alerts continue normally.
         </div>
       )}
       {fallbackUsed && fallbackInterval && candles.length > 0 && (
         <div className="page-notice info-box">
           Live intraday feed unavailable — showing daily EOD ({fallbackInterval}) from{' '}
-          {formatMarketDataProvider(provider) || 'fallback'}.
+          {formatMarketDataProvider(provider) || 'fallback'}. Trading alerts continue normally.
         </div>
       )}
-      {useLiveLevels && analyzing && candles.length > 0 && (
-        <div className="page-notice info-box">Scanning live candles for Entry / SL / TP…</div>
-      )}
-      {useLiveLevels && !analyzing && stage === 'pending_retrace' && !liveSignal && (
-        <div className="page-notice info-box">Setup forming — waiting for retrace entry on live candles.</div>
-      )}
       {useLiveLevels && stage === 'active_trade' && liveSignal && (
-        <div className="page-notice info-box">Active trade levels — staying on chart until SL or TP is hit.</div>
+        <div className="page-notice info-box">
+          Active TradingView levels on chart — staying until SL or TP outcome arrives.
+        </div>
       )}
       {useLiveLevels && closedOutcome && (
         <div className="page-notice info-box">Trade closed at {closedOutcome.toUpperCase()} — levels cleared.</div>
       )}
-      <KachingLightweightChart
-        candles={candles}
-        overlaySignal={overlaySignal}
-        symbol={debouncedSymbol}
-        interval={interval}
-        liveEnabled={liveEnabled}
-        liveStatus={liveStatus}
-        provider={provider}
-        height={height}
-      />
+      {!chartFailed && (
+        <KachingLightweightChart
+          candles={candles}
+          overlaySignal={overlaySignal}
+          symbol={debouncedSymbol}
+          interval={interval}
+          liveEnabled={liveEnabled}
+          liveStatus={liveStatus}
+          provider={provider}
+          height={height}
+        />
+      )}
       {!loading && !error && candles.length === 0 && (
         <div className="empty-state">No candle data available for {debouncedSymbol}.</div>
       )}
