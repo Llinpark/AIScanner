@@ -16,6 +16,14 @@ const TradeExecutionSchema = new mongoose.Schema({
   accountBalance: { type: Number },
   trailingStop: { type: Boolean, default: false },
   breakEven: { type: Boolean, default: false },
+  /** Trail distance in pips from current price (EA OnTick). Default = initial SL distance. */
+  trailDistancePips: { type: Number },
+  /** Minimum improvement in pips before SL is moved again. */
+  trailStepPips: { type: Number },
+  /** Move SL to break-even when price reaches this multiple of initial R (entry→SL). */
+  breakEvenTriggerR: { type: Number, default: 1 },
+  /** Extra pips beyond entry when locking break-even (covers spread). */
+  breakEvenOffsetPips: { type: Number, default: 2 },
   status: {
     type: String,
     enum: ['pending', 'sent', 'filled', 'failed', 'cancelled'],

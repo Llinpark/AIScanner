@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { getSharedSocket } from '../services/marketDataSocket';
@@ -6,6 +6,11 @@ import OutcomeBadge, { RiskAnalysisCard } from './insights/RiskAnalysisCard';
 import AiExplanationCard from './insights/AiExplanationCard';
 import MarketChartPanel from './charts/MarketChartPanel';
 import SignalStatusPanel from './SignalStatusPanel';
+import {
+  formatSignalSource,
+  formatStrategyName,
+  isInsightsSignal
+} from '../utils/insightsSignal';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -40,7 +45,9 @@ function signalStatusLabel(signal) {
 
 export default function SignalDashboard({ initialSignals, subscription, onNavigateReferrals }) {
   const { isAuthenticated } = useAuth();
-  const [signals, setSignals] = useState(initialSignals || []);
+  const [signals, setSignals] = useState(() =>
+    (initialSignals || []).filter(isInsightsSignal)
+  );
   const [tierLimits, setTierLimits] = useState({});
   const [allowedPairs, setAllowedPairs] = useState(['EUR/USD', 'GBP/USD']);
   const [tierDisplayName, setTierDisplayName] = useState('Basic');
@@ -93,13 +100,18 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
   }, [tierLimits.performanceDashboard]);
 
   useEffect(() => {
+    setSignals((initialSignals || []).filter(isInsightsSignal));
+  }, [initialSignals]);
+
+  useEffect(() => {
     if (!isAuthenticated) return undefined;
 
     const socket = getSharedSocket();
 
     // Dashboard updates exclusively from TradingView webhook fan-out — no signal polling.
     socket.on('signal:update', newSignal => {
-      setSignals(prev => [newSignal, ...prev].slice(0, tierLimits.maxSignals || 50));
+      if (!isInsightsSignal(newSignal)) return;
+      setSignals(prev => [newSignal, ...prev.filter(s => String(s._id) !== String(newSignal._id))].slice(0, tierLimits.maxSignals || 50));
     });
 
     socket.on('signal:outcome', updated => {
@@ -113,6 +125,8 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
       socket.off('signal:outcome');
     };
   }, [isAuthenticated, tierLimits.maxSignals]);
+
+  const visibleSignals = useMemo(() => signals.filter(isInsightsSignal), [signals]);
 
   const hasAccess = isActiveSubscription(subscription);
   const tierKey = subscription?.tier || 'basic';
@@ -170,6 +184,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
             liveEnabled
             height={600}
             onChartErrorChange={onChartErrorChange}
+            enableSmcOverlays={Boolean(tierLimits.smartMoneyConcepts)}
           />
         </div>
       )}
@@ -199,27 +214,30 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
       )}
 
       <div className="signal-list">
-        {signals.length === 0 ? (
-          <div className="signal-empty">No TradingView signals yet for your plan pairs.</div>
+        {visibleSignals.length === 0 ? (
+          <div className="signal-empty">No TradingView alerts yet. Attach your Pine script to any chart and create a webhook alert.</div>
         ) : (
-          signals.map(signal => {
+          visibleSignals.map(signal => {
             const signalId = signal._id || signal.timestamp;
             const expanded = expandedId === signalId;
-            const strategy =
-              signal.strategyName || signal.strategy || signal.patternLabel || signal.pattern;
+            const strategy = formatStrategyName(signal);
+            const notesClean =
+              signal.notes && !/pipeline\s*score|premium\s*smc\s*pipeline|threshold\s*\d+\s*%/i.test(String(signal.notes))
+                ? signal.notes
+                : null;
 
             return (
               <div key={signalId} className="signal-item" onClick={() => setChartSymbol(signal.symbol)}>
                 <div className="signal-header">
                   <span>{signal.symbol}</span>
-                  {strategy && <span className="pattern-badge">{strategy}</span>}
+                  <span className="pattern-badge">{strategy}</span>
                   <OutcomeBadge outcome={signal.outcome} tradeStatus={signal.tradeStatus} />
-                  <strong>{signal.direction.toUpperCase()}</strong>
+                  <strong>{String(signal.direction || '').toUpperCase()}</strong>
                 </div>
                 <div className="signal-row signal-meta-row">
                   <span>Status: {signalStatusLabel(signal)}</span>
-                  <span>TF: {signal.timeframe || '1h'}</span>
-                  <span>Source: {signal.signalSource || signal.source || 'tradingview'}</span>
+                  <span>TF: {signal.timeframe || '—'}</span>
+                  <span>Source: {formatSignalSource()}</span>
                 </div>
                 <div className="signal-row">
                   <span>Kaching Entry: {Number(signal.entry).toFixed(5)}</span>
@@ -232,12 +250,12 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
                 </div>
                 <div className="signal-footer">
                   {tierLimits.showConfidence && signal.confidence != null ? (
-                    <small>Confidence: {(Number(signal.confidence) * 100).toFixed(0)}%</small>
+                    <small>Confidence: {(Number(signal.confidence) <= 1 ? Number(signal.confidence) * 100 : Number(signal.confidence)).toFixed(0)}%</small>
                   ) : (
                     <small>Confidence: upgrade to Pro</small>
                   )}
                   {signal.outcomeR != null && <small>Result: {signal.outcomeR}R</small>}
-                  <span>{signal.notes}</span>
+                  {notesClean && <span>{notesClean}</span>}
                 </div>
                 {tierLimits.aiTradeExplanation && (
                   <AiExplanationCard signal={signal} aiFactors={signal.aiFactors} tradeExplanation={signal.tradeExplanation} />
@@ -283,7 +301,13 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
         </div>
         {tierLimits.mt5Execution && (
           <p className="api-hint">
-            MT5 automation: one-click execution, trailing stops, break-even rules, and auto lot sizing from your account balance are enabled on your Premium plan.
+            MT5 Trade Copier (Pro+): one-click Execute fills entry, SL, TP
+            {tierLimits.trailingStop ? ', trailing stop' : ''}
+            {tierLimits.breakEvenAutomation ? ', break-even' : ''}
+            {tierLimits.autoLotSizing
+              ? ', and Premium auto lot sizing from your synced MT5 balance'
+              : ' (fixed lot size — upgrade to Premium for auto lot sizing)'}
+            .
           </p>
         )}
         {tierLimits.telegramAlerts && (

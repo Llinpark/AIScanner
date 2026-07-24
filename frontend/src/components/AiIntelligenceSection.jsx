@@ -1,107 +1,74 @@
-import { useEffect, useMemo, useState } from 'react';
-import { scannerApi } from '../services/api';
-import {
-  DEFAULT_PREMIUM_SIGNAL_THRESHOLD,
-  formatPremiumThresholdLabel,
-  premiumSignalsScoredCopy
-} from '../constants/scannerConfig';
+import { useMemo } from 'react';
 
 const SHOWCASE_TEMPLATE = [
   {
     id: 'scan',
     image: '/images/ai-showcase-scan.png',
-    eyebrow: 'Always-On Market Intelligence',
-    title: 'Your AI never sleeps. Your edge never fades.',
+    eyebrow: 'TradingView → Kaching distribution',
+    title: 'Your strategy fires. We deliver everywhere.',
     body:
-      'While you focus on strategy and risk, KachingScanner AI watches dozens of markets around the clock—hunting liquidity sweeps, fair value gaps, and institutional footprints the moment they form. No manual chart scrolling. No missed setups. Just relentless, precision-driven opportunity detection.',
-    highlights: ['Continuous multi-market surveillance', 'Institutional Smart Money Concepts engine'],
+      'Attach your personal Pine script to any TradingView chart—forex, metals, indices, crypto, or stocks. When the alert fires, Kaching publishes Entry, stop loss, and take-profit levels to your dashboard, Telegram, and optional MT5 execution.',
+    highlights: [
+      'Works on any TradingView instrument',
+      'Dashboard, Telegram, and MT5 in one flow',
+      'Charts are display-only and never block alerts'
+    ],
     reverse: false
   },
   {
-    id: 'pipeline',
+    id: 'distribute',
     image: '/images/ai-showcase-execution.png',
-    eyebrow: '10-Step SMC Pipeline',
-    title: 'Every signal earns its place.',
+    eyebrow: 'One alert, every destination',
+    title: 'Levels you trust, delivered instantly.',
     body:
-      'Unlike generic alert bots that fire on every gap, our AI runs a rigorous ten-step pipeline—liquidity pools, sweeps, market structure shifts, expansion candles, unmitigated FVGs, higher-timeframe bias, and retracement confirmation—before a premium signal is ever released.',
+      'TradingView remains the source of truth for the trade idea. Kaching does not re-run a backend signal pipeline—it normalizes the webhook, stores the levels, and fans them out to the tools you already use to trade.',
     highlights: [
-      'Weighted quality scoring on every factor',
-      'Higher-timeframe alignment built in',
-      'Only high-conviction setups reach you'
+      'Webhook ingest for any chart symbol',
+      'Personal license-bound Pine script',
+      'Optional MT5 trade copier with broker suffix mapping'
     ],
     reverse: true
   },
   {
     id: 'explain',
     image: '/images/ai-showcase-intelligence.png',
-    eyebrow: 'Explainable AI',
-    title: 'Understand the why behind every trade.',
+    eyebrow: 'Clarity after the alert',
+    title: 'Context, risk, and journal in one place.',
     body:
-      'Great technology does not replace the trader—it elevates them. Each signal arrives with AI-generated explanations, confidence ratings, risk-to-reward breakdowns, and performance analytics so you trade with clarity, discipline, and continuous improvement.',
+      'Each distributed alert can include strategy name, timeframe, confidence, risk metrics, and commentary—so you can review, journal, and execute without reconstructing the setup from scratch.',
     highlights: [
-      'Plain-language trade explanations',
-      'Live confidence & pipeline scoring',
-      'Journal, analytics, and win-rate tracking'
+      'Strategy metadata from your Pine alert',
+      'Risk analysis and trade journal (Pro+)',
+      'Performance insights from your TradingView history'
     ],
     reverse: false
   }
 ];
 
 export default function AiIntelligenceSection({ onViewPricing, onSignUp }) {
-  const [premiumThreshold, setPremiumThreshold] = useState(DEFAULT_PREMIUM_SIGNAL_THRESHOLD);
-
-  useEffect(() => {
-    scannerApi
-      .getStatus()
-      .then(res => {
-        const threshold = Number(res.data?.pipeline?.premiumThreshold);
-        if (Number.isFinite(threshold) && threshold > 0) {
-          setPremiumThreshold(threshold);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  const thresholdLabel = formatPremiumThresholdLabel(premiumThreshold);
-
-  const showcaseItems = useMemo(
-    () =>
-      SHOWCASE_TEMPLATE.map(item =>
-        item.id === 'scan'
-          ? {
-              ...item,
-              highlights: [
-                ...item.highlights,
-                premiumSignalsScoredCopy(premiumThreshold)
-              ]
-            }
-          : item
-      ),
-    [premiumThreshold]
-  );
+  const showcaseItems = useMemo(() => SHOWCASE_TEMPLATE, []);
 
   const stats = useMemo(
     () => [
-      { value: '24/7', label: 'AI market scanning' },
-      { value: '10', label: 'Step SMC validation pipeline' },
-      { value: thresholdLabel, label: 'Premium signal threshold' },
-      { value: '6', label: 'Weighted quality factors' }
+      { value: 'TV', label: 'TradingView as signal source' },
+      { value: 'Any', label: 'Instrument your chart uses' },
+      { value: '3', label: 'Destinations: app · Telegram · MT5' },
+      { value: '0', label: 'Backend pipeline regenerations' }
     ],
-    [thresholdLabel]
+    []
   );
 
   return (
     <section className="ai-intelligence-section" aria-labelledby="ai-intelligence-title">
       <div className="ai-intelligence-intro">
-        <p className="ai-intelligence-eyebrow">Why traders choose KachingScanner AI</p>
+        <p className="ai-intelligence-eyebrow">Why traders choose KachingScanner</p>
         <h2 id="ai-intelligence-title" className="ai-intelligence-title">
-          Intelligence that sees the market like institutions do
+          TradingView alerts, delivered where you trade
         </h2>
         <p className="ai-intelligence-lead">
-          KachingScanner is not a signal spammer—it is an AI Trading Intelligence Platform engineered
-          to think in sequences, score every setup, explain every decision, and help you execute with
-          confidence. From first scan to final fill, the entire workflow is powered by purpose-built
-          artificial intelligence.
+          Kaching is the distribution layer for your Pine strategy—not a second signal engine fighting
+          your chart. Alerts arrive with Entry, SL, and TP levels from TradingView and publish to your
+          dashboard, Telegram, and MT5.
         </p>
       </div>
 
@@ -148,17 +115,17 @@ export default function AiIntelligenceSection({ onViewPricing, onSignUp }) {
 
       <div className="ai-intelligence-quote">
         <blockquote>
-          &ldquo;The best trading AI does not shout the loudest—it proves its case, scores its
-          conviction, and gives you the context to act with discipline.&rdquo;
+          &ldquo;The best trading stack does not reinvent your chart—it delivers your alert levels to
+          every place you execute.&rdquo;
         </blockquote>
-        <p className="ai-intelligence-quote-caption">Built into every KachingScanner premium signal</p>
+        <p className="ai-intelligence-quote-caption">Built into every KachingScanner TradingView alert</p>
       </div>
 
       <div className="ai-intelligence-cta">
-        <h3>Ready to trade with institutional-grade AI?</h3>
+        <h3>Ready to distribute your TradingView alerts?</h3>
         <p>
-          Join traders who let intelligent automation find the setup—while they focus on execution,
-          risk, and results.
+          Connect Pine once, then receive Entry, SL, and TP on your dashboard, Telegram, and optional
+          MT5 copier—on any instrument you chart.
         </p>
         <div className="ai-intelligence-actions">
           <button type="button" className="hero-btn hero-btn-primary" onClick={onViewPricing}>

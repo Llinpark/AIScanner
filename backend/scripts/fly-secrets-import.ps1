@@ -19,7 +19,9 @@ $keys = @(
   'PAYMENT_WEBHOOK_SECRET', 'TELEGRAM_WEBHOOK_SECRET', 'TRADINGVIEW_WEBHOOK_SECRET',
   'TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_USERNAME',
   'TWELVE_DATA_API_KEY', 'EODHD_API_KEY',
-  'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY'
+  'PAYSTACK_SECRET_KEY', 'PAYSTACK_PUBLIC_KEY',
+  'PAYPAL_CLIENT_ID', 'PAYPAL_CLIENT_SECRET', 'PAYPAL_MODE', 'PAYPAL_WEBHOOK_ID',
+  'PYTHON_SERVICE_API_KEY'
 )
 
 $lines = New-Object System.Collections.Generic.List[string]
@@ -30,6 +32,7 @@ foreach ($key in $keys) {
 
 # Production overrides
 $overrides = @{
+  PYTHON_SERVICE_URL = 'https://kaching-python.fly.dev'
   APP_DOMAIN = 'kachingscanner.com'
   FRONTEND_URL = 'https://kachingscanner.com'
   PUBLIC_BACKEND_URL = 'https://api.kachingscanner.com'
@@ -38,6 +41,8 @@ $overrides = @{
   PAYSTACK_CALLBACK_URL = 'https://api.kachingscanner.com/api/payments/paystack/callback'
   PAYSTACK_WEBHOOK_URL = 'https://api.kachingscanner.com/api/webhook/paystack'
   PAYSTACK_SITE_CALLBACK_URL = 'https://kachingscanner.com'
+  PAYPAL_RETURN_URL = 'https://api.kachingscanner.com/api/payments/paypal/return'
+  PAYPAL_WEBHOOK_URL = 'https://api.kachingscanner.com/api/webhook/paypal'
   ADMIN_EMAILS = 'collinspark1985@gmail.com,barasajohn1985@gmail.com,lilianmonari15@gmail.com'
   REDIS_ENABLED = 'true'
   TELEGRAM_USE_POLLING = 'false'

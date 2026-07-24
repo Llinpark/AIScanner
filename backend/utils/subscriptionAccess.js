@@ -6,6 +6,7 @@ const {
 } = require('../config/subscriptions');
 const { normalizeSymbol } = require('../config/symbols');
 const { isAdmin } = require('./adminAccess');
+const { isWebhookInsightsSignal } = require('./insightsSignalFilter');
 
 /** Far-future period end so admin bypass stays "active" in expiry checks. */
 const ADMIN_ACCESS_PERIOD_END = new Date('2099-12-31T23:59:59.000Z');
@@ -100,16 +101,57 @@ function getAllowedTimeframes(subscription) {
   return getTierFeatures(subscription).timeframes || ['1h'];
 }
 
+/**
+ * Chart / scanner catalog gate — still limited by tier currencyPairs.
+ * Do NOT use this to reject TradingView webhook symbols.
+ */
 function isCurrencyPairAllowed(symbol, subscription) {
+  const features = getTierFeatures(subscription);
+  // Premium multi-market: chart catalog is advisory; any symbol is allowed for charts too.
+  if (features.anyTradingViewInstrument && features.multiMarketScanner) {
+    return Boolean(normalizeSymbol(symbol));
+  }
   const normalized = normalizeSymbol(symbol);
   return getAllowedCurrencyPairs(subscription).includes(normalized);
 }
 
+/**
+ * TradingView webhook path: subscribers with TV alerts accept any sanitized instrument.
+ * Source of truth is the TradingView chart symbol, not ALL_CURRENCY_PAIRS.
+ */
+function allowsAnyTradingViewInstrument(subscription) {
+  const features = getTierFeatures(subscription);
+  if (features.anyTradingViewInstrument != null) {
+    return Boolean(features.anyTradingViewInstrument);
+  }
+  return Boolean(features.tradingViewAlerts);
+}
+
+function isTradingViewSymbolAllowed(symbol, subscription) {
+  if (!allowsAnyTradingViewInstrument(subscription)) {
+    return isCurrencyPairAllowed(symbol, subscription);
+  }
+  return Boolean(normalizeSymbol(symbol));
+}
+
 function isTimeframeAllowed(interval, subscription) {
+  const features = getTierFeatures(subscription);
+  // Premium (all timeframes) / TV pass-through: do not hard-block exotic chart TFs on webhook path.
+  if (features.anyTradingViewInstrument && features.multiMarketScanner) {
+    return true;
+  }
   const canonical = normalizeInterval(interval);
   return getAllowedTimeframes(subscription).some(
     allowed => normalizeInterval(allowed) === canonical
   );
+}
+
+/** Timeframe check for TV webhook distribution — chart TF is source of truth when TV-entitled. */
+function isTradingViewTimeframeAllowed(interval, subscription) {
+  if (allowsAnyTradingViewInstrument(subscription)) {
+    return true;
+  }
+  return isTimeframeAllowed(interval, subscription);
 }
 
 function historyCutoffDate(subscription) {
@@ -120,6 +162,22 @@ function historyCutoffDate(subscription) {
 function sanitizeSignalForTier(signal, subscription) {
   const features = getTierFeatures(subscription);
   const doc = signal.toObject ? signal.toObject() : { ...signal };
+
+  // Never expose legacy pipeline scoring payloads on user-facing responses.
+  delete doc.pipelineScore;
+  delete doc.pipelineScoreBreakdown;
+  delete doc.pipelineSteps;
+  delete doc.pipelineVersion;
+  if (doc.aiFactors?.source === 'pipeline_scoring' || doc.pattern === 'smc_pipeline') {
+    delete doc.aiFactors;
+  }
+  if (/pipeline\s*score|premium\s*smc\s*pipeline/i.test(String(doc.notes || ''))) {
+    delete doc.notes;
+  }
+  if (/smc\s*pipeline|pipeline\s*signal/i.test(String(doc.patternLabel || ''))) {
+    delete doc.patternLabel;
+    delete doc.pattern_label;
+  }
 
   if (!features.showConfidence) {
     delete doc.confidence;
@@ -135,6 +193,17 @@ function sanitizeSignalForTier(signal, subscription) {
     delete doc.smartMoneyConcepts;
     delete doc.orderBlock;
     delete doc.liquidity;
+    delete doc.gapTop;
+    delete doc.gapBottom;
+    delete doc.chartZones;
+    delete doc.orderBlockTop;
+    delete doc.orderBlockBottom;
+    delete doc.orderBlockTimeStart;
+    delete doc.orderBlockTimeEnd;
+    delete doc.liquidityZoneTop;
+    delete doc.liquidityZoneBottom;
+    delete doc.liquidityTimeStart;
+    delete doc.liquidityTimeEnd;
   }
 
   if (!features.tradeManagementAlerts) {
@@ -162,9 +231,27 @@ function sanitizeSignalForTier(signal, subscription) {
   return doc;
 }
 
+/**
+ * Tier read filter for user-facing signal feeds.
+ * Always drops legacy scanner / SMC pipeline rows.
+ * TradingView webhook symbols pass through regardless of chart-catalog pair lists.
+ */
 function filterSignalsForTier(signals, subscription) {
+  const features = getTierFeatures(subscription);
   const allowedPairs = getAllowedCurrencyPairs(subscription);
-  return signals.filter(signal => allowedPairs.includes(normalizeSymbol(signal.symbol)));
+  const tvPassThrough = allowsAnyTradingViewInstrument(subscription);
+  const premiumAllMarkets = Boolean(features.multiMarketScanner);
+
+  return signals.filter(signal => {
+    // Mandatory: never surface legacy pipeline / live_scan rows on dashboard feeds.
+    if (!isWebhookInsightsSignal(signal)) return false;
+
+    const normalized = normalizeSymbol(signal.symbol);
+    if (!normalized) return false;
+    if (tvPassThrough) return true;
+    if (premiumAllMarkets) return true;
+    return allowedPairs.includes(normalized);
+  });
 }
 
 function minimumTierForFeature(featureKey) {
@@ -217,7 +304,10 @@ module.exports = {
   getAllowedCurrencyPairs,
   getAllowedTimeframes,
   isCurrencyPairAllowed,
+  isTradingViewSymbolAllowed,
+  allowsAnyTradingViewInstrument,
   isTimeframeAllowed,
+  isTradingViewTimeframeAllowed,
   historyCutoffDate,
   sanitizeSignalForTier,
   filterSignalsForTier,

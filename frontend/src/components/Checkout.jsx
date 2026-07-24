@@ -4,20 +4,28 @@ import { redirectToCheckout } from '../utils/safeRedirect';
 import { useAuth } from '../context/AuthContext';
 
 const PHONE_PROVIDERS = new Set(['mpesa', 'sasapay']);
-const LIVE_PROVIDERS = ['paystack'];
-const DEV_EXTRA_PROVIDERS = ['mpesa', 'sasapay', 'binance', 'paypal', 'mock'];
+const LIVE_PROVIDERS = ['paystack', 'paypal'];
+const DEV_EXTRA_PROVIDERS = ['mpesa', 'sasapay', 'binance', 'mock'];
 
 export default function Checkout({ tier, tierData, billingCycle = 'monthly', paymentMethods = {}, onBack, onSubscriptionUpdated, onNavigateDashboard }) {
   const { user, updateUser } = useAuth();
   const mockPaymentsAllowed = Boolean(paymentMethods?.mockPaymentsAllowed);
   const availableProviders = useMemo(() => {
-    // Live site: Paystack only (no mock / simulated success).
+    // Live site: Paystack + PayPal when configured (never mock).
     // Local/dev with mockPaymentsAllowed may also show legacy providers for testing.
     if (!mockPaymentsAllowed) {
-      return LIVE_PROVIDERS;
+      return LIVE_PROVIDERS.filter(option => {
+        if (option === 'paystack') {
+          return paymentMethods?.paystack?.configured !== false;
+        }
+        if (option === 'paypal') {
+          return paymentMethods?.paypal?.configured === true;
+        }
+        return false;
+      });
     }
-    return ['paystack', ...DEV_EXTRA_PROVIDERS];
-  }, [mockPaymentsAllowed]);
+    return ['paystack', 'paypal', ...DEV_EXTRA_PROVIDERS];
+  }, [mockPaymentsAllowed, paymentMethods]);
 
   const [provider, setProvider] = useState(paymentMethods?.defaultProvider || 'paystack');
   const [phone, setPhone] = useState(user?.phone || '');

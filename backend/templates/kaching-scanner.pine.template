@@ -1,15 +1,16 @@
 //@version=5
-indicator("{{INDICATOR_TITLE}}", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
+indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
 
 // Generated for: {{SUBSCRIBER_LABEL}}
 // Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
+// Attach to ANY TradingView chart (forex, metals, indices, crypto, stocks) — symbol is taken from the chart.
 
 // ===== CONFIGURATION =====
-WEBHOOK_URL = input.string("{{WEBHOOK_URL}}", "Webhook URL (paste in TV alert)", group="KachingFx")
-WEBHOOK_SECRET = input.string("{{WEBHOOK_SECRET}}", "Webhook Secret (legacy)", group="KachingFx")
-LICENSE_TOKEN = input.string("{{LICENSE_TOKEN}}", "License Token", group="KachingFx")
-TV_USERNAME = input.string("{{TV_USERNAME}}", "TradingView Username (optional)", group="KachingFx")
-SEND_CANDLE_FEED = input.bool({{SEND_CANDLE_FEED}}, "Send each bar to server scanner", group="KachingFx")
+// display.none keeps secrets/long values out of the chart legend/status line (still usable in alerts).
+WEBHOOK_URL = input.string("{{WEBHOOK_URL}}", "Webhook URL (paste in TV alert)", group="KachingFx", display=display.none)
+WEBHOOK_SECRET = input.string("{{WEBHOOK_SECRET}}", "Webhook Secret (optional HMAC)", group="KachingFx", display=display.none)
+LICENSE_TOKEN = input.string("{{LICENSE_TOKEN}}", "License Token (required)", group="KachingFx", display=display.none)
+TV_USERNAME = input.string("{{TV_USERNAME}}", "TradingView Username (optional)", group="KachingFx", display=display.none)
 SHOW_TRADE_LINES = input.bool(true, "Auto-draw Entry / SL / TP lines on chart", group="KachingFx")
 SHOW_FVG_ZONE = input.bool(true, "Shade the fair value gap zone", group="KachingFx")
 
@@ -45,8 +46,13 @@ wickRatio(c) =>
 
 avgVol = ta.sma(volume, 20)
 
+// Approximate pip/point size for level math — works on forex, metals, indices, crypto, stocks.
 pipSize() =>
-    str.contains(syminfo.ticker, "JPY") ? 0.01 : 0.0001
+    str.contains(syminfo.ticker, "JPY") ? 0.01 :
+     str.contains(syminfo.ticker, "XAU") or str.contains(syminfo.ticker, "GOLD") ? 0.1 :
+     str.contains(syminfo.ticker, "XAG") or str.contains(syminfo.ticker, "SILVER") ? 0.01 :
+     syminfo.mintick >= 1 ? math.max(syminfo.mintick, 1.0) :
+     math.max(syminfo.mintick * 10, 0.0001)
 
 kachingAlertLabel(string alertType) =>
     alertType == "entry" ? "Kaching Entry" :
@@ -57,7 +63,7 @@ kachingAlertLabel(string alertType) =>
      "Kaching Signal"
 
 buildPayload(string alertType, string pattern, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
-    '{"symbol":"' + syminfo.ticker + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl, "#.#####") + ',"stop_loss_1":' + str.tostring(sl, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"' + kachingAlertLabel(alertType) + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
+    '{"symbol":"' + syminfo.ticker + '","strategyName":"KachingFx Pine","timeframe":"' + timeframe.period + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl, "#.#####") + ',"stop_loss_1":' + str.tostring(sl, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"message":"' + kachingAlertLabel(alertType) + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
 
 calcLevels(string direction, float entry, float gapTop, float gapBot) =>
     pip = pipSize()
@@ -283,11 +289,6 @@ if bearBreakConfirm
         activeTp2 := t2
         activeTp3 := t3
         tradeActive := true
-
-// Feed each closed bar to backend scanner
-if SEND_CANDLE_FEED and barstate.isconfirmed
-    feedMsg = '{"symbol":"' + syminfo.ticker + '","alertType":"candle","pattern":"feed","open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","secret":"' + WEBHOOK_SECRET + '"}'
-    alert(feedMsg, alert.freq_once_per_bar)
 
 // Visual gap zones (soft background highlight; the box above is the precise FVG rectangle)
 bgcolor(perfectBullFVG ? color.new(color.green, 88) : na)

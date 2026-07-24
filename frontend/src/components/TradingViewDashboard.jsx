@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
 import { alertMatchesSymbol } from '../constants/markets';
+import { isInsightsSignal } from '../utils/insightsSignal';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -152,7 +153,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       subscriberLabel: response.data.subscriberLabel,
       generatedAt: response.data.generatedAt,
       security: response.data.security,
-      instructions: response.data.instructions || []
+      instructions: response.data.instructions || [],
+      samplePayload: response.data.samplePayload || null,
+      flow: response.data.flow || null
     });
     return pineScriptRef.current;
   }, []);
@@ -171,7 +174,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     try {
       setLoading(true);
       const response = await tradingviewApi.getAlerts(liveFilter === 'ALL' ? null : liveFilter);
-      setAlerts(response.data.alerts);
+      setAlerts((response.data.alerts || []).filter(isInsightsSignal));
     } catch (error) {
       console.error('Failed to fetch alerts:', error);
     } finally {
@@ -208,6 +211,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     socket.on('connect_error', () => setSocketStatus('error'));
 
     socket.on('tv:live-alert', alert => {
+      if (!isInsightsSignal(alert)) return;
       setLiveAlerts(prev => [alert, ...prev].slice(0, 100));
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification('KachingFx Live Alert', { body: alert.message });
@@ -259,12 +263,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   };
 
   const displayAlerts = useMemo(() => {
-    // The backend (`/api/tradingview/alerts`, `filterSignalsForTier`) already restricts
-    // results to the user's allowed currency pairs, so we only need to apply the user's
-    // own manual symbol dropdown selection here. Re-filtering client-side against the
-    // locally-cached `symbols` list is redundant and, if that list is still on its
-    // fallback default (e.g. `/api/subscription/me` hasn't resolved yet), would wrongly
-    // hide real alerts the server already returned for other pairs.
+    // Backend returns TradingView webhook alerts for any instrument (chart catalog is
+    // separate). Only apply the user's manual symbol dropdown filter here — do not
+    // re-filter against the chart-catalog `symbols` list or exotic alerts disappear.
     // Merge (instead of replace) so a single incoming live alert doesn't hide the
     // broader, properly tier-filtered history already loaded from the REST endpoint.
     const byId = new Map();
@@ -286,8 +287,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       <div className="tv-header">
         <h2>TradingView Alert Setup</h2>
         <p>
-          After subscribing, add the KachingFx scanner to TradingView once. Entry, SL, and TP1–TP3 lines draw
-          automatically on your chart, and alerts sync to this dashboard. No username linking is required.
+          Connect TradingView alerts from any instrument to receive Entry, stop loss, and take-profit levels on your
+          dashboard, Telegram, and MT5. In-app charts are display-only and never block alerts.
         </p>
       </div>
 
@@ -305,11 +306,17 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       {subscribed && setup && (
         <div className="setup-instructions">
           <h3>Getting started</h3>
+          {setup.webhookUrl && (
+            <p className="setup-webhook-url">
+              <strong>Webhook URL:</strong> <code>{setup.webhookUrl}</code>
+            </p>
+          )}
           <ol>
             {setup.instructions.map((step, idx) => (
               <li key={idx}>{step}</li>
             ))}
           </ol>
+          {setup.chartProvidersNote && <p className="setup-note">{setup.chartProvidersNote}</p>}
           <p className="setup-status">
             Live feed: {socketStatus === 'connected' ? 'Connected' : 'Connecting…'}
           </p>
@@ -361,7 +368,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
 
               {displayAlerts.length === 0 ? (
                 <div className="empty-state">
-                  Waiting for live alerts. Set up TradingView using the Setup tab, or wait for the next broadcast signal.
+                  Waiting for live alerts. Finish TradingView setup, then wait for the next trade alert.
                 </div>
               ) : (
                 <div className="alerts-list">
@@ -382,35 +389,45 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       {activeTab === 'setup' && (
         <div className="tv-section">
           {!subscribed ? (
-            <div className="empty-state">Subscribe first to access the TradingView Pine Script and setup guide.</div>
+            <div className="empty-state">Subscribe first to unlock your personal TradingView script and setup guide.</div>
           ) : (
             <div className="pine-script-section">
-              <h3>Open TradingView for accurate alerts</h3>
+              <h3>Connect TradingView</h3>
               <p>
-                Add the KachingFx indicator to your chart in TradingView. Entry, SL, and TP lines appear
-                automatically when a pattern fires. Create one webhook alert with condition{' '}
-                <strong>Any alert() function call</strong>.
-                Enable TradingView push or email notifications so alerts reach you instantly.
+                Copy your personal script, add it to a TradingView chart, then create one alert that sends to your
+                webhook URL below. Kaching publishes those trades here — charts stay separate and display-only.
               </p>
               {tierLimits.multiMarketScanner && (
-                <p className="premium-feature-hint">Multi-market scanner enabled on your Premium plan.</p>
+                <p className="premium-feature-hint">
+                  Premium: you receive alerts across all markets on your plan.
+                </p>
               )}
               {tierLimits.smartMoneyConcepts && (
-                <p className="premium-feature-hint">Smart Money Concepts overlays included.</p>
+                <p className="premium-feature-hint">
+                  Premium: Smart Money overlays (fair value gaps and zones from the alert) show on your charts.
+                </p>
               )}
               {tierLimits.mt5Execution && (
                 <p className="premium-feature-hint">
-                  Telegram Trade Copier is enabled — tap Execute on MT5 alerts to auto-fill entry, SL, TP, and lot size.
+                  Trade Copier (Pro+): tap Execute in Telegram to place the trade on MT5 with entry, stop, and targets
+                  filled in.
                 </p>
               )}
               {tierLimits.trailingStop && (
-                <p className="premium-feature-hint">Trailing stop automation is included.</p>
+                <p className="premium-feature-hint">
+                  Trailing stop: after the trade fills, MT5 automatically trails your stop as price moves in your favor.
+                </p>
               )}
               {tierLimits.breakEvenAutomation && (
-                <p className="premium-feature-hint">Break-even automation is active on your plan.</p>
+                <p className="premium-feature-hint">
+                  Break-even: once price reaches about 1R profit, MT5 moves your stop to entry (plus a small buffer).
+                </p>
               )}
               {tierLimits.autoLotSizing && (
-                <p className="premium-feature-hint">Auto lot sizing adjusts position size from your MT5 account balance.</p>
+                <p className="premium-feature-hint">
+                  Premium auto lot sizing: position size is calculated from your synced MT5 balance and risk %. Keep the
+                  EA running so your balance stays up to date.
+                </p>
               )}
 
               <div className="pine-script-box">
@@ -419,7 +436,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     <p>
                       <strong>Generated for:</strong> {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
                     </p>
-                    <p>
+                    <p className="setup-webhook-url">
                       <strong>Webhook URL:</strong> <code>{pineMeta.webhookUrl}</code>
                     </p>
                     <p>
@@ -428,13 +445,14 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                         <span> · {new Date(pineMeta.generatedAt).toLocaleString()}</span>
                       )}
                     </p>
-                    {pineMeta.security && (
+                    {pineMeta.security?.authNote && (
                       <p>
-                        <strong>Security:</strong> Each alert includes your personal{' '}
-                        <code>licenseToken</code>. API clients may also send{' '}
-                        <code>{pineMeta.security.signatureHeader}</code> ({pineMeta.security.signatureFormat}).
+                        <strong>Privacy:</strong> {pineMeta.security.authNote}
                       </p>
                     )}
+                    <p className="setup-note">
+                      Charts are display-only. Chart feed issues never block alerts.
+                    </p>
                   </div>
                 )}
 
@@ -443,10 +461,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     {(pineMeta?.instructions?.length
                       ? pineMeta.instructions
                       : [
-                          'Open TradingView → Pine Editor → New script → paste from your clipboard',
-                          'Add the script to your chart (keep auto-draw lines enabled)',
-                          'Create one alert with "Any alert() function call" and Webhook URL notifications',
-                          'Enable TradingView mobile push notifications for real-time delivery'
+                          'Open TradingView → Pine Editor → paste your personal script → Add to chart',
+                          'Create one alert for this script and enable webhook notifications',
+                          'Paste your Kaching webhook URL into the alert',
+                          'Optional: enable TradingView mobile notifications'
                         ]
                     ).map(step => (
                       <li key={step}>{step}</li>
@@ -507,7 +525,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
             <div className="history-section">
               <h3>Kaching Live Chart</h3>
               <p className="chart-subtitle">
-                Historical and live candles with Kaching Entry, SL, TP, and pattern overlays.
+                Charts are for display only. Trade levels come from your TradingView alerts — chart outages never block
+                alerts.
               </p>
               <MarketChartPanel
                 symbol={chartSymbol}
@@ -516,6 +535,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 overlaySignals={[...liveAlerts, ...alerts]}
                 subscribed={subscribed}
                 liveEnabled
+                enableSmcOverlays={Boolean(tierLimits.smartMoneyConcepts)}
               />
             </div>
           )}

@@ -151,8 +151,13 @@ function resolveZoneTimes(zone, candles, intervalSeconds) {
   };
 }
 
-export function buildChartZones(signal, candles = [], intervalSeconds = 3600) {
+export function buildChartZones(signal, candles = [], intervalSeconds = 3600, options = {}) {
   if (!signal) return { fvg: null, orderBlock: null, liquidity: null };
+
+  const enableSmc = options.enableSmcOverlays !== false;
+  if (!enableSmc) {
+    return { fvg: null, orderBlock: null, liquidity: null };
+  }
 
   const normalized = normalizeCandles(candles);
   const direction = signal.direction;
@@ -162,6 +167,8 @@ export function buildChartZones(signal, candles = [], intervalSeconds = 3600) {
     stored.fvg ||
     (signal.gapTop != null && signal.gapBottom != null ? buildFvgZone(signal, normalized) : null);
 
+  // Prefer webhook/signal metadata for OB/liquidity. Candle heuristics only when Premium SMC is on
+  // (caller passes enableSmcOverlays) and metadata is absent.
   const orderBlockRaw =
     stored.orderBlock ||
     (signal.orderBlockTop != null && signal.orderBlockBottom != null
@@ -171,7 +178,9 @@ export function buildChartZones(signal, candles = [], intervalSeconds = 3600) {
           timeStart: signal.orderBlockTimeStart,
           timeEnd: signal.orderBlockTimeEnd
         }
-      : detectOrderBlock(normalized, direction));
+      : options.allowHeuristicZones
+        ? detectOrderBlock(normalized, direction)
+        : null);
 
   const liquidityRaw =
     stored.liquidity ||
@@ -182,7 +191,9 @@ export function buildChartZones(signal, candles = [], intervalSeconds = 3600) {
           timeStart: signal.liquidityTimeStart,
           timeEnd: signal.liquidityTimeEnd
         }
-      : detectLiquidityZone(normalized, direction));
+      : options.allowHeuristicZones
+        ? detectLiquidityZone(normalized, direction)
+        : null);
 
   return {
     fvg: resolveZoneTimes(fvgRaw, normalized, intervalSeconds),
@@ -191,7 +202,7 @@ export function buildChartZones(signal, candles = [], intervalSeconds = 3600) {
   };
 }
 
-export function buildChartOverlay(signal, candles = [], interval = '1h') {
+export function buildChartOverlay(signal, candles = [], interval = '1h', options = {}) {
   if (!signal) return null;
 
   const entry = Number(signal.entry);
@@ -203,7 +214,7 @@ export function buildChartOverlay(signal, candles = [], interval = '1h') {
   if (!Number.isFinite(entry)) return null;
 
   const intervalSeconds = intervalToSeconds(interval);
-  const zones = buildChartZones(signal, candles, intervalSeconds);
+  const zones = buildChartZones(signal, candles, intervalSeconds, options);
 
   return {
     direction: String(signal.direction || 'long').toLowerCase(),
@@ -220,8 +231,8 @@ export function buildChartOverlay(signal, candles = [], interval = '1h') {
   };
 }
 
-export function buildOverlayFromSignal(signal, candles = [], interval = '1h') {
-  return buildChartOverlay(signal, candles, interval);
+export function buildOverlayFromSignal(signal, candles = [], interval = '1h', options = {}) {
+  return buildChartOverlay(signal, candles, interval, options);
 }
 
 export function findLatestEntrySignal(signals = [], symbol) {

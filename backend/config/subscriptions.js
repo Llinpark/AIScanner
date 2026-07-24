@@ -4,7 +4,9 @@ const {
   WEBHOOK_BINANCE_URL,
   WEBHOOK_SASAPAY_URL,
   WEBHOOK_PAYSTACK_URL,
+  WEBHOOK_PAYPAL_URL,
   PAYSTACK_CALLBACK_URL,
+  PAYPAL_RETURN_URL,
   FRONTEND_URL
 } = require('./appUrls');
 const { ALL_CURRENCY_PAIRS } = require('./symbols');
@@ -25,7 +27,8 @@ const TIERS = {
     features: [
       'AI Alerts',
       'TradingView Alerts',
-      '5 markets (EUR/USD, GBP/USD, XAU/USD, BTC/USD, USD/JPY)',
+      '5 chart-catalog markets (EUR/USD, GBP/USD, XAU/USD, BTC/USD, USD/JPY)',
+      'TradingView alerts on any chart symbol your script is attached to',
       '4 timeframes (1h, 15m, 3m, 1m)',
       '7-day signal history'
     ]
@@ -42,7 +45,8 @@ const TIERS = {
     description: 'Advanced alerts with confidence, Telegram copier, and trade automation',
     features: [
       'Everything in Basic',
-      'Most major markets (9 symbols incl. gold & indices)',
+      'Most major chart-catalog markets (9 symbols incl. gold & indices)',
+      'TradingView alerts on any instrument (forex, metals, indices, crypto, stocks)',
       '6 timeframes (4h, 1h, 30m, 15m, 5m, 1m)',
       'Confidence score',
       'News filter',
@@ -65,18 +69,18 @@ const TIERS = {
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
-    description: 'Full multi-market scanner with MT5 automation and SMC',
+    description: 'All-market TradingView signal distribution with MT5 automation and SMC overlays',
     features: [
       'Everything in Pro',
-      'All markets (15+ symbols)',
-      'All timeframes',
-      'Multi-market scanner',
-      'Smart Money Concepts',
+      'Any TradingView instrument (webhook pass-through — not limited to a forex list)',
+      'All chart timeframes',
+      'Multi-market distribution (all webhook symbols from TradingView)',
+      'Smart Money Concepts chart overlays (FVG / zones from signal metadata)',
       'Trade management alerts',
       'AI trade explanation',
       'Advanced analytics',
-      'Telegram trade copier (auto entry, SL, TP, lot)',
-      'Auto lot sizing based on account balance',
+      'Telegram trade copier (Pro+: tap Execute; Premium: auto lot from MT5 balance)',
+      'Auto lot sizing based on synced MT5 account balance',
       '90-day signal history'
     ]
   }
@@ -87,7 +91,9 @@ const TIER_FEATURES = {
   basic: {
     aiAlerts: true,
     tradingViewAlerts: true,
+    // Chart / scanner catalog only — TV webhooks accept any instrument when anyTradingViewInstrument.
     currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'BTC/USD', 'USD/JPY'],
+    anyTradingViewInstrument: true,
     timeframes: ['1h', '15m', '3m', '1m'],
     showConfidence: false,
     newsFilter: false,
@@ -120,6 +126,7 @@ const TIER_FEATURES = {
       'US100',
       'BTC/USD'
     ],
+    anyTradingViewInstrument: true,
     timeframes: ['4h', '1h', '30m', '15m', '5m', '1m'],
     showConfidence: true,
     newsFilter: true,
@@ -141,7 +148,9 @@ const TIER_FEATURES = {
   premium: {
     aiAlerts: true,
     tradingViewAlerts: true,
+    // Chart catalog seed list — webhook / distribution is not limited to these.
     currencyPairs: ALL_CURRENCY_PAIRS,
+    anyTradingViewInstrument: true,
     timeframes: ALL_TIMEFRAMES,
     showConfidence: true,
     newsFilter: true,
@@ -165,7 +174,7 @@ const TIER_FEATURES = {
 const FEATURE_MATRIX = [
   { key: 'aiAlerts', label: 'AI Alerts', basic: true, professional: true, premium: true },
   { key: 'tradingViewAlerts', label: 'TradingView Alerts', basic: true, professional: true, premium: true },
-  { key: 'currencyPairs', label: 'Currency Pairs', basic: 'Limited', professional: 'Most', premium: 'All' },
+  { key: 'currencyPairs', label: 'Chart Markets', basic: 'Limited catalog', professional: 'Most catalog', premium: 'Any TV instrument' },
   { key: 'timeframes', label: 'Timeframes', basic: '4', professional: '6', premium: 'All' },
   { key: 'showConfidence', label: 'Confidence Score', basic: false, professional: true, premium: true },
   { key: 'newsFilter', label: 'News Filter', basic: false, professional: true, premium: true },
@@ -173,7 +182,7 @@ const FEATURE_MATRIX = [
   { key: 'tradeJournal', label: 'Trade Journal', basic: false, professional: true, premium: true },
   { key: 'riskAnalysis', label: 'Risk Analysis', basic: false, professional: true, premium: true },
   { key: 'telegramAlerts', label: 'Telegram Alerts', basic: false, professional: true, premium: true },
-  { key: 'multiMarketScanner', label: 'Multi-Market Scanner', basic: false, professional: false, premium: true },
+  { key: 'multiMarketScanner', label: 'Multi-Market Distribution', basic: false, professional: false, premium: true },
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', basic: false, professional: false, premium: true },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', basic: false, professional: false, premium: true },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', basic: false, professional: false, premium: true },
@@ -206,7 +215,10 @@ const PAYMENT_CONFIG = {
     clientId: process.env.PAYPAL_CLIENT_ID,
     clientSecret: process.env.PAYPAL_CLIENT_SECRET,
     mode: process.env.PAYPAL_MODE || 'sandbox',
-    webhookId: process.env.PAYPAL_WEBHOOK_ID
+    webhookId: process.env.PAYPAL_WEBHOOK_ID,
+    // Browser return after PayPal approval (API captures, then redirects to frontend)
+    returnUrlBase: process.env.PAYPAL_RETURN_URL || PAYPAL_RETURN_URL,
+    webhookUrl: process.env.PAYPAL_WEBHOOK_URL || WEBHOOK_PAYPAL_URL
   },
   binance: {
     apiKey: process.env.BINANCE_PAY_API_KEY,
@@ -322,7 +334,11 @@ function getPublicPaymentMethods() {
       currency: 'USDT'
     },
     paypal: {
-      currency: 'USD'
+      currency: 'USD',
+      mode: PAYMENT_CONFIG.paypal.mode || 'sandbox',
+      configured: Boolean(
+        PAYMENT_CONFIG.paypal.clientId && PAYMENT_CONFIG.paypal.clientSecret
+      )
     },
     // Frontend must hide mock when this is false (always false in production)
     mockPaymentsAllowed,

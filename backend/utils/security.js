@@ -43,17 +43,136 @@ function isMockPaymentsAllowed() {
   return PAYMENT_CONFIG.mode === 'mock';
 }
 
-function verifyPaymentWebhookSecret(req) {
-  const expected = process.env.PAYMENT_WEBHOOK_SECRET || '';
-  if (!expected) return !IS_PRODUCTION;
+/**
+ * Shared secret for payment completion webhooks that lack native signatures
+ * (M-Pesa Daraja / SasaPay). Prefer header; query is supported because those
+ * providers only POST to CallBackURL and cannot send custom headers.
+ */
+function resolvePaymentWebhookSecret(provider) {
+  const key = String(provider || '').toLowerCase();
+  if (key === 'mpesa' && process.env.MPESA_WEBHOOK_SECRET) {
+    return process.env.MPESA_WEBHOOK_SECRET;
+  }
+  if (key === 'sasapay' && process.env.SASAPAY_WEBHOOK_SECRET) {
+    return process.env.SASAPAY_WEBHOOK_SECRET;
+  }
+  return process.env.PAYMENT_WEBHOOK_SECRET || '';
+}
 
-  const provided =
+function extractProvidedWebhookSecret(req) {
+  return (
     req.headers['x-payment-webhook-secret'] ||
     req.headers['x-webhook-secret'] ||
+    req.query?.webhook_secret ||
+    req.query?.secret ||
     req.body?.secret ||
-    '';
+    ''
+  );
+}
 
-  return timingSafeEqualString(String(provided), expected);
+function verifyPaymentWebhookSecret(req, provider) {
+  const expected = resolvePaymentWebhookSecret(provider);
+  if (!expected) return !IS_PRODUCTION;
+  return timingSafeEqualString(String(extractProvidedWebhookSecret(req)), expected);
+}
+
+/** Embed shared secret in CallBackURL so Daraja/SasaPay can authenticate without custom headers. */
+function appendWebhookSecretToUrl(url, provider) {
+  const secret = resolvePaymentWebhookSecret(provider);
+  if (!url || !secret) return url;
+  try {
+    const parsed = new URL(url);
+    if (!parsed.searchParams.get('webhook_secret') && !parsed.searchParams.get('secret')) {
+      parsed.searchParams.set('webhook_secret', secret);
+    }
+    return parsed.toString();
+  } catch {
+    const sep = String(url).includes('?') ? '&' : '?';
+    return `${url}${sep}webhook_secret=${encodeURIComponent(secret)}`;
+  }
+}
+
+function ipv4ToInt(ip) {
+  const parts = String(ip || '').split('.').map(Number);
+  if (parts.length !== 4 || parts.some(n => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
+}
+
+function ipMatchesCidr(ip, cidr) {
+  const [range, bitsRaw] = String(cidr || '').split('/');
+  const ipInt = ipv4ToInt(ip);
+  const rangeInt = ipv4ToInt(range);
+  if (ipInt == null || rangeInt == null) {
+    return String(ip) === String(cidr);
+  }
+  const bits = bitsRaw == null ? 32 : Number(bitsRaw);
+  if (!Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+  return (ipInt & mask) === (rangeInt & mask);
+}
+
+function getClientIp(req) {
+  return (
+    req.headers['fly-client-ip'] ||
+    (String(req.headers['x-forwarded-for'] || '').split(',')[0] || '').trim() ||
+    req.ip ||
+    req.socket?.remoteAddress ||
+    ''
+  );
+}
+
+/** Default Safaricom Daraja egress ranges (override via MPESA_WEBHOOK_IP_ALLOWLIST). */
+const DEFAULT_MPESA_IP_ALLOWLIST = ['196.201.214.0/24', '196.201.213.0/24'];
+
+function parseIpAllowlist(raw, fallback = []) {
+  const list = String(raw || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  return list.length ? list : fallback;
+}
+
+function isClientIpAllowed(req, allowlist) {
+  if (!allowlist?.length) return true;
+  const ip = String(getClientIp(req)).replace(/^::ffff:/, '');
+  return allowlist.some(entry => ipMatchesCidr(ip, entry));
+}
+
+/**
+ * Verify M-Pesa / SasaPay (and generic payment) webhooks before activating subscriptions.
+ * Fail closed in production when secret is missing or wrong.
+ * Optional IP allowlist is additive — never a substitute for the shared secret.
+ */
+function verifyProviderPaymentWebhook(req, provider) {
+  const key = String(provider || '').toLowerCase();
+  if (!verifyPaymentWebhookSecret(req, key)) {
+    return { ok: false, reason: 'invalid_webhook_secret' };
+  }
+
+  // Optional IP allowlist (opt-in). Shared secret is the primary control — Safaricom
+  // IP ranges change and Fly's Fly-Client-IP must be trusted before enabling this.
+  const verifyIpFlag =
+    key === 'mpesa'
+      ? process.env.MPESA_WEBHOOK_VERIFY_IP
+      : key === 'sasapay'
+        ? process.env.SASAPAY_WEBHOOK_VERIFY_IP
+        : process.env.PAYMENT_WEBHOOK_VERIFY_IP;
+
+  if (verifyIpFlag === 'true') {
+    const allowlist =
+      key === 'mpesa'
+        ? parseIpAllowlist(process.env.MPESA_WEBHOOK_IP_ALLOWLIST, DEFAULT_MPESA_IP_ALLOWLIST)
+        : parseIpAllowlist(
+            process.env.SASAPAY_WEBHOOK_IP_ALLOWLIST || process.env.PAYMENT_WEBHOOK_IP_ALLOWLIST,
+            []
+          );
+
+    if (allowlist.length && !isClientIpAllowed(req, allowlist)) {
+      return { ok: false, reason: 'ip_not_allowed', ip: getClientIp(req) };
+    }
+  }
+
+  return { ok: true };
 }
 
 function assertProductionSecurityConfig() {
@@ -73,7 +192,7 @@ function assertProductionSecurityConfig() {
       issues.push('PAYSTACK_SECRET_KEY should be set in production for live checkout.');
     }
     if (!process.env.PAYMENT_WEBHOOK_SECRET) {
-      issues.push('PAYMENT_WEBHOOK_SECRET should be set in production.');
+      issues.push('PAYMENT_WEBHOOK_SECRET must be set in production (M-Pesa/SasaPay callback auth).');
     }
     if (process.env.ALLOW_LEGACY_WEBHOOK_SECRET === 'true') {
       issues.push('ALLOW_LEGACY_WEBHOOK_SECRET should not be enabled in production.');
@@ -87,6 +206,17 @@ function assertProductionSecurityConfig() {
       process.exit(1);
     }
   }
+
+  if (IS_PRODUCTION && process.env.PYTHON_SERVICE_URL && !process.env.PYTHON_SERVICE_API_KEY) {
+    console.warn(
+      '[Security] PYTHON_SERVICE_API_KEY is unset while PYTHON_SERVICE_URL is set — FastAPI /signal should require a shared key.'
+    );
+  }
+
+  // Soft notice only — PayPal is optional alongside Paystack
+  if (IS_PRODUCTION && (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET)) {
+    console.warn('[Security] PayPal live checkout disabled until PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are set.');
+  }
 }
 
 module.exports = {
@@ -96,6 +226,10 @@ module.exports = {
   timingSafeEqualString,
   sanitizeMongoInput,
   isMockPaymentsAllowed,
+  resolvePaymentWebhookSecret,
+  appendWebhookSecretToUrl,
   verifyPaymentWebhookSecret,
+  verifyProviderPaymentWebhook,
+  getClientIp,
   assertProductionSecurityConfig
 };

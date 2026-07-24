@@ -108,6 +108,13 @@ async function captureOrder(orderId) {
   const data = await response.json();
 
   if (!response.ok) {
+    const details = Array.isArray(data.details) ? data.details : [];
+    const alreadyCaptured = details.some(
+      d => String(d.issue || '').toUpperCase() === 'ORDER_ALREADY_CAPTURED'
+    );
+    if (alreadyCaptured) {
+      return getOrder(orderId);
+    }
     const message = data.message || JSON.stringify(data);
     throw new Error(`PayPal capture failed: ${message}`);
   }
@@ -115,17 +122,59 @@ async function captureOrder(orderId) {
   return data;
 }
 
+async function getOrder(orderId) {
+  const token = await getAccessToken();
+
+  const response = await fetch(`${getBaseUrl()}/v2/checkout/orders/${orderId}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data.message || JSON.stringify(data);
+    throw new Error(`PayPal get order failed: ${message}`);
+  }
+  return data;
+}
+
+function extractCustomId(resource = {}) {
+  return (
+    resource.purchase_units?.[0]?.custom_id ||
+    resource.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id ||
+    resource.custom_id ||
+    null
+  );
+}
+
 function parseWebhookEvent(body) {
   const eventType = body?.event_type;
   const resource = body?.resource || {};
 
-  if (eventType === 'CHECKOUT.ORDER.APPROVED' || eventType === 'PAYMENT.CAPTURE.COMPLETED') {
-    const customId = resource.purchase_units?.[0]?.custom_id || resource.custom_id;
-    const orderId = resource.id || resource.supplementary_data?.related_ids?.order_id;
-    return { eventType, customId, orderId, resource };
+  // CHECKOUT.ORDER.APPROVED → resource.id is the order id
+  // PAYMENT.CAPTURE.COMPLETED → resource.id is the capture id; order id is nested
+  if (eventType === 'CHECKOUT.ORDER.APPROVED') {
+    return {
+      eventType,
+      customId: extractCustomId(resource),
+      orderId: resource.id || null,
+      resource
+    };
   }
 
-  return { eventType, resource };
+  if (eventType === 'PAYMENT.CAPTURE.COMPLETED') {
+    return {
+      eventType,
+      customId: extractCustomId(resource),
+      orderId: resource.supplementary_data?.related_ids?.order_id || null,
+      resource
+    };
+  }
+
+  return { eventType, customId: extractCustomId(resource), orderId: null, resource };
 }
 
 function normalizeHeader(headers, name) {
@@ -189,6 +238,8 @@ module.exports = {
   isConfigured,
   createOrder,
   captureOrder,
+  getOrder,
+  extractCustomId,
   parseWebhookEvent,
   verifyWebhookSignature
 };

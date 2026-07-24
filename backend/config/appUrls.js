@@ -28,8 +28,10 @@ const WEBHOOK_MPESA_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/
 const WEBHOOK_BINANCE_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/binance`;
 const WEBHOOK_SASAPAY_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/sasapay`;
 const WEBHOOK_PAYSTACK_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/paystack`;
+const WEBHOOK_PAYPAL_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/paypal`;
 const WEBHOOK_TELEGRAM_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/webhook/telegram`;
 const PAYSTACK_CALLBACK_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/payments/paystack/callback`;
+const PAYPAL_RETURN_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/payments/paypal/return`;
 const TRADINGVIEW_OAUTH_CALLBACK_URL = `${PUBLIC_BACKEND_URL.replace(/\/$/, '')}/api/tradingview/oauth-callback`;
 
 module.exports = {
@@ -42,7 +44,9 @@ module.exports = {
   WEBHOOK_BINANCE_URL,
   WEBHOOK_SASAPAY_URL,
   WEBHOOK_PAYSTACK_URL,
+  WEBHOOK_PAYPAL_URL,
   WEBHOOK_TELEGRAM_URL,
   PAYSTACK_CALLBACK_URL,
+  PAYPAL_RETURN_URL,
   TRADINGVIEW_OAUTH_CALLBACK_URL
 };

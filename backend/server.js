@@ -10,8 +10,21 @@ const dotenv = require('dotenv');
 
 dotenv.config();
 
-const { assertProductionSecurityConfig, sanitizeMongoInput, safeErrorMessage, verifyPaymentWebhookSecret, isMockPaymentsAllowed } = require('./utils/security');
-const { globalApiLimiter, authLimiter, webhookLimiter, scannerLimiter } = require('./middleware/rateLimit');
+const {
+  assertProductionSecurityConfig,
+  sanitizeMongoInput,
+  safeErrorMessage,
+  verifyPaymentWebhookSecret,
+  verifyProviderPaymentWebhook,
+  isMockPaymentsAllowed
+} = require('./utils/security');
+const {
+  globalApiLimiter,
+  authLimiter,
+  webhookLimiter,
+  scannerLimiter,
+  tradingViewAuthFailureTracker
+} = require('./middleware/rateLimit');
 const requireMockPayments = require('./middleware/requireMockPayments');
 
 assertProductionSecurityConfig();
@@ -73,6 +86,10 @@ const createMt5Router = require('./routes/mt5');
 const PineScriptGeneratorService = require('./services/PineScriptGeneratorService');
 const TelegramService = require('./services/TelegramService');
 const { buildAnalytics } = require('./utils/signalOutcome');
+const {
+  isWebhookInsightsSignal,
+  legacySourceMongoExclusion
+} = require('./utils/insightsSignalFilter');
 const { verifyTradingViewWebhook } = require('./utils/webhookSecurity');
 const authRoutes = require('./routes/auth');
 const referralRoutes = require('./routes/referrals');
@@ -130,8 +147,14 @@ async function resolveUser(username) {
 }
 
 async function assertTradingViewWebhook(req, res) {
+  // Prefer per-user licenseToken (HMAC) over legacy shared secret; rate-limit failures.
+  if (!tradingViewAuthFailureTracker.check(req, res)) {
+    return null;
+  }
+
   const auth = await verifyTradingViewWebhook(req, resolveUserById);
   if (!auth.ok) {
+    tradingViewAuthFailureTracker.recordFailure(req);
     res.status(401).json({
       message: 'Invalid webhook authentication',
       reason: auth.reason || 'unauthorized'
@@ -168,6 +191,8 @@ function parseTradingViewPayload(body) {
 }
 
 const app = express();
+// Fly / reverse proxies: trust X-Forwarded-For / Fly-Client-IP for rate limits + optional IP checks.
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -331,10 +356,11 @@ app.get('/api/signals', requireAuth, requireSubscription, async (req, res) => {
     }
 
     const signals = await Signal.find({
-      createdAt: { $gte: cutoff }
+      createdAt: { $gte: cutoff },
+      ...legacySourceMongoExclusion()
     })
       .sort({ createdAt: -1 })
-      .limit(features.maxSignals * 2);
+      .limit(features.maxSignals * 5);
 
     const sanitized = filterSignalsForTier(signals, req.user.subscription)
       .slice(0, features.maxSignals)
@@ -363,9 +389,12 @@ app.get('/api/v1/signals', requireAuth, requireSubscription, requireTierFeature(
     const limit = Math.min(parseInt(req.query.limit, 10) || features.maxSignals, features.maxSignals);
 
     const rawSignals = isDbReady()
-      ? await Signal.find({ createdAt: { $gte: cutoff } })
+      ? await Signal.find({
+          createdAt: { $gte: cutoff },
+          ...legacySourceMongoExclusion()
+        })
           .sort({ createdAt: -1 })
-          .limit(limit * 2)
+          .limit(limit * 5)
       : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
 
     const signals = filterSignalsForTier(rawSignals, req.user.subscription).slice(0, limit);
@@ -534,7 +563,8 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
     if (provider === 'paypal') {
       const tierConfig = TIERS[tier];
       const frontendUrl = FRONTEND_URL;
-      const returnUrl = `${PUBLIC_BACKEND_URL}/api/payments/paypal/return?tier=${tier}&billingCycle=${pricing.billingCycle}`;
+      const returnUrlBase = PAYMENT_CONFIG.paypal.returnUrlBase || `${PUBLIC_BACKEND_URL}/api/payments/paypal/return`;
+      const returnUrl = `${returnUrlBase}?tier=${encodeURIComponent(tier)}&billingCycle=${encodeURIComponent(pricing.billingCycle)}`;
       const cancelUrl = `${frontendUrl}?paypal=cancelled`;
 
       let orderResult;
@@ -542,7 +572,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       if (PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()) {
         if (!isMockPaymentsAllowed()) {
           return res.status(503).json({
-            message: 'PayPal is not configured for live payments. Please use another available method.'
+            message: 'PayPal is not configured for live payments. Please use Paystack or another available method.'
           });
         }
         const mockOrderId = `paypal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -566,6 +596,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         provider: 'paypal',
         amount: pricing.priceCents / 100,
         currency: pricing.currencyPayPal,
+        billingCycle: pricing.billingCycle,
         providerReference: orderResult.orderId
       });
 
@@ -792,6 +823,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
         provider: 'paystack',
         amount: orderResult.amount,
         currency: orderResult.currency,
+        billingCycle: pricing.billingCycle,
         providerReference: orderResult.reference
       });
 
@@ -961,19 +993,29 @@ app.get('/api/payments/paypal/return', async (req, res) => {
       return res.redirect(`${frontendUrl}?paypal=error&message=missing_order`);
     }
 
+    const existing = await findPaymentByReference(String(orderId), 'paypal');
+    if (existing?.status === 'completed') {
+      return res.redirect(`${frontendUrl}?paypal=success&tier=${encodeURIComponent(existing.tier || tier || 'basic')}`);
+    }
+
     const captureResult = await PayPalService.captureOrder(orderId);
-    const customId = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id
-      || captureResult.purchase_units?.[0]?.custom_id;
-    const [userId, capturedTier, capturedBillingCycle] = (customId || '').split(':');
-    const resolvedTier = tier || capturedTier || 'basic';
+    const captureStatus = String(captureResult.status || '').toUpperCase();
+    if (captureStatus && captureStatus !== 'COMPLETED') {
+      return res.redirect(`${frontendUrl}?paypal=error&message=payment_not_completed`);
+    }
+
+    const customId = PayPalService.extractCustomId(captureResult);
+    const [customUserId, capturedTier, capturedBillingCycle] = (customId || '').split(':');
+    const resolvedUserId = customUserId || existing?.userId?.toString();
+    const resolvedTier = tier || capturedTier || existing?.tier || 'basic';
     const resolvedBillingCycle = billingCycle || capturedBillingCycle || 'monthly';
 
     await completePaymentTransaction(orderId, 'paypal', { rawPayload: captureResult });
 
-    if (userId) {
-      const payer = await UserConfig.findById(userId);
+    if (resolvedUserId) {
+      const payer = await UserConfig.findById(resolvedUserId);
       await activateSubscription(
-        userId,
+        resolvedUserId,
         buildActivationOptions(payer, {
           tier: resolvedTier,
           provider: 'paypal',
@@ -984,7 +1026,7 @@ app.get('/api/payments/paypal/return', async (req, res) => {
       );
     }
 
-    return res.redirect(`${frontendUrl}?paypal=success&tier=${resolvedTier}`);
+    return res.redirect(`${frontendUrl}?paypal=success&tier=${encodeURIComponent(resolvedTier)}`);
   } catch (error) {
     console.error('PayPal return error:', error);
     return res.redirect(`${frontendUrl}?paypal=error&message=payment_failed`);
@@ -1331,8 +1373,15 @@ app.get('/api/subscription/:username', requireAuth, async (req, res) => {
   }
 });
 
-app.post('/api/webhook/mpesa', async (req, res) => {
+app.post('/api/webhook/mpesa', webhookLimiter, async (req, res) => {
   try {
+    const auth = verifyProviderPaymentWebhook(req, 'mpesa');
+    if (!auth.ok) {
+      console.warn('M-Pesa webhook rejected:', auth.reason, auth.ip || '');
+      // Do not activate subscriptions on unauthenticated callbacks.
+      return res.status(401).json({ ResultCode: 1, ResultDesc: 'Unauthorized' });
+    }
+
     console.log('M-Pesa webhook received:', JSON.stringify(req.body));
     const callback = MpesaService.parseStkCallback(req.body);
 
@@ -1340,7 +1389,6 @@ app.post('/api/webhook/mpesa', async (req, res) => {
       return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
     }
 
-    const PaymentTransaction = require('./models/PaymentTransaction');
     const transaction = await findPaymentByReference(callback.checkoutRequestId, 'mpesa');
 
     if (!transaction) {
@@ -1391,7 +1439,7 @@ app.post('/api/webhook/paypal', webhookLimiter, async (req, res) => {
     if (eventType === 'PAYMENT.CAPTURE.COMPLETED' || eventType === 'CHECKOUT.ORDER.APPROVED') {
       const [userId, tier, billingCycle] = (customId || '').split(':');
 
-      if (userId && orderId) {
+      if (orderId) {
         const existing = await getPaymentStatus(orderId, 'paypal');
         if (existing && existing.status === 'pending') {
           if (eventType === 'CHECKOUT.ORDER.APPROVED') {
@@ -1403,17 +1451,20 @@ app.post('/api/webhook/paypal', webhookLimiter, async (req, res) => {
           }
 
           await completePaymentTransaction(orderId, 'paypal', { rawPayload: req.body });
-          const payer = await UserConfig.findById(userId);
-          await activateSubscription(
-            userId,
-            buildActivationOptions(payer, {
-              tier: tier || existing.tier,
-              provider: 'paypal',
-              providerOrderId: orderId,
-              billingCycle
-            }),
-            io
-          );
+          const resolvedUserId = userId || existing.userId?.toString();
+          if (resolvedUserId) {
+            const payer = await UserConfig.findById(resolvedUserId);
+            await activateSubscription(
+              resolvedUserId,
+              buildActivationOptions(payer, {
+                tier: tier || existing.tier,
+                provider: 'paypal',
+                providerOrderId: orderId,
+                billingCycle: billingCycle || existing.billingCycle
+              }),
+              io
+            );
+          }
         }
       }
     }
@@ -1477,8 +1528,14 @@ app.post('/api/webhook/binance', async (req, res) => {
   }
 });
 
-app.post('/api/webhook/sasapay', async (req, res) => {
+app.post('/api/webhook/sasapay', webhookLimiter, async (req, res) => {
   try {
+    const auth = verifyProviderPaymentWebhook(req, 'sasapay');
+    if (!auth.ok) {
+      console.warn('SasaPay webhook rejected:', auth.reason, auth.ip || '');
+      return res.status(401).json({ ResultCode: 1, ResultDesc: 'Unauthorized' });
+    }
+
     console.log('SasaPay webhook received:', JSON.stringify(req.body));
     const callback = SasaPayService.parseCallback(req.body);
 
@@ -1628,15 +1685,22 @@ app.post('/api/webhook/payments', webhookLimiter, async (req, res) => {
 // ===== TRADINGVIEW SETUP (subscribers use TradingView as alert front-end) =====
 
 app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) => {
+  const { sampleWebhookPayload } = require('./services/PineScriptGeneratorService');
   res.json({
     liveAlertsEnabled: true,
+    architecture: 'tradingview_webhook_distribution',
+    flow: 'TradingView → webhook → Kaching dashboard / Telegram / MT5',
+    webhookUrl: WEBHOOK_TRADINGVIEW_URL,
+    samplePayload: sampleWebhookPayload(),
+    chartProvidersNote:
+      'Charts are display-only. Chart feed issues do not affect alerts and never generate trades.',
     subscription: req.user.subscription,
     instructions: [
-      'Open TradingView and add the KachingFx Structural Scanner indicator to your chart.',
-      'Entry, SL, and TP1–TP3 lines are drawn automatically on your chart when a pattern fires.',
-      'Create one alert with condition "Any alert() function call" and enable Webhook URL notifications.',
-      'Enable TradingView push/email notifications so alerts reach you in real time.',
-      'Live signals from KachingFx are also delivered to this dashboard while your subscription is active.'
+      'Copy your personal script from the TradingView Setup tab and add it to a TradingView chart.',
+      `Create one alert for that script, enable webhook notifications, and paste: ${WEBHOOK_TRADINGVIEW_URL}`,
+      'When TradingView fires, Kaching publishes Entry, stop loss, and take-profit levels to this dashboard, Telegram, and MT5.',
+      'Optional: turn on TradingView push or email so you also get notified on your phone.',
+      'Charts are separate from alerts — chart feed outages never block trade delivery.'
     ]
   });
 });
@@ -1770,6 +1834,9 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
       tierLabel: generated.tierLabel,
       subscriberLabel: generated.subscriberLabel,
       generatedAt: generated.generatedAt,
+      architecture: generated.architecture,
+      flow: generated.flow,
+      samplePayload: generated.samplePayload,
       security: generated.security,
       instructions: generated.instructions
     });
@@ -1784,7 +1851,10 @@ app.get('/api/tradingview/alerts', requireAuth, requireSubscription, async (req,
     const { symbol } = req.query;
     const features = getTierFeatures(req.user.subscription);
     const cutoff = historyCutoffDate(req.user.subscription);
-    const filter = { createdAt: { $gte: cutoff } };
+    const filter = {
+      createdAt: { $gte: cutoff },
+      ...legacySourceMongoExclusion()
+    };
     const requestedSymbol =
       symbol && String(symbol).toUpperCase() !== 'ALL' ? normalizeSymbol(symbol) : null;
 
@@ -1916,10 +1986,16 @@ app.get('/api/performance/summary', requireAuth, requireSubscription, requireTie
   try {
     const cutoff = historyCutoffDate(req.user.subscription);
     const signals = isDbReady()
-      ? await Signal.find({ createdAt: { $gte: cutoff } }).sort({ createdAt: -1 }).limit(1000).lean()
+      ? await Signal.find({
+          createdAt: { $gte: cutoff },
+          ...legacySourceMongoExclusion()
+        })
+          .sort({ createdAt: -1 })
+          .limit(1000)
+          .lean()
       : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
 
-    const filtered = filterSignalsForTier(signals, req.user.subscription);
+    const filtered = filterSignalsForTier(signals, req.user.subscription).filter(isWebhookInsightsSignal);
     const analytics = buildAnalytics(filtered);
 
     res.json({
@@ -2088,12 +2164,14 @@ app.post('/api/ai/signal', scannerLimiter, requireAuth, requireSubscription, asy
 app.post('/api/scanner/run', requireAuth, requireSubscription, requireTierFeature('multiMarketScanner'), async (req, res) => {
   try {
     // Architecture: do not generate or publish signals from live market data.
+    // Premium multiMarketScanner = entitlement to receive TV webhook distribution across all pairs.
     return res.json({
       success: true,
       architecture: 'tradingview_webhook_distribution',
       published: false,
+      feature: 'multi_market_distribution',
       message:
-        'Trading signals are published exclusively via TradingView webhooks. Live market data is chart-only.',
+        'Premium multi-market distribution delivers TradingView webhook signals across all allowed pairs. Live market data is chart-only and does not publish trades.',
       results: await MarketScannerService.runFullScan(io)
     });
   } catch (error) {

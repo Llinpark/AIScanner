@@ -5,12 +5,17 @@ const requireTierFeature = require('../middleware/requireTierFeature');
 const Mt5TradeCopierService = require('../services/Mt5TradeCopierService');
 const { PUBLIC_BACKEND_URL } = require('../config/appUrls');
 
+/**
+ * Header-only auth — never accept ?token= (leaks via access logs / Referer).
+ * EA sends X-MT5-Token; Authorization: Bearer is also accepted.
+ */
 function extractMt5Token(req) {
+  const authHeader = String(req.headers.authorization || '');
+  const bearer = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
   return (
     req.headers['x-mt5-token'] ||
     req.headers['x-kaching-mt5-token'] ||
-    req.query.token ||
-    req.body?.token ||
+    bearer ||
     ''
   );
 }
@@ -43,11 +48,13 @@ function createMt5Router() {
           token: link.token,
           bridgeUrl: `${PUBLIC_BACKEND_URL}/api/mt5/bridge`,
           instructions: [
-            'Install KachingTradeCopier.ex5 on your MT5 terminal',
+            'Compile and install mt5/KachingTradeCopier.mq5 (or .ex5) on your MT5 terminal',
             `Set Backend URL to ${PUBLIC_BACKEND_URL}`,
             'Paste the link token into the EA inputs',
+            'Allow the backend URL under Tools → Options → Expert Advisors → WebRequest',
             'Enable Algo Trading in MT5',
-            'The EA syncs your balance and executes trades when you tap Execute in Telegram'
+            'The EA syncs balance, places queued trades, then manages trailing stop + break-even on open positions',
+            'Pro: uses fixed lot size from dashboard settings. Premium: auto-sizes from synced balance × risk %'
           ]
         });
       } catch (error) {

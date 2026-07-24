@@ -1,5 +1,6 @@
 const { PAYMENT_CONFIG } = require('../config/subscriptions');
 const MpesaService = require('./MpesaService');
+const { appendWebhookSecretToUrl } = require('../utils/security');
 
 function getBaseUrl() {
   return PAYMENT_CONFIG.sasapay.baseUrl.replace(/\/$/, '');
@@ -43,6 +44,7 @@ async function initiateRequestPayment({ phone, amount, accountReference, descrip
   const { merchantCode, networkCode, callbackUrl, currency } = PAYMENT_CONFIG.sasapay;
   const phoneNumber = MpesaService.normalizePhone(phone);
   const token = await getAccessToken();
+  const securedCallbackUrl = appendWebhookSecretToUrl(callbackUrl, 'sasapay');
 
   const payload = {
     MerchantCode: merchantCode,
@@ -52,7 +54,7 @@ async function initiateRequestPayment({ phone, amount, accountReference, descrip
     PhoneNumber: phoneNumber,
     AccountReference: String(accountReference).slice(0, 20),
     TransactionDesc: String(description || 'KachingFx Subscription').slice(0, 50),
-    CallBackURL: callbackUrl
+    CallBackURL: securedCallbackUrl
   };
 
   const response = await fetch(`${getBaseUrl()}/payments/request-payment/`, {

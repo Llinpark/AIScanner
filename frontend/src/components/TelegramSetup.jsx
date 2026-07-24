@@ -7,6 +7,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
   const [linkInfo, setLinkInfo] = useState(null);
   const [mt5LinkInfo, setMt5LinkInfo] = useState(null);
   const [riskPercent, setRiskPercent] = useState(1);
+  const [fixedLotSize, setFixedLotSize] = useState(0.01);
   const [symbolSuffix, setSymbolSuffix] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -25,6 +26,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
       if (mt5Res) {
         setMt5Status(mt5Res.data);
         setRiskPercent(mt5Res.data.riskPercent ?? 1);
+        setFixedLotSize(mt5Res.data.fixedLotSize ?? 0.01);
         setSymbolSuffix(mt5Res.data.symbolSuffix || '');
       }
     } catch (err) {
@@ -89,6 +91,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
     try {
       const res = await mt5Api.updateSettings({
         riskPercent: Number(riskPercent),
+        fixedLotSize: Number(fixedLotSize),
         symbolSuffix: symbolSuffix.trim()
       });
       setMt5Status(res.data.status);
@@ -135,8 +138,8 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
       <div className="insights-section-header">
         <h3>Telegram Trade Copier</h3>
         <p>
-          AI finds a signal → you get a Telegram alert → tap <strong>Execute on MT5</strong>. Entry, stop loss,
-          take profit, and lot size are filled automatically.
+          TradingView webhook → Telegram alert → tap <strong>Execute on MT5</strong> (Pro+). Entry, stop loss,
+          take profit, and lot size are filled automatically. Premium auto-sizes lots from your synced MT5 balance.
         </p>
       </div>
 
@@ -239,17 +242,31 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
           </div>
 
           <div className="form-row">
-            <label>
-              Risk per trade (%)
-              <input
-                type="number"
-                min="0.1"
-                max="10"
-                step="0.1"
-                value={riskPercent}
-                onChange={e => setRiskPercent(e.target.value)}
-              />
-            </label>
+            {tierLimits.autoLotSizing ? (
+              <label>
+                Risk per trade (%) — Premium auto lot
+                <input
+                  type="number"
+                  min="0.1"
+                  max="10"
+                  step="0.1"
+                  value={riskPercent}
+                  onChange={e => setRiskPercent(e.target.value)}
+                />
+              </label>
+            ) : (
+              <label>
+                Fixed lot size (Pro)
+                <input
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  value={fixedLotSize}
+                  onChange={e => setFixedLotSize(e.target.value)}
+                />
+              </label>
+            )}
             <label>
               Broker symbol suffix
               <input
@@ -260,6 +277,17 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               />
             </label>
           </div>
+          {tierLimits.autoLotSizing && mt5Status && mt5Status.accountBalance == null && (
+            <p className="page-notice info-box">
+              Waiting for EA balance sync — Premium auto lot sizing will not queue trades until SyncAccount reports a
+              balance.
+            </p>
+          )}
+          {(tierLimits.trailingStop || tierLimits.breakEvenAutomation) && (
+            <p className="page-notice info-box">
+              Install EA v1.10+ so trailing stop and break-even run on open positions after fill (OnTick management).
+            </p>
+          )}
 
           {mt5LinkInfo && (
             <div className="telegram-link-box">
@@ -290,10 +318,11 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
       <div className="telegram-status-card">
         <h4>How it works</h4>
         <ol>
-          <li>AI scanner or TradingView sends an entry signal with Kaching Entry, SL, and TP levels.</li>
-          <li>The signal is stored and pushed to Telegram.</li>
-          <li>Pro and Premium users tap <strong>Execute on MT5</strong> — no manual entry, SL, TP, or lot size.</li>
-          <li>The MT5 EA picks up the queued trade and places it on your account.</li>
+          <li>TradingView Pine sends an entry signal with Kaching Entry, SL, and TP levels via webhook.</li>
+          <li>Kaching stores the signal and pushes it to Telegram (and your live dashboard).</li>
+          <li>Pro and Premium users tap <strong>Execute on MT5</strong> — entry, SL, TP filled automatically.</li>
+          <li>Pro uses fixed lot size; Premium auto-sizes from synced MT5 balance × risk %.</li>
+          <li>The MT5 EA places the trade, then manages trailing stop and break-even on the open position.</li>
         </ol>
       </div>
     </div>

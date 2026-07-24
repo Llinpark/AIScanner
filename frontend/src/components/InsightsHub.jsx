@@ -32,17 +32,20 @@ export default function InsightsHub({ subscription, onNavigatePricing }) {
 
   return (
     <div className="dashboard-card insights-hub">
-      <h2>Insights</h2>
-      <p className="insights-intro">
-        TradingView signal history, performance analytics, and your trade journal — distribution metrics, not live
-        scanner scores.
-      </p>
+      <header className="insights-hero">
+        <h2>Insights</h2>
+        <p className="insights-intro">
+          TradingView webhook history, performance analytics, and your personal trade journal.
+        </p>
+      </header>
 
-      <div className="insights-tabs">
+      <div className="insights-tabs" role="tablist" aria-label="Insights sections">
         {TABS.map(tab => (
           <button
             key={tab.id}
             type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
             className={`tab-btn ${activeTab === tab.id ? 'active' : ''}`}
             onClick={() => setActiveTab(tab.id)}
           >

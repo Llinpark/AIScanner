@@ -58,45 +58,4 @@ export function RiskAnalysisCard({ riskMetrics, accountBalance, onAccountBalance
   );
 }
 
-export function SignalHistoryRow({ signal, tierLimits, accountBalance, onAddToJournal }) {
-  const sl = signal.stop_loss_1 ?? signal.stop_loss;
-  const strategy =
-    signal.strategyName || signal.strategy || signal.patternLabel || signal.pattern || '—';
-  const source = signal.signalSource || signal.source || 'tradingview';
-  const delivery = signal.deliveryStatus || (signal.telegramSent || signal.mt5Sent ? 'delivered' : '—');
-  const execution = signal.executionStatus || '—';
-
-  return (
-    <tr>
-      <td>{signal.createdAt ? new Date(signal.createdAt).toLocaleString() : '—'}</td>
-      <td>{signal.symbol}</td>
-      <td>{signal.direction?.toUpperCase()}</td>
-      <td>{signal.timeframe || '1h'}</td>
-      <td>{source}</td>
-      <td>{strategy}</td>
-      <td>
-        <OutcomeBadge outcome={signal.outcome} tradeStatus={signal.tradeStatus} />
-      </td>
-      <td>{execution}</td>
-      <td>{delivery}</td>
-      <td>{signal.outcomeR != null ? `${signal.outcomeR}R` : '—'}</td>
-      <td>
-        {tierLimits.showConfidence && signal.confidence != null
-          ? `${Math.round(signal.confidence * 100)}%`
-          : '—'}
-      </td>
-      <td className="levels-cell">
-        E {Number(signal.entry).toFixed(5)} · SL {Number(sl).toFixed(5)}
-      </td>
-      <td>
-        {tierLimits.tradeJournal && onAddToJournal && (
-          <button type="button" className="btn-small" onClick={() => onAddToJournal(signal)}>
-            + Journal
-          </button>
-        )}
-      </td>
-    </tr>
-  );
-}
-
 export default OutcomeBadge;

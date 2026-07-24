@@ -1,4 +1,5 @@
-// Canonical market symbols and mock price seeds for the scanner / demo data.
+// Canonical market symbols and mock price seeds for the scanner / chart catalog.
+// TradingView webhooks accept ANY instrument — this list is for chart feeds / demo seeds only.
 const MARKET_SYMBOLS = {
   'EUR/USD': { basePrice: 1.085, category: 'forex' },
   'GBP/USD': { basePrice: 1.268, category: 'forex' },
@@ -17,7 +18,35 @@ const MARKET_SYMBOLS = {
   'BTC/USD': { basePrice: 97500, category: 'crypto' }
 };
 
+/** Chart / scanner catalog (not a webhook allowlist). */
 const ALL_CURRENCY_PAIRS = Object.keys(MARKET_SYMBOLS);
+
+/** ISO-style codes used only to decide whether to insert a slash in 6-letter FX tickers. */
+const FX_CURRENCY_CODES = new Set([
+  'EUR',
+  'USD',
+  'GBP',
+  'JPY',
+  'AUD',
+  'NZD',
+  'CAD',
+  'CHF',
+  'XAU',
+  'XAG',
+  'BTC',
+  'ETH',
+  'SGD',
+  'HKD',
+  'SEK',
+  'NOK',
+  'DKK',
+  'ZAR',
+  'MXN',
+  'TRY',
+  'PLN',
+  'CNH',
+  'CNY'
+]);
 
 const SYMBOL_ALIASES = {
   XAUUSD: 'XAU/USD',
@@ -45,12 +74,25 @@ const SYMBOL_ALIASES = {
   DJI: 'US30',
   DJIA: 'US30',
   US30USD: 'US30',
-  DOW: 'US30'
+  DOW: 'US30',
+  GER40: 'GER40',
+  DE40: 'GER40',
+  UK100: 'UK100',
+  FTSE: 'UK100',
+  SPX500: 'SPX500',
+  SPX: 'SPX500',
+  ESP35: 'ESP35',
+  FRA40: 'FRA40',
+  JPN225: 'JPN225',
+  NI225: 'JPN225',
+  ETHUSD: 'ETH/USD',
+  ETHUSDT: 'ETH/USD'
 };
 
 /**
- * Normalize TradingView / broker / provider symbols to canonical app form.
- * Handles FX:EURUSD, OANDA:GBPUSD, TVC:DJI, EURUSD, EUR/USD, etc.
+ * Normalize TradingView / broker / provider symbols to a safe canonical form.
+ * Unknown instruments pass through after sanitization — never rejected.
+ * Handles FX:EURUSD, OANDA:GBPUSD, TVC:DJI, BINANCE:BTCUSDT.P, EURUSD, EUR/USD, etc.
  */
 function normalizeSymbol(symbol) {
   let raw = String(symbol || '')
@@ -65,14 +107,27 @@ function normalizeSymbol(symbol) {
     raw = parts[parts.length - 1];
   }
 
-  // Strip common TradingView / feed suffixes
+  // Strip common TradingView / feed / continuous-contract suffixes
   raw = raw.replace(/!$/g, '');
-  raw = raw.replace(/\.(P|FX|FOREX|CASH|CFD)$/i, '');
+  raw = raw.replace(/\.(P|FX|FOREX|CASH|CFD|PRO|MINI|SPOT)$/i, '');
+
+  // Allowlist of safe ticker characters (stocks like BRK.B, futures roots, etc.)
+  raw = raw.replace(/[^A-Z0-9._\-\/]/g, '');
+  if (!raw) return '';
 
   if (SYMBOL_ALIASES[raw]) return SYMBOL_ALIASES[raw];
+  if (MARKET_SYMBOLS[raw]) return raw;
   if (raw.includes('/')) return raw;
-  if (raw === 'US30' || raw === 'US100') return raw;
-  if (/^[A-Z]{6}$/.test(raw)) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
+
+  // Only insert FX slash when both legs look like currency codes (avoid SPX500 → SPX/500)
+  if (/^[A-Z]{6}$/.test(raw)) {
+    const a = raw.slice(0, 3);
+    const b = raw.slice(3);
+    if (FX_CURRENCY_CODES.has(a) && FX_CURRENCY_CODES.has(b)) {
+      return `${a}/${b}`;
+    }
+  }
+
   return raw;
 }
 
@@ -85,6 +140,7 @@ module.exports = {
   MARKET_SYMBOLS,
   ALL_CURRENCY_PAIRS,
   SYMBOL_ALIASES,
+  FX_CURRENCY_CODES,
   normalizeSymbol,
   getBasePrice
 };

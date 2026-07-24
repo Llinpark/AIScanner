@@ -46,6 +46,7 @@ function defaultMt5Config() {
     accountBalance: null,
     accountCurrency: 'USD',
     riskPercent: 1,
+    fixedLotSize: 0.01,
     symbolSuffix: '',
     lastSyncAt: null,
     linkedAt: null,
@@ -74,6 +75,8 @@ async function updateSettings(userId, settings = {}) {
   const mt5 = {
     ...current,
     riskPercent: settings.riskPercent != null ? Number(settings.riskPercent) : current.riskPercent,
+    fixedLotSize:
+      settings.fixedLotSize != null ? Number(settings.fixedLotSize) : current.fixedLotSize ?? 0.01,
     symbolSuffix:
       settings.symbolSuffix != null ? String(settings.symbolSuffix) : current.symbolSuffix || '',
     enabled: settings.enabled != null ? Boolean(settings.enabled) : current.enabled !== false
@@ -102,12 +105,27 @@ async function syncAccountFromEa(token, payload = {}) {
   return { ok: true, userId, mt5 };
 }
 
+/**
+ * Premium (`autoLotSizing`): risk-% lot from synced MT5 balance.
+ * Pro (no autoLot): fixedLotSize from settings (default 0.01).
+ * Returns null when Premium balance has not synced yet.
+ */
 function computeLotSize(signal, user) {
   const mt5 = user?.mt5 || {};
+
+  if (!userHasTierFeature(user, 'autoLotSizing')) {
+    const fixed = Number(mt5.fixedLotSize || 0.01);
+    return fixed > 0 ? fixed : 0.01;
+  }
+
   const balance = Number(mt5.accountBalance || 0);
+  if (!(balance > 0)) {
+    return null;
+  }
+
   const riskPercent = Number(mt5.riskPercent || 1);
 
-  if (signal.riskMetrics?.suggestedLotSize && balance > 0) {
+  if (signal.riskMetrics?.suggestedLotSize) {
     return signal.riskMetrics.suggestedLotSize;
   }
 
@@ -116,7 +134,39 @@ function computeLotSize(signal, user) {
     riskPercent
   });
 
-  return metrics?.suggestedLotSize || 0.01;
+  return metrics?.suggestedLotSize || null;
+}
+
+function pipSizeForSymbol(symbol) {
+  const s = String(symbol || '').toUpperCase();
+  if (s.includes('JPY')) return 0.01;
+  if (s.includes('XAU') || s.includes('GOLD')) return 0.1;
+  if (s.includes('XAG') || s.includes('SILVER')) return 0.01;
+  if (s.includes('BTC') || s.includes('US30') || s.includes('US100') || s.includes('NAS')) return 1;
+  return 0.0001;
+}
+
+/** Defaults: trail distance = initial SL distance in pips; step = 20% of that (min 1). */
+function buildTradeManagementParams(signal, user) {
+  const entry = Number(signal.entry);
+  const stopLoss = Number(signal.stop_loss_1 ?? signal.stop_loss);
+  const pip = pipSizeForSymbol(signal.symbol);
+  const slDistancePips =
+    Number.isFinite(entry) && Number.isFinite(stopLoss) && pip > 0
+      ? Math.abs(entry - stopLoss) / pip
+      : 20;
+
+  const trailDistancePips = Math.max(1, Number(slDistancePips.toFixed(1)));
+  const trailStepPips = Math.max(1, Number((trailDistancePips * 0.2).toFixed(1)));
+
+  return {
+    trailingStop: userHasTierFeature(user, 'trailingStop'),
+    breakEven: userHasTierFeature(user, 'breakEvenAutomation'),
+    trailDistancePips,
+    trailStepPips,
+    breakEvenTriggerR: 1,
+    breakEvenOffsetPips: 2
+  };
 }
 
 async function findSignalById(signalId) {
@@ -182,14 +232,20 @@ async function createExecution(user, signalDoc) {
   }
 
   let lotSize = computeLotSize(signal, user);
-  if ((!lotSize || lotSize <= 0) && userHasTierFeature(user, 'autoLotSizing')) {
-    lotSize = 0.01;
-  }
   if (!lotSize || lotSize <= 0) {
+    if (userHasTierFeature(user, 'autoLotSizing')) {
+      return {
+        ok: false,
+        reason: 'lot_size_unavailable',
+        message:
+          'Premium auto lot sizing needs a synced MT5 balance. Keep the EA running so SyncAccount can update your balance.'
+      };
+    }
     return { ok: false, reason: 'lot_size_unavailable' };
   }
 
   const stopLoss = Number(signal.stop_loss_1 ?? signal.stop_loss);
+  const management = buildTradeManagementParams(signal, user);
   const payload = {
     userId,
     signalId,
@@ -204,8 +260,7 @@ async function createExecution(user, signalDoc) {
     lotSize: Number(lotSize.toFixed(2)),
     riskPercent: Number(mt5.riskPercent || 1),
     accountBalance: Number(mt5.accountBalance || 0) || null,
-    trailingStop: userHasTierFeature(user, 'trailingStop'),
-    breakEven: userHasTierFeature(user, 'breakEvenAutomation'),
+    ...management,
     status: 'pending',
     source: 'telegram'
   };
@@ -243,6 +298,19 @@ async function getPendingExecutions(token) {
       .sort({ createdAt: 1 })
       .limit(10)
       .lean();
+
+    // Claim immediately so a slow report cannot double-fill on the next poll.
+    if (items.length > 0) {
+      const ids = items.map(t => t._id);
+      await TradeExecution.updateMany(
+        { _id: { $in: ids }, status: 'pending' },
+        { $set: { status: 'sent' } }
+      );
+      items.forEach(t => {
+        t.status = 'sent';
+      });
+    }
+
     return { ok: true, userId, trades: items };
   }
 
@@ -250,6 +318,12 @@ async function getPendingExecutions(token) {
     .filter(e => e.userId === userId && e.status === 'pending')
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     .slice(0, 10);
+
+  for (const trade of trades) {
+    const updated = { ...trade, status: 'sent' };
+    devExecutions.set(trade._id, updated);
+    trade.status = 'sent';
+  }
 
   return { ok: true, userId, trades };
 }
@@ -318,11 +392,15 @@ async function getPublicStatus(user) {
 
   return {
     featureEnabled,
+    autoLotSizing: userHasTierFeature(user, 'autoLotSizing'),
+    trailingStop: userHasTierFeature(user, 'trailingStop'),
+    breakEvenAutomation: userHasTierFeature(user, 'breakEvenAutomation'),
     linked: Boolean(mt5.linkToken),
     enabled: mt5.enabled !== false,
     accountBalance: mt5.accountBalance,
     accountCurrency: mt5.accountCurrency || 'USD',
     riskPercent: mt5.riskPercent ?? 1,
+    fixedLotSize: mt5.fixedLotSize ?? 0.01,
     symbolSuffix: mt5.symbolSuffix || '',
     lastSyncAt: mt5.lastSyncAt,
     linkedAt: mt5.linkedAt,
@@ -354,5 +432,6 @@ module.exports = {
   getPublicStatus,
   formatExecutionSummary,
   computeLotSize,
+  buildTradeManagementParams,
   findUserByMt5Token
 };

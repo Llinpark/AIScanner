@@ -1,7 +1,13 @@
 const mongoose = require('mongoose');
 const Signal = require('../models/Signal');
 const UserConfig = require('../models/User');
-const { userCanAccessLiveAlerts, getEffectiveSubscription } = require('../utils/subscriptionAccess');
+const {
+  userCanAccessLiveAlerts,
+  getEffectiveSubscription,
+  isTradingViewSymbolAllowed,
+  isTradingViewTimeframeAllowed,
+  sanitizeSignalForTier
+} = require('../utils/subscriptionAccess');
 const devUserStore = require('../utils/devUserStore');
 const {
   KACHING_ALERT_NAMES,
@@ -80,6 +86,7 @@ function toLiveAlertPayload(signalDoc) {
   const signal = signalDoc.toObject ? signalDoc.toObject() : signalDoc;
   return {
     id: signal._id,
+    _id: signal._id,
     alertType: signal.alertType || 'signal',
     symbol: signal.symbol,
     direction: signal.direction,
@@ -106,8 +113,34 @@ function toLiveAlertPayload(signalDoc) {
     mt5Sent: Boolean(signal.mt5Sent),
     userId: signal.userId,
     createdAt: signal.createdAt,
+    pattern: signal.pattern || null,
+    patternLabel: signal.patternLabel || signal.pattern_label || null,
+    gapTop: signal.gapTop,
+    gapBottom: signal.gapBottom,
+    chartZones: signal.chartZones,
+    orderBlockTop: signal.orderBlockTop,
+    orderBlockBottom: signal.orderBlockBottom,
+    orderBlockTimeStart: signal.orderBlockTimeStart,
+    orderBlockTimeEnd: signal.orderBlockTimeEnd,
+    liquidityZoneTop: signal.liquidityZoneTop,
+    liquidityZoneBottom: signal.liquidityZoneBottom,
+    liquidityTimeStart: signal.liquidityTimeStart,
+    liquidityTimeEnd: signal.liquidityTimeEnd,
     message: formatLiveAlertMessage(signal)
   };
+}
+
+/** TV webhook distribution: any sanitized instrument for entitled subscribers (chart = source of truth). */
+function subscriberAllowsSignal(subscriber, signalData) {
+  if (!subscriber?.subscription) return false;
+  if (!isTradingViewSymbolAllowed(signalData.symbol, subscriber.subscription)) return false;
+  if (
+    signalData.timeframe &&
+    !isTradingViewTimeframeAllowed(signalData.timeframe, subscriber.subscription)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function toSubscriberRecord(user) {
@@ -131,7 +164,23 @@ async function findActiveSubscribers() {
   }
 
   try {
-    const users = await UserConfig.find({});
+    const now = new Date();
+    // Avoid UserConfig.find({}) — only admins + active (non-expired) subscribers.
+    const users = await UserConfig.find({
+      $or: [
+        { role: { $in: ['admin', 'super_admin'] } },
+        {
+          'subscription.status': 'active',
+          $or: [
+            { 'subscription.current_period_end': null },
+            { 'subscription.current_period_end': { $exists: false } },
+            { 'subscription.current_period_end': { $gt: now } }
+          ]
+        }
+      ]
+    })
+      .select('email displayName subscription telegram mt5 role')
+      .lean();
     return users.map(toSubscriberRecord).filter(Boolean);
   } catch (error) {
     console.warn('[Alerts] findActiveSubscribers fallback:', error.message);
@@ -140,6 +189,32 @@ async function findActiveSubscribers() {
       .map(toSubscriberRecord)
       .filter(Boolean);
   }
+}
+
+const FANOUT_CONCURRENCY = Math.max(
+  1,
+  Math.min(32, Number(process.env.TV_FANOUT_CONCURRENCY || 8))
+);
+
+/** Bounded parallel fan-out — Telegram/MT5 are independent per subscriber. */
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (true) {
+      const i = nextIndex;
+      nextIndex += 1;
+      if (i >= items.length) return;
+      results[i] = await mapper(items[i], i);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, Math.max(items.length, 1)) }, () =>
+    worker()
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 async function saveSignal(signalData, inMemorySignals) {
@@ -214,35 +289,51 @@ async function deliverLiveAlert(io, signalDoc, subscriber = null) {
     }).catch(err => console.warn('[Alerts] delivery status update failed:', err.message));
   }
 
-  const payload = toLiveAlertPayload(enrichedDoc);
+  const forClient = subscriber?.subscription
+    ? sanitizeSignalForTier(enrichedDoc, subscriber.subscription)
+    : enrichedDoc;
+  const payload = toLiveAlertPayload(forClient);
 
   if (payload.userId) {
+    // Per-user room only — avoids leaking Premium SMC / pair data to other tiers.
     io.to(`user:${payload.userId}`).emit('tv:live-alert', payload);
+    io.to(`user:${payload.userId}`).emit('signal:update', forClient);
+  } else {
+    io.emit('tv:live-alert', payload);
+    io.emit('signal:update', forClient);
   }
-
-  io.emit('signal:update', enrichedDoc);
 
   return payload;
 }
 
 async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
   const results = [];
+  const signalData = savedSignal.toObject ? savedSignal.toObject() : savedSignal;
+  const eligible = subscribers.filter(sub => subscriberAllowsSignal(sub, signalData));
 
-  if (subscribers.length === 0) {
-    await deliverLiveAlert(io, savedSignal);
-    return { delivered: 0, subscribers: [] };
+  if (eligible.length === 0) {
+    if (subscribers.length === 0) {
+      await deliverLiveAlert(io, savedSignal);
+    }
+    return { delivered: 0, subscribers: [], skippedByEntitlement: subscribers.length };
   }
 
-  for (const subscriber of subscribers) {
+  const settled = await mapWithConcurrency(eligible, FANOUT_CONCURRENCY, async subscriber => {
     await deliverLiveAlert(io, savedSignal, subscriber);
-    results.push({ userId: subscriber.id, email: subscriber.email });
-  }
+    return { userId: subscriber.id, email: subscriber.email };
+  });
+  results.push(...settled.filter(Boolean));
 
-  return { delivered: results.length, subscribers: results };
+  return {
+    delivered: results.length,
+    subscribers: results,
+    skippedByEntitlement: subscribers.length - eligible.length
+  };
 }
 
 async function broadcastToSubscribers(io, signalData, inMemorySignals = [], options = {}) {
   const subscribers = await findActiveSubscribers();
+  const eligible = subscribers.filter(sub => subscriberAllowsSignal(sub, signalData));
 
   if (options.existingSaved) {
     const delivery = await deliverBroadcastToSubscribers(io, options.existingSaved, subscribers);
@@ -251,13 +342,21 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
 
   const results = [];
 
-  if (subscribers.length === 0) {
+  if (eligible.length === 0) {
+    // Still persist one broadcast record for audit when nobody is entitled.
     const saved = await saveSignal({ ...signalData, isBroadcast: true }, inMemorySignals);
-    await deliverLiveAlert(io, saved);
-    return { delivered: 0, subscribers: [], broadcastSaved: true };
+    if (subscribers.length === 0) {
+      await deliverLiveAlert(io, saved);
+    }
+    return {
+      delivered: 0,
+      subscribers: [],
+      broadcastSaved: true,
+      skippedByEntitlement: subscribers.length
+    };
   }
 
-  for (const subscriber of subscribers) {
+  const settled = await mapWithConcurrency(eligible, FANOUT_CONCURRENCY, async subscriber => {
     const mt5 = subscriber.mt5 || {};
     const basePayload = { ...signalData, userId: subscriber.id, isBroadcast: true };
 
@@ -275,10 +374,16 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
     const saved = await saveSignal(enriched, inMemorySignals);
 
     await deliverLiveAlert(io, saved, subscriber);
-    results.push({ userId: subscriber.id, email: subscriber.email });
-  }
+    return { userId: subscriber.id, email: subscriber.email };
+  });
+  results.push(...settled.filter(Boolean));
 
-  return { delivered: results.length, subscribers: results, broadcastSaved: true };
+  return {
+    delivered: results.length,
+    subscribers: results,
+    broadcastSaved: true,
+    skippedByEntitlement: subscribers.length - eligible.length
+  };
 }
 
 function buildSignalData(body) {
@@ -354,7 +459,7 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
 
   console.log(
     `[TV Webhook] Published ${signalData.alertType} ${signalData.symbol} ` +
-      `(publish-only, delivered=${delivery.delivered}, no market-data fetch)`
+      `(publish-only, delivered=${delivery.delivered}, skipped=${delivery.skippedByEntitlement || 0}, no market-data fetch)`
   );
 
   return {
@@ -382,6 +487,7 @@ module.exports = {
   formatLiveAlertMessage,
   toLiveAlertPayload,
   findActiveSubscribers,
+  subscriberAllowsSignal,
   saveSignal,
   deliverLiveAlert,
   broadcastToSubscribers,

@@ -1,6 +1,121 @@
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { analyticsApi } from '../../services/api';
-import { SignalHistoryRow } from './RiskAnalysisCard';
+import OutcomeBadge from './RiskAnalysisCard';
+import {
+  formatConfidence,
+  formatDeliveryStatus,
+  formatExecutionStatus,
+  formatSignalSource,
+  formatStrategyName,
+  isInsightsSignal
+} from '../../utils/insightsSignal';
+
+const HISTORY_COLUMNS = [
+  { key: 'time', label: 'Time' },
+  { key: 'symbol', label: 'Symbol' },
+  { key: 'timeframe', label: 'Timeframe' },
+  { key: 'direction', label: 'Direction' },
+  { key: 'strategy', label: 'Strategy' },
+  { key: 'source', label: 'Source' },
+  { key: 'outcome', label: 'Outcome' },
+  { key: 'confidence', label: 'Confidence' },
+  { key: 'execution', label: 'Execution Status' },
+  { key: 'delivery', label: 'Delivery Status' },
+  { key: 'journal', label: 'Journal' }
+];
+
+const SignalHistoryCard = memo(function SignalHistoryCard({ signal, tierLimits, onAddToJournal }) {
+  const strategy = formatStrategyName(signal);
+  const source = formatSignalSource(signal);
+  const delivery = formatDeliveryStatus(signal);
+  const execution = formatExecutionStatus(signal);
+  const time = signal.createdAt ? new Date(signal.createdAt).toLocaleString() : '—';
+
+  return (
+    <article className="insights-signal-card">
+      <div className="insights-signal-card-top">
+        <div>
+          <strong className="insights-signal-symbol">{signal.symbol}</strong>
+          <span className={`insights-dir insights-dir-${signal.direction || 'long'}`}>
+            {(signal.direction || '—').toUpperCase()}
+          </span>
+        </div>
+        <OutcomeBadge outcome={signal.outcome} tradeStatus={signal.tradeStatus} />
+      </div>
+
+      <dl className="insights-signal-meta">
+        <div>
+          <dt>Time</dt>
+          <dd>{time}</dd>
+        </div>
+        <div>
+          <dt>Timeframe</dt>
+          <dd>{signal.timeframe || '1h'}</dd>
+        </div>
+        <div>
+          <dt>Strategy</dt>
+          <dd>{strategy}</dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>{source}</dd>
+        </div>
+        <div>
+          <dt>Confidence</dt>
+          <dd>{formatConfidence(signal, tierLimits.showConfidence)}</dd>
+        </div>
+        <div>
+          <dt>Execution</dt>
+          <dd className="insights-status-text">{execution}</dd>
+        </div>
+        <div>
+          <dt>Delivery</dt>
+          <dd className="insights-status-text">{delivery}</dd>
+        </div>
+      </dl>
+
+      {tierLimits.tradeJournal && onAddToJournal && (
+        <button type="button" className="btn-small insights-journal-btn" onClick={() => onAddToJournal(signal)}>
+          + Journal
+        </button>
+      )}
+    </article>
+  );
+});
+
+const SignalHistoryRow = memo(function SignalHistoryRow({ signal, tierLimits, onAddToJournal }) {
+  const strategy = formatStrategyName(signal);
+  const source = formatSignalSource(signal);
+  const delivery = formatDeliveryStatus(signal);
+  const execution = formatExecutionStatus(signal);
+  const time = signal.createdAt ? new Date(signal.createdAt).toLocaleString() : '—';
+
+  return (
+    <tr>
+      <td data-label="Time">{time}</td>
+      <td data-label="Symbol">{signal.symbol}</td>
+      <td data-label="Timeframe">{signal.timeframe || '1h'}</td>
+      <td data-label="Direction">{(signal.direction || '—').toUpperCase()}</td>
+      <td data-label="Strategy">{strategy}</td>
+      <td data-label="Source">{source}</td>
+      <td data-label="Outcome">
+        <OutcomeBadge outcome={signal.outcome} tradeStatus={signal.tradeStatus} />
+      </td>
+      <td data-label="Confidence">{formatConfidence(signal, tierLimits.showConfidence)}</td>
+      <td data-label="Execution Status">{execution}</td>
+      <td data-label="Delivery Status">{delivery}</td>
+      <td data-label="Journal">
+        {tierLimits.tradeJournal && onAddToJournal ? (
+          <button type="button" className="btn-small" onClick={() => onAddToJournal(signal)}>
+            + Journal
+          </button>
+        ) : (
+          '—'
+        )}
+      </td>
+    </tr>
+  );
+});
 
 export default function SignalHistory({ tierLimits, onAddToJournal }) {
   const [signals, setSignals] = useState([]);
@@ -25,7 +140,8 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
         limit: 15,
         ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v))
       });
-      setSignals(res.data.signals || []);
+      const list = (res.data.signals || []).filter(isInsightsSignal);
+      setSignals(list);
       setTotalPages(res.data.totalPages || 1);
       setTotal(res.data.total || 0);
     } catch (err) {
@@ -46,11 +162,19 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
     loadHistory();
   };
 
+  const historyDays = tierLimits.historyDays || 7;
+  const emptyMessage = useMemo(
+    () => (loading ? 'Loading…' : 'No TradingView signals match your filters.'),
+    [loading]
+  );
+
   return (
     <div className="insights-section">
       <div className="insights-section-header">
         <h3>Signal History</h3>
-        <p>{total} signals in your plan window ({tierLimits.historyDays || 7} days)</p>
+        <p>
+          {total} webhook signals in your plan window ({historyDays} days)
+        </p>
       </div>
 
       <form className="history-filters" onSubmit={applyFilters}>
@@ -59,13 +183,22 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
           placeholder="Symbol"
           value={filters.symbol}
           onChange={e => setFilters(f => ({ ...f, symbol: e.target.value }))}
+          aria-label="Filter by symbol"
         />
-        <select value={filters.direction} onChange={e => setFilters(f => ({ ...f, direction: e.target.value }))}>
+        <select
+          value={filters.direction}
+          onChange={e => setFilters(f => ({ ...f, direction: e.target.value }))}
+          aria-label="Filter by direction"
+        >
           <option value="">All directions</option>
           <option value="long">Long</option>
           <option value="short">Short</option>
         </select>
-        <select value={filters.outcome} onChange={e => setFilters(f => ({ ...f, outcome: e.target.value }))}>
+        <select
+          value={filters.outcome}
+          onChange={e => setFilters(f => ({ ...f, outcome: e.target.value }))}
+          aria-label="Filter by outcome"
+        >
           <option value="">All outcomes</option>
           <option value="pending">Open</option>
           <option value="tp1">TP1</option>
@@ -73,7 +206,11 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
           <option value="tp3">TP3</option>
           <option value="sl">SL</option>
         </select>
-        <select value={filters.alertType} onChange={e => setFilters(f => ({ ...f, alertType: e.target.value }))}>
+        <select
+          value={filters.alertType}
+          onChange={e => setFilters(f => ({ ...f, alertType: e.target.value }))}
+          aria-label="Filter by alert type"
+        >
           <option value="">All alert types</option>
           <option value="entry">Entry</option>
           <option value="stop_loss">Stop Loss</option>
@@ -88,30 +225,35 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
 
       {error && <div className="feature-lock">{error}</div>}
 
+      <div className="insights-history-cards" aria-live="polite">
+        {signals.length === 0 ? (
+          <div className="insights-empty">{emptyMessage}</div>
+        ) : (
+          signals.map(signal => (
+            <SignalHistoryCard
+              key={signal._id || `${signal.symbol}-${signal.createdAt}`}
+              signal={signal}
+              tierLimits={tierLimits}
+              onAddToJournal={onAddToJournal}
+            />
+          ))
+        )}
+      </div>
+
       <div className="history-table insights-history-table">
         <table>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Symbol</th>
-              <th>Dir</th>
-              <th>Timeframe</th>
-              <th>Signal Source</th>
-              <th>Strategy</th>
-              <th>Outcome</th>
-              <th>Execution</th>
-              <th>Delivery</th>
-              <th>R</th>
-              <th>Conf.</th>
-              <th>Levels</th>
-              <th>Journal</th>
+              {HISTORY_COLUMNS.map(col => (
+                <th key={col.key}>{col.label}</th>
+              ))}
             </tr>
           </thead>
           <tbody>
             {signals.length === 0 ? (
               <tr>
-                <td colSpan={13} className="empty-cell">
-                  {loading ? 'Loading…' : 'No signals match your filters.'}
+                <td colSpan={HISTORY_COLUMNS.length} className="empty-cell">
+                  {emptyMessage}
                 </td>
               </tr>
             ) : (

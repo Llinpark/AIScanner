@@ -108,6 +108,18 @@ function verifyGlobalWebhookSecret(req, body) {
 }
 
 async function verifyTradingViewWebhook(req, resolveUserById) {
+  /**
+   * Auth order (harden server-side without mass-breaking Pine scripts):
+   * 1) HMAC body signature (x-kaching-signature) — preferred for server-to-server
+   * 2) Per-user licenseToken (kls_v1.*) — preferred for TradingView alert JSON
+   * 3) Legacy global TRADINGVIEW_WEBHOOK_SECRET — disabled in production unless
+   *    ALLOW_LEGACY_WEBHOOK_SECRET=true
+   *
+   * Rotation: rotate WEBHOOK_SIGNING_SECRET carefully — regenerating signing secret
+   * invalidates all existing licenseTokens; users must re-copy Pine / alert JSON.
+   * Prefer rotating TRADINGVIEW_WEBHOOK_SECRET first (legacy only), then schedule
+   * license re-issue. Auth failures are rate-limited in server.js.
+   */
   const body = parseWebhookBody(req);
   const rawBody = req.rawBody || Buffer.from(JSON.stringify(body), 'utf8');
   const bodyUserId = body.userId || body.user_id;

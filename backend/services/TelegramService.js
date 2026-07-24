@@ -326,7 +326,7 @@ async function handleCommand(chatId, text, fromUsername) {
       if (linked.ok) {
         await sendMessage(
           chatId,
-          `✅ Linked to <b>${escapeHtml(linked.email)}</b>.\nYou will receive Kaching trade alerts here. Premium users can tap <b>Execute on MT5</b> to copy trades automatically.`
+          `✅ Linked to <b>${escapeHtml(linked.email)}</b>.\nYou will receive Kaching trade alerts here. Pro and Premium users can tap <b>Execute on MT5</b> to copy trades automatically.`
         );
         return;
       }
@@ -341,8 +341,9 @@ async function handleCommand(chatId, text, fromUsername) {
         '',
         '1. Open KachingScanner → TradingView Setup → Telegram',
         '2. Generate a link code and send <code>/link YOUR_CODE</code> here',
-        '3. Premium: install the MT5 EA and generate a link token in the dashboard',
-        '4. When a signal arrives, tap <b>Execute on MT5</b> — entry, SL, TP, and lot size are filled for you'
+        '3. Pro/Premium: install the MT5 EA and generate a link token in the dashboard',
+        '4. When a signal arrives, tap <b>Execute on MT5</b> — entry, SL, TP, and lot size are filled for you',
+        '5. Premium: auto lot sizing uses your synced MT5 balance + risk %'
       ].join('\n')
     );
     return;
@@ -392,7 +393,7 @@ async function handleCommand(chatId, text, fromUsername) {
         `Telegram: ${status.linked ? 'linked' : 'not linked'} (${status.enabled ? 'alerts on' : 'alerts off'})`,
         mt5Status.featureEnabled
           ? `MT5: ${mt5Status.linked ? 'EA linked' : 'EA not linked'}${mt5Status.accountBalance ? ` | Balance: ${mt5Status.accountBalance} ${mt5Status.accountCurrency}` : ''}`
-          : 'MT5 execution: upgrade to Premium'
+          : 'MT5 execution: upgrade to Pro or Premium'
       ].join('\n')
     );
     return;
@@ -409,7 +410,8 @@ async function handleCommand(chatId, text, fromUsername) {
         '/help — show this message',
         '',
         '<b>Trade Copier</b>',
-        'Premium users: link the MT5 EA in the dashboard, then tap Execute on any entry alert.'
+        'Pro/Premium: link the MT5 EA in the dashboard, then tap Execute on any entry alert.',
+        'Premium auto lot sizing needs the EA running so account balance stays synced.'
       ].join('\n')
     );
   }
@@ -447,10 +449,10 @@ async function handleExecuteCallback(callbackQuery) {
 
   if (!result.ok) {
     const messages = {
-      subscription_required: 'MT5 execution requires Premium.',
+      subscription_required: 'MT5 execution requires Pro or Premium.',
       mt5_not_linked: 'Link the MT5 EA in your dashboard first.',
       mt5_disabled: 'MT5 trade copier is paused in your dashboard.',
-      lot_size_unavailable: 'Sync your MT5 balance via the EA first.',
+      lot_size_unavailable: 'Premium: sync MT5 balance via the EA first. Pro: set a fixed lot size in the dashboard.',
       already_queued: 'This trade is already queued or executed.',
       not_entry_signal: 'Only entry signals can be executed.',
       signal_not_found: 'Signal expired or not found.'

@@ -160,8 +160,13 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             placeholder="Symbol"
             value={form.symbol}
             onChange={e => setForm(f => ({ ...f, symbol: e.target.value }))}
+            aria-label="Symbol"
           />
-          <select value={form.direction} onChange={e => setForm(f => ({ ...f, direction: e.target.value }))}>
+          <select
+            value={form.direction}
+            onChange={e => setForm(f => ({ ...f, direction: e.target.value }))}
+            aria-label="Direction"
+          >
             <option value="long">Long</option>
             <option value="short">Short</option>
           </select>
@@ -171,6 +176,7 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             placeholder="Entry"
             value={form.entry}
             onChange={e => setForm(f => ({ ...f, entry: e.target.value }))}
+            aria-label="Entry"
           />
           <input
             type="number"
@@ -178,6 +184,7 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             placeholder="Exit"
             value={form.exit}
             onChange={e => setForm(f => ({ ...f, exit: e.target.value }))}
+            aria-label="Exit"
           />
           <input
             type="number"
@@ -185,8 +192,13 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             placeholder="Lot size"
             value={form.lotSize}
             onChange={e => setForm(f => ({ ...f, lotSize: e.target.value }))}
+            aria-label="Lot size"
           />
-          <select value={form.outcome} onChange={e => setForm(f => ({ ...f, outcome: e.target.value }))}>
+          <select
+            value={form.outcome}
+            onChange={e => setForm(f => ({ ...f, outcome: e.target.value }))}
+            aria-label="Outcome"
+          >
             <option value="open">Open</option>
             <option value="win">Win</option>
             <option value="loss">Loss</option>
@@ -198,6 +210,7 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             placeholder="Outcome R"
             value={form.outcomeR}
             onChange={e => setForm(f => ({ ...f, outcomeR: e.target.value }))}
+            aria-label="Outcome R"
           />
           <input
             type="number"
@@ -205,27 +218,31 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
             placeholder="PnL"
             value={form.pnl}
             onChange={e => setForm(f => ({ ...f, pnl: e.target.value }))}
+            aria-label="PnL"
           />
           <select
             value={form.tradeRating}
             onChange={e => setForm(f => ({ ...f, tradeRating: e.target.value }))}
+            aria-label="Trade rating"
           >
             <option value="">Trade rating</option>
-            <option value="1">1 · Poor</option>
-            <option value="2">2</option>
-            <option value="3">3 · OK</option>
-            <option value="4">4</option>
-            <option value="5">5 · Excellent</option>
+            <option value="1">Poor</option>
+            <option value="2">Fair</option>
+            <option value="3">Good</option>
+            <option value="4">Very Good</option>
+            <option value="5">Excellent</option>
           </select>
           <input
             placeholder="Emotion"
             value={form.emotion}
             onChange={e => setForm(f => ({ ...f, emotion: e.target.value }))}
+            aria-label="Emotion"
           />
           <input
             placeholder="Screenshot URL"
             value={form.screenshotUrl}
             onChange={e => setForm(f => ({ ...f, screenshotUrl: e.target.value }))}
+            aria-label="Screenshot URL"
           />
         </div>
         <textarea
@@ -233,18 +250,21 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
           value={form.userNotes}
           onChange={e => setForm(f => ({ ...f, userNotes: e.target.value }))}
           rows={2}
+          aria-label="User notes"
         />
         <textarea
           placeholder="Lessons learned"
           value={form.lessonsLearned}
           onChange={e => setForm(f => ({ ...f, lessonsLearned: e.target.value }))}
           rows={2}
+          aria-label="Lessons learned"
         />
         <textarea
           placeholder="Execution notes"
           value={form.executionNotes}
           onChange={e => setForm(f => ({ ...f, executionNotes: e.target.value }))}
           rows={2}
+          aria-label="Execution notes"
         />
         <div className="journal-form-actions">
           <button type="submit" className="btn-fetch" disabled={saving}>
@@ -268,53 +288,113 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
       {loading ? (
         <div className="loading-state">Loading journal…</div>
       ) : (
-        <div className="history-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Symbol</th>
-                <th>Dir</th>
-                <th>Rating</th>
-                <th>Emotion</th>
-                <th>Outcome</th>
-                <th>R</th>
-                <th>Notes</th>
-                <th>Lessons</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.length === 0 ? (
+        <>
+          <div className="insights-journal-cards">
+            {entries.length === 0 ? (
+              <div className="insights-empty">No journal entries yet.</div>
+            ) : (
+              entries.map(entry => (
+                <article key={entry._id} className="insights-journal-card">
+                  <div className="insights-journal-card-top">
+                    <strong>{entry.symbol}</strong>
+                    <span>{(entry.direction || '—').toUpperCase()}</span>
+                    <span className="insights-journal-outcome">{entry.outcome}</span>
+                  </div>
+                  <dl className="insights-signal-meta">
+                    <div>
+                      <dt>Rating</dt>
+                      <dd>{entry.tradeRating ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Emotion</dt>
+                      <dd>{entry.emotion || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>R</dt>
+                      <dd>{entry.outcomeR != null ? `${entry.outcomeR}R` : '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Notes</dt>
+                      <dd>{entry.userNotes || entry.notes || '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Lessons</dt>
+                      <dd>{entry.lessonsLearned || '—'}</dd>
+                    </div>
+                  </dl>
+                  <div className="insights-journal-card-actions">
+                    <button type="button" className="btn-small" onClick={() => startEdit(entry)}>
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-small btn-danger"
+                      onClick={() => handleDelete(entry._id)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+
+          <div className="history-table insights-journal-table">
+            <table>
+              <thead>
                 <tr>
-                  <td colSpan={9} className="empty-cell">
-                    No journal entries yet.
-                  </td>
+                  <th>Symbol</th>
+                  <th>Dir</th>
+                  <th>Rating</th>
+                  <th>Emotion</th>
+                  <th>Outcome</th>
+                  <th>R</th>
+                  <th>Notes</th>
+                  <th>Lessons</th>
+                  <th></th>
                 </tr>
-              ) : (
-                entries.map(entry => (
-                  <tr key={entry._id}>
-                    <td>{entry.symbol}</td>
-                    <td>{entry.direction?.toUpperCase()}</td>
-                    <td>{entry.tradeRating ?? '—'}</td>
-                    <td>{entry.emotion || '—'}</td>
-                    <td>{entry.outcome}</td>
-                    <td>{entry.outcomeR != null ? `${entry.outcomeR}R` : '—'}</td>
-                    <td className="notes-cell">{entry.userNotes || entry.notes}</td>
-                    <td className="notes-cell">{entry.lessonsLearned || '—'}</td>
-                    <td className="actions-cell">
-                      <button type="button" className="btn-small" onClick={() => startEdit(entry)}>
-                        Edit
-                      </button>
-                      <button type="button" className="btn-small btn-danger" onClick={() => handleDelete(entry._id)}>
-                        Delete
-                      </button>
+              </thead>
+              <tbody>
+                {entries.length === 0 ? (
+                  <tr>
+                    <td colSpan={9} className="empty-cell">
+                      No journal entries yet.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  entries.map(entry => (
+                    <tr key={entry._id}>
+                      <td data-label="Symbol">{entry.symbol}</td>
+                      <td data-label="Dir">{entry.direction?.toUpperCase()}</td>
+                      <td data-label="Rating">{entry.tradeRating ?? '—'}</td>
+                      <td data-label="Emotion">{entry.emotion || '—'}</td>
+                      <td data-label="Outcome">{entry.outcome}</td>
+                      <td data-label="R">{entry.outcomeR != null ? `${entry.outcomeR}R` : '—'}</td>
+                      <td data-label="Notes" className="notes-cell">
+                        {entry.userNotes || entry.notes}
+                      </td>
+                      <td data-label="Lessons" className="notes-cell">
+                        {entry.lessonsLearned || '—'}
+                      </td>
+                      <td className="actions-cell">
+                        <button type="button" className="btn-small" onClick={() => startEdit(entry)}>
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="btn-small btn-danger"
+                          onClick={() => handleDelete(entry._id)}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
     </div>
   );

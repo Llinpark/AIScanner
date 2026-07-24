@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { analyticsApi } from '../../services/api';
 
-function EquityChart({ points }) {
+const EquityChart = memo(function EquityChart({ points }) {
   if (!points?.length) {
     return <div className="chart-empty">Close trades to build an equity curve.</div>;
   }
@@ -31,10 +31,10 @@ function EquityChart({ points }) {
       </div>
     </div>
   );
-}
+});
 
-function BarChart({ rows, valueKey, labelKey }) {
-  if (!rows?.length) return null;
+const BarChart = memo(function BarChart({ rows, valueKey, labelKey }) {
+  if (!rows?.length) return <div className="chart-empty">No data yet.</div>;
   const max = Math.max(...rows.map(r => r[valueKey] || 0), 1);
 
   return (
@@ -50,6 +50,14 @@ function BarChart({ rows, valueKey, labelKey }) {
       ))}
     </div>
   );
+});
+
+function formatHoldTime(ms) {
+  if (ms == null) return '—';
+  const hours = Math.round(ms / 3600000);
+  if (hours < 1) return `${Math.max(1, Math.round(ms / 60000))}m`;
+  if (hours < 48) return `${hours}h`;
+  return `${Math.round(hours / 24)}d`;
 }
 
 export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
@@ -64,14 +72,38 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
       return;
     }
 
+    let cancelled = false;
     Promise.all([analyticsApi.getSummary(), analyticsApi.getTimeseries()])
       .then(([summaryRes, tsRes]) => {
+        if (cancelled) return;
         setSummary(summaryRes.data);
         setTimeseries(tsRes.data);
       })
-      .catch(err => setError(err.response?.data?.message || 'Failed to load analytics.'))
-      .finally(() => setLoading(false));
+      .catch(err => {
+        if (!cancelled) setError(err.response?.data?.message || 'Failed to load analytics.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [tierLimits.performanceDashboard]);
+
+  const equityPoints = useMemo(
+    () => timeseries?.equityCurve || summary?.equityCurve || [],
+    [timeseries, summary]
+  );
+
+  const strategyRows = useMemo(() => {
+    const fromSummary = summary?.byStrategy || [];
+    if (fromSummary.length) return fromSummary;
+    return (summary?.patternStats || timeseries?.patternStats || []).map(row => ({
+      ...row,
+      label: row.label || row.pattern || row.key
+    }));
+  }, [summary, timeseries]);
 
   if (!tierLimits.performanceDashboard) {
     return (
@@ -94,7 +126,7 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
     <div className="insights-section">
       <div className="insights-section-header">
         <h3>Signal Performance</h3>
-        <p>Win rate, R multiples, and breakdowns by pair, timeframe, strategy, and session</p>
+        <p>Win rate, R multiples, and breakdowns for TradingView webhook signals</p>
       </div>
 
       <div className="analytics-grid">
@@ -121,23 +153,19 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
           <strong>{summary.totalR}R</strong>
         </div>
         <div className="analytics-stat">
-          <span>Avg R / trade</span>
+          <span>Avg R</span>
           <strong>{summary.avgR}R</strong>
         </div>
         <div className="analytics-stat">
           <span>Avg hold time</span>
-          <strong>
-            {summary.avgHoldTimeMs != null
-              ? `${Math.round(summary.avgHoldTimeMs / 3600000)}h`
-              : '—'}
-          </strong>
+          <strong>{formatHoldTime(summary.avgHoldTimeMs)}</strong>
         </div>
       </div>
 
       <div className="analytics-panels">
         <div className="analytics-panel">
           <h4>Equity curve (R multiples)</h4>
-          <EquityChart points={timeseries?.equityCurve || summary.equityCurve || []} />
+          <EquityChart points={equityPoints} />
         </div>
 
         <div className="analytics-panel">
@@ -151,7 +179,7 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
 
         <div className="analytics-panel">
           <h4>By strategy</h4>
-          <BarChart rows={summary.byStrategy || []} valueKey="winRate" labelKey="label" />
+          <BarChart rows={strategyRows} valueKey="winRate" labelKey="label" />
         </div>
 
         <div className="analytics-panel">
@@ -174,12 +202,12 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
           <BarChart rows={summary.confidenceVsWinRate || []} valueKey="winRate" labelKey="bucket" />
         </div>
 
-        <div className="analytics-panel">
-          <h4>Strategy / pattern performance</h4>
-          {(summary.patternStats || timeseries?.patternStats || []).length === 0 ? (
+        <div className="analytics-panel analytics-panel--table">
+          <h4>Strategy performance</h4>
+          {strategyRows.length === 0 ? (
             <div className="chart-empty">No closed strategy trades yet.</div>
           ) : (
-            <div className="pattern-stats-table">
+            <div className="pattern-stats-table insights-stats-table">
               <table>
                 <thead>
                   <tr>
@@ -190,12 +218,12 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {(summary.patternStats || timeseries?.patternStats || []).map(row => (
-                    <tr key={row.pattern || row.key}>
-                      <td>{row.label || row.pattern}</td>
-                      <td>{row.total}</td>
-                      <td>{row.winRate}%</td>
-                      <td>{row.avgR}R</td>
+                  {strategyRows.map(row => (
+                    <tr key={row.key || row.pattern || row.label}>
+                      <td data-label="Strategy">{row.label || row.pattern}</td>
+                      <td data-label="Trades">{row.total}</td>
+                      <td data-label="Win rate">{row.winRate}%</td>
+                      <td data-label="Avg R">{row.avgR}R</td>
                     </tr>
                   ))}
                 </tbody>

@@ -19,6 +19,7 @@ import AdminHub from './admin/AdminHub';
 import SeoHead from './components/SeoHead';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
+import { isInsightsSignal } from './utils/insightsSignal';
 import { storeReferralCode } from './utils/referralStorage';
 import { pageFromPath, pathForPage } from './seo/routes';
 import { usePathRouting } from './seo/usePathRouting';
@@ -50,7 +51,7 @@ function AppContent() {
   useEffect(() => {
     if (!isAuthenticated) return;
     fetchSignals()
-      .then(setSignals)
+      .then(data => setSignals(Array.isArray(data) ? data.filter(isInsightsSignal) : []))
       .catch(err => console.error('Error fetching signals:', err.message));
   }, [isAuthenticated]);
 

@@ -25,6 +25,8 @@ const UserConfigSchema = new mongoose.Schema({
     accountBalance: { type: Number, default: null },
     accountCurrency: { type: String, default: 'USD' },
     riskPercent: { type: Number, default: 1 },
+    /** Used when autoLotSizing is off (Pro): fixed volume per trade. */
+    fixedLotSize: { type: Number, default: 0.01 },
     symbolSuffix: { type: String, default: '' },
     lastSyncAt: { type: Date, default: null },
     linkedAt: { type: Date, default: null },

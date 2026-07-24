@@ -86,7 +86,7 @@ export const PRICING_FAQS = [
   {
     question: 'What does a KachingScanner subscription include?',
     answer:
-      'Plans unlock AI market analysis, premium SMC-style entry/SL/TP signals, live charts, and TradingView alert setup. Higher tiers add more markets, insights, and automation options.'
+      'Plans unlock TradingView alert distribution to your dashboard, Telegram, and MT5. Higher tiers add more chart catalog markets, insights, and automation options.'
   },
   {
     question: 'How do TradingView alerts work with KachingScanner?',
@@ -219,7 +219,7 @@ const PAGE_META = {
   },
   tradingview: {
     title: `TradingView Setup — ${APP_NAME}`,
-    description: `TradingView alert setup and live feed for ${APP_NAME} subscribers.`,
+    description: `Connect TradingView Pine webhook alerts to ${APP_NAME} — dashboard, Telegram, and MT5 distribution.`,
     robots: PRIVATE_ROBOTS
   },
   admin: {

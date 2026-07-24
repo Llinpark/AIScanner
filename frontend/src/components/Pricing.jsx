@@ -131,12 +131,17 @@ export default function Pricing({
                       <span className="amount">KES {pricing.price.toLocaleString()}</span>
                       <span className="period">/{periodLabel}</span>
                     </div>
-                    {limits.currencyPairs && (
+                    {limits.anyTradingViewInstrument ? (
+                      <p className="tier-meta">
+                        Any TradingView instrument · {limits.timeframes?.length || 1} timeframe
+                        {(limits.timeframes?.length || 0) !== 1 ? 's' : ''}
+                      </p>
+                    ) : limits.currencyPairs ? (
                       <p className="tier-meta">
                         {limits.currencyPairs.length} pairs · {limits.timeframes?.length || 1} timeframe
                         {(limits.timeframes?.length || 0) !== 1 ? 's' : ''}
                       </p>
-                    )}
+                    ) : null}
                   </div>
 
                   <div className="card-body">

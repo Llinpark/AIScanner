@@ -289,7 +289,8 @@ export default function KachingLightweightChart({
   liveEnabled = true,
   liveStatus = 'idle',
   provider = null,
-  height = 600
+  height = 600,
+  enableSmcOverlays = false
 }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
@@ -310,8 +311,13 @@ export default function KachingLightweightChart({
   symbolRef.current = symbol;
 
   const overlay = useMemo(
-    () => buildChartOverlay(overlaySignal, candles, interval),
-    [overlaySignal, candles, interval]
+    () =>
+      buildChartOverlay(overlaySignal, candles, interval, {
+        enableSmcOverlays: Boolean(enableSmcOverlays),
+        // Heuristic OB/liquidity only for Premium (same gate as metadata SMC overlays).
+        allowHeuristicZones: Boolean(enableSmcOverlays)
+      }),
+    [overlaySignal, candles, interval, enableSmcOverlays]
   );
 
   useEffect(() => {

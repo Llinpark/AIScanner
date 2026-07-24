@@ -1,8 +1,10 @@
 from datetime import datetime
 import os
+import secrets
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from indicators import compute_bollinger, compute_macd, compute_rsi
@@ -29,6 +31,39 @@ app.add_middleware(
     allow_methods=['*'],
     allow_headers=['*'],
 )
+
+# Shared secret with Node PythonAiService — reject unauthenticated /signal (and other) calls.
+PYTHON_SERVICE_API_KEY = (os.getenv('PYTHON_SERVICE_API_KEY') or '').strip()
+_PUBLIC_PATHS = {'/health', '/docs', '/openapi.json', '/redoc'}
+
+
+@app.middleware('http')
+async def require_python_api_key(request: Request, call_next):
+    path = request.url.path
+    if path in _PUBLIC_PATHS or path.startswith('/docs') or path.startswith('/redoc'):
+        return await call_next(request)
+
+    if not PYTHON_SERVICE_API_KEY:
+        # Local/dev without a key stays open; production must set PYTHON_SERVICE_API_KEY.
+        if (os.getenv('REQUIRE_PYTHON_API_KEY') or '').lower() == 'true':
+            return JSONResponse(status_code=503, content={'detail': 'API key not configured'})
+        return await call_next(request)
+
+    provided = (
+        request.headers.get('x-api-key')
+        or request.headers.get('x-kaching-python-key')
+        or ''
+    ).strip()
+    # compare_digest requires equal-length strings
+    if (
+        not provided
+        or len(provided) != len(PYTHON_SERVICE_API_KEY)
+        or not secrets.compare_digest(provided, PYTHON_SERVICE_API_KEY)
+    ):
+        return JSONResponse(status_code=401, content={'detail': 'Unauthorized'})
+    return await call_next(request)
+
+
 app.include_router(market_data_router)
 model = LSTMSignalModel()
 
@@ -73,6 +108,7 @@ def health_check():
         'status': 'ok',
         'service': 'python-ai-analytics',
         'market_data': status,
+        'api_key_required': bool(PYTHON_SERVICE_API_KEY),
     }
 
 

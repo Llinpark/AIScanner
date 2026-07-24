@@ -7,7 +7,6 @@ import { getTimeframesForTier } from '../../constants/subscriptionLimits';
 import { useAuth } from '../../context/AuthContext';
 import useLiveChartLevels from '../../hooks/useLiveChartLevels';
 import useMarketCandles from '../../hooks/useMarketCandles';
-import { formatMarketDataProvider } from '../../utils/marketDataProviders';
 import ChartTimeframeToolbar from './ChartTimeframeToolbar';
 import KachingLightweightChart from './KachingLightweightChart';
 
@@ -26,7 +25,8 @@ export default function MarketChartPanel({
   subscribed = true,
   liveEnabled = true,
   height = 600,
-  onChartErrorChange
+  onChartErrorChange,
+  enableSmcOverlays = false
 }) {
   const SYMBOL_DEBOUNCE_MS = 400;
   const { subscription, isAuthenticated } = useAuth();
@@ -125,8 +125,7 @@ export default function MarketChartPanel({
       )}
       {fallbackUsed && fallbackInterval && candles.length > 0 && (
         <div className="page-notice info-box">
-          Live intraday feed unavailable — showing daily EOD ({fallbackInterval}) from{' '}
-          {formatMarketDataProvider(provider) || 'fallback'}. Trading alerts continue normally.
+          Live intraday chart feed unavailable — showing daily candles instead. Trading alerts continue normally.
         </div>
       )}
       {useLiveLevels && stage === 'active_trade' && liveSignal && (
@@ -147,6 +146,7 @@ export default function MarketChartPanel({
           liveStatus={liveStatus}
           provider={provider}
           height={height}
+          enableSmcOverlays={enableSmcOverlays}
         />
       )}
       {!loading && !error && candles.length === 0 && (

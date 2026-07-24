@@ -36,6 +36,28 @@ function renderTemplate(template, variables) {
   });
 }
 
+function sampleWebhookPayload() {
+  return {
+    // Example only — live alerts use whatever chart symbol TradingView sends (any instrument).
+    symbol: 'XAUUSD',
+    strategyName: 'KachingFx Pine',
+    timeframe: '60',
+    pattern: 'perfect_fvg',
+    alertType: 'entry',
+    direction: 'long',
+    entry: 2650.5,
+    stop_loss: 2645.5,
+    stop_loss_1: 2645.5,
+    take_profit_1: 2655.5,
+    take_profit_2: 2660.5,
+    take_profit_3: 2665.5,
+    confidence: 0.82,
+    message: 'Kaching Entry',
+    licenseToken: '<your-license-token>',
+    broadcast: true
+  };
+}
+
 function generateForUser(user, options = {}) {
   const userId = user._id?.toString() || user.id || '';
   const subscription = getEffectiveSubscription(user);
@@ -56,7 +78,8 @@ function generateForUser(user, options = {}) {
   const licenseToken = userId ? generateLicenseToken(userId) : '';
 
   const variables = {
-    INDICATOR_TITLE: escapePineString(`KachingFx Scanner (${tierLabel})`),
+    INDICATOR_TITLE: escapePineString('KachingFx Scanner'),
+    INDICATOR_SHORTTITLE: escapePineString('KachingFx Scanner'),
     SUBSCRIBER_LABEL: escapePineString(subscriberLabel),
     SUBSCRIPTION_TIER: escapePineString(tierLabel),
     SCRIPT_ID: escapePineString(scriptId),
@@ -65,7 +88,6 @@ function generateForUser(user, options = {}) {
     LICENSE_TOKEN: escapePineString(licenseToken),
     TV_USERNAME: escapePineString(tvUsername),
     SUBSCRIBER_ID: escapePineString(userId),
-    SEND_CANDLE_FEED: 'true',
     MIN_BODY_RATIO: PATTERN_SCANNER_CONFIG.fvg?.minDisplacementBodyRatio ?? 0.62,
     MAX_WICK_RATIO: PATTERN_SCANNER_CONFIG.fvg?.maxWickToRangeRatio ?? 0.28,
     VOL_MULT: PATTERN_SCANNER_CONFIG.fvg?.volumeMultiplier ?? 1.15,
@@ -88,17 +110,20 @@ function generateForUser(user, options = {}) {
     tierLabel,
     subscriberLabel,
     generatedAt: new Date().toISOString(),
+    architecture: 'tradingview_webhook_distribution',
+    flow: 'TradingView → webhook → Kaching dashboard / Telegram / MT5',
+    samplePayload: sampleWebhookPayload(),
     security: {
       licenseTokenIncluded: Boolean(licenseToken),
-      signatureHeader: 'X-Kaching-Signature',
-      signatureFormat: 'sha256=<hmac_hex_of_raw_body>'
+      // User-facing only — do not expose HMAC / signature headers in the dashboard.
+      authNote: 'Your script already includes a private license token. Do not share the generated script.'
     },
     instructions: [
-      'Open TradingView → Pine Editor → New → paste this script and save it to your chart.',
-      'Keep "Auto-draw Entry / SL / TP lines on chart" enabled — levels appear automatically when a pattern fires.',
-      'Create one alert with condition "Any alert() function call" and Webhook URL notifications.',
-      'Each alert payload includes your personal licenseToken — do not share your generated script.',
-      'Enable TradingView push or email notifications for instant delivery.',
+      'Open TradingView → Pine Editor → paste your personal script → Add to any chart (forex, gold, indices, crypto, stocks, etc.).',
+      `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
+      'Your script already includes a private license token — do not share it with anyone.',
+      'When an alert fires, Kaching publishes that chart’s symbol to your dashboard, Telegram, and MT5 (if linked) — not limited to a forex pair list.',
+      'In-app charts are display-only and may not have candles for every instrument. Chart feed issues never block alerts.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan).`
     ]
   };
@@ -107,5 +132,6 @@ function generateForUser(user, options = {}) {
 module.exports = {
   generateForUser,
   escapePineString,
-  buildScriptId
+  buildScriptId,
+  sampleWebhookPayload
 };

@@ -1,4 +1,5 @@
 const { PAYMENT_CONFIG } = require('../config/subscriptions');
+const { appendWebhookSecretToUrl } = require('../utils/security');
 
 const SANDBOX_BASE = 'https://sandbox.safaricom.co.ke';
 const LIVE_BASE = 'https://api.safaricom.co.ke';
@@ -62,6 +63,8 @@ async function initiateStkPush({ phone, amount, accountReference, description })
   const phoneNumber = normalizePhone(phone);
   const token = await getAccessToken();
   const { password, timestamp } = buildPassword(shortcode, passkey);
+  // Daraja cannot send custom headers — secret travels in CallBackURL query.
+  const securedCallbackUrl = appendWebhookSecretToUrl(callbackUrl, 'mpesa');
 
   const payload = {
     BusinessShortCode: shortcode,
@@ -72,7 +75,7 @@ async function initiateStkPush({ phone, amount, accountReference, description })
     PartyA: phoneNumber,
     PartyB: shortcode,
     PhoneNumber: phoneNumber,
-    CallBackURL: callbackUrl,
+    CallBackURL: securedCallbackUrl,
     AccountReference: String(accountReference).slice(0, 12),
     TransactionDesc: String(description || 'KachingFx Subscription').slice(0, 13)
   };

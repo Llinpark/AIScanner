@@ -1,5 +1,4 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const Signal = require('../models/Signal');
 const requireAuth = require('../middleware/requireAuth');
 const requireSubscription = require('../middleware/requireSubscription');
@@ -12,6 +11,10 @@ const {
 } = require('../utils/subscriptionAccess');
 const { buildAnalytics } = require('../utils/signalOutcome');
 const { escapeRegex } = require('../utils/security');
+const {
+  isWebhookInsightsSignal,
+  legacySourceMongoExclusion
+} = require('../utils/insightsSignalFilter');
 
 function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
   const router = express.Router();
@@ -20,10 +23,16 @@ function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
     try {
       const cutoff = historyCutoffDate(req.user.subscription);
       const raw = isDbReady()
-        ? await Signal.find({ createdAt: { $gte: cutoff } }).sort({ createdAt: -1 }).limit(1000).lean()
+        ? await Signal.find({
+            createdAt: { $gte: cutoff },
+            ...legacySourceMongoExclusion()
+          })
+            .sort({ createdAt: -1 })
+            .limit(1000)
+            .lean()
         : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
 
-      const filtered = filterSignalsForTier(raw, req.user.subscription);
+      const filtered = filterSignalsForTier(raw, req.user.subscription).filter(isWebhookInsightsSignal);
       const analytics = buildAnalytics(filtered);
 
       res.json({
@@ -40,10 +49,16 @@ function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
     try {
       const cutoff = historyCutoffDate(req.user.subscription);
       const raw = isDbReady()
-        ? await Signal.find({ createdAt: { $gte: cutoff } }).sort({ createdAt: -1 }).limit(1000).lean()
+        ? await Signal.find({
+            createdAt: { $gte: cutoff },
+            ...legacySourceMongoExclusion()
+          })
+            .sort({ createdAt: -1 })
+            .limit(1000)
+            .lean()
         : inMemorySignals.filter(s => !s.createdAt || new Date(s.createdAt) >= cutoff);
 
-      const filtered = filterSignalsForTier(raw, req.user.subscription);
+      const filtered = filterSignalsForTier(raw, req.user.subscription).filter(isWebhookInsightsSignal);
       const { timeseries, equityCurve, patternStats } = buildAnalytics(filtered);
 
       res.json({ timeseries, equityCurve, patternStats });
@@ -70,7 +85,10 @@ function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
       const cutoff = historyCutoffDate(req.user.subscription);
       const features = getTierFeatures(req.user.subscription);
 
-      const filter = { createdAt: { $gte: cutoff } };
+      const filter = {
+        createdAt: { $gte: cutoff },
+        ...legacySourceMongoExclusion()
+      };
       if (symbol) filter.symbol = new RegExp(escapeRegex(String(symbol).replace('/', '')), 'i');
       if (direction) filter.direction = new RegExp(`^${escapeRegex(String(direction))}$`, 'i');
       if (outcome) filter.outcome = outcome;
@@ -92,9 +110,9 @@ function createAnalyticsRouter({ inMemorySignals, isDbReady }) {
         });
       }
 
-      const filtered = filterSignalsForTier(raw, req.user.subscription).map(s =>
-        sanitizeSignalForTier(s, req.user.subscription)
-      );
+      const filtered = filterSignalsForTier(raw, req.user.subscription)
+        .filter(isWebhookInsightsSignal)
+        .map(s => sanitizeSignalForTier(s, req.user.subscription));
 
       const total = filtered.length;
       const start = (pageNum - 1) * pageSize;

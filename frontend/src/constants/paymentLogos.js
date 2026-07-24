@@ -6,6 +6,11 @@ export const PAYMENT_LOGOS = [
     showName: true
   },
   {
+    id: 'paypal',
+    name: 'PayPal',
+    logoSrc: '/payments/paypal.svg'
+  },
+  {
     id: 'mpesa',
     name: 'M-Pesa',
     logoSrc: '/payments/mpesa.svg'
@@ -21,10 +26,5 @@ export const PAYMENT_LOGOS = [
     name: 'Binance Pay',
     logoSrc: '/payments/binance.svg',
     showName: true
-  },
-  {
-    id: 'paypal',
-    name: 'PayPal',
-    logoSrc: '/payments/paypal.svg'
   }
 ];

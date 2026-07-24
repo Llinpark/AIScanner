@@ -11,6 +11,19 @@ function getPythonServiceUrl() {
   return url || null;
 }
 
+function getPythonServiceApiKey() {
+  return String(process.env.PYTHON_SERVICE_API_KEY || '').trim();
+}
+
+function pythonAuthHeaders() {
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  const apiKey = getPythonServiceApiKey();
+  if (apiKey) {
+    headers['X-API-Key'] = apiKey;
+  }
+  return headers;
+}
+
 function isConfigured() {
   return Boolean(getPythonServiceUrl());
 }
@@ -100,7 +113,7 @@ async function createSignal({ symbol, interval = '1h', lookback = 200, candles }
   try {
     const response = await fetch(`${baseUrl}/signal`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: pythonAuthHeaders(),
       body: JSON.stringify({
         symbol,
         interval,
