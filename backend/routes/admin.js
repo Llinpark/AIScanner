@@ -18,11 +18,11 @@ const {
   applyManualOutcomeUpdate
 } = require('../utils/adminSignals');
 const MarketScannerService = require('../services/MarketScannerService');
-const { activateSubscription, SUBSCRIPTION_PERIOD_DAYS } = require('../services/SubscriptionService');
+const { SUBSCRIPTION_PERIOD_DAYS } = require('../services/SubscriptionService');
 const ReferralService = require('../services/ReferralService');
 const { getScannerConfig, applyScannerConfig } = require('../utils/scannerRuntimeConfig');
 const WeightLearningService = require('../services/WeightLearningService');
-const { parseAdminEmails, canManageScannerConfig } = require('../utils/adminAccess');
+const { canManageScannerConfig } = require('../utils/adminAccess');
 
 const SUBSCRIPTION_TIERS = new Set(['basic', 'professional', 'premium']);
 const SUBSCRIPTION_STATUSES = new Set(['inactive', 'pending', 'active', 'cancelled']);
@@ -82,18 +82,16 @@ function createAdminRouter({ io } = {}) {
         payments: paymentStats,
         scanner: canSeeScannerConfig
           ? {
-              ...scannerStatus,
+              pipeline: scannerStatus?.pipeline,
               config: getScannerConfig()
             }
           : {
               pipeline: {
                 enabled: Boolean(scannerStatus?.pipeline?.enabled),
                 htfTimeframe: scannerStatus?.pipeline?.htfTimeframe
-              },
-              buffers: scannerStatus?.buffers || []
+              }
             },
-        canManageScannerConfig: canSeeScannerConfig,
-        adminEmailsConfigured: parseAdminEmails().length
+        canManageScannerConfig: canSeeScannerConfig
       });
     } catch (error) {
       console.error('Admin stats error:', error);
@@ -202,7 +200,9 @@ function createAdminRouter({ io } = {}) {
       if (body.activate === true) {
         subscription.status = 'active';
         subscription.tier = body.tier && SUBSCRIPTION_TIERS.has(body.tier) ? body.tier : subscription.tier || 'premium';
-        subscription.provider = body.provider || subscription.provider || 'mock';
+        if (body.provider) {
+          subscription.provider = body.provider;
+        }
         const extendDays = Math.max(1, parseInt(body.extendDays, 10) || SUBSCRIPTION_PERIOD_DAYS);
         subscription.current_period_end = new Date(Date.now() + extendDays * 24 * 60 * 60 * 1000);
         actionSummary = `Activated ${subscription.tier} (${subscription.billingCycle || 'monthly'}) for ${extendDays} days`;

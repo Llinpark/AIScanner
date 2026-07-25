@@ -48,7 +48,6 @@ export default function AdminDashboard() {
         <StatCard
           label="Open entry signals"
           value={stats?.signals?.openEntries ?? 0}
-          hint="Global count in MongoDB"
           tone="warning"
         />
         <StatCard label="Total signals" value={stats?.signals?.total ?? 0} />
@@ -69,41 +68,30 @@ export default function AdminDashboard() {
             />
           </>
         )}
-        <StatCard
-          label="Database"
-          value={stats?.dbConnected ? 'Connected' : 'Offline'}
-          tone={stats?.dbConnected ? 'success' : 'danger'}
-        />
       </div>
 
-      <div className="admin-panel">
-        <div className="admin-panel-header">
-          <h3>Scanner runtime</h3>
-          <span className={`admin-pill ${scanner.pipeline?.enabled ? 'status-active' : 'status-inactive'}`}>
-            {scanner.pipeline?.enabled ? 'Pipeline active' : 'Pipeline off'}
-          </span>
-        </div>
-        <dl className="admin-meta-grid">
-          {showConfig && (
+      {canManageScanner && (
+        <div className="admin-panel">
+          <div className="admin-panel-header">
+            <h3>Scanner runtime</h3>
+            <span className={`admin-pill ${scanner.pipeline?.enabled ? 'status-active' : 'status-inactive'}`}>
+              {scanner.pipeline?.enabled ? 'Pipeline active' : 'Pipeline off'}
+            </span>
+          </div>
+          <dl className="admin-meta-grid">
+            {showConfig && (
+              <div className="admin-meta-item">
+                <dt>Batch size</dt>
+                <dd>{config.scanBatchSize ?? '—'} symbols / cycle</dd>
+              </div>
+            )}
             <div className="admin-meta-item">
-              <dt>Batch size</dt>
-              <dd>{config.scanBatchSize ?? '—'} symbols / cycle</dd>
+              <dt>HTF timeframe</dt>
+              <dd>{scanner.pipeline?.htfTimeframe ?? '—'}</dd>
             </div>
-          )}
-          <div className="admin-meta-item">
-            <dt>HTF timeframe</dt>
-            <dd>{scanner.pipeline?.htfTimeframe ?? '—'}</dd>
-          </div>
-          <div className="admin-meta-item">
-            <dt>Symbol buffers</dt>
-            <dd>{(scanner.buffers || []).filter(b => b.candles > 0).length} loaded</dd>
-          </div>
-          <div className="admin-meta-item">
-            <dt>Admin emails</dt>
-            <dd>{stats?.adminEmailsConfigured ?? 0} configured</dd>
-          </div>
-        </dl>
-      </div>
+          </dl>
+        </div>
+      )}
     </div>
   );
 }
