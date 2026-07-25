@@ -2,12 +2,14 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
+const { WEBHOOK_TELEGRAM_URL } = require('../config/appUrls');
 const { userHasTierFeature, getEffectiveSubscription, getTierDisplayName } = require('../utils/subscriptionAccess');
 const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { isEntryAlert } = require('../utils/signalOutcome');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
 
 const LINK_CODE_TTL_MS = 15 * 60 * 1000;
+const ALLOWED_UPDATES = ['message', 'callback_query'];
 const linkCodeIndex = new Map();
 let pollingActive = false;
 let pollingOffset = 0;
@@ -17,7 +19,8 @@ function getConfig() {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
     botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'KachingFx_Official').replace(/^@/, ''),
     usePolling: process.env.TELEGRAM_USE_POLLING === 'true',
-    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || ''
+    webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
+    webhookUrl: (process.env.WEBHOOK_TELEGRAM_URL || WEBHOOK_TELEGRAM_URL || '').replace(/\/$/, '')
   };
 }
 
@@ -520,7 +523,7 @@ async function pollOnce() {
   const updates = await apiRequest('getUpdates', {
     offset: pollingOffset,
     timeout: 30,
-    allowed_updates: ['message', 'callback_query']
+    allowed_updates: ALLOWED_UPDATES
   });
 
   for (const update of updates) {
@@ -553,6 +556,70 @@ function stopPolling() {
   pollingActive = false;
 }
 
+async function clearWebhook() {
+  await apiRequest('deleteWebhook', { drop_pending_updates: false });
+}
+
+async function registerWebhook() {
+  const config = getConfig();
+  const url = config.webhookUrl;
+
+  if (!url) {
+    console.error('[Telegram] Webhook URL missing (set WEBHOOK_TELEGRAM_URL or PUBLIC_BACKEND_URL); skipping setWebhook');
+    return { ok: false, reason: 'missing_url' };
+  }
+
+  if (!config.webhookSecret) {
+    console.error('[Telegram] TELEGRAM_WEBHOOK_SECRET is required for webhook mode; skipping setWebhook');
+    return { ok: false, reason: 'missing_secret' };
+  }
+
+  await apiRequest('setWebhook', {
+    url,
+    secret_token: config.webhookSecret,
+    allowed_updates: ALLOWED_UPDATES
+  });
+
+  return { ok: true, url };
+}
+
+/**
+ * Startup delivery mode:
+ * - polling (local): deleteWebhook then start getUpdates loop
+ * - webhook (prod): setWebhook with public URL + secret_token
+ * Never logs bot token or webhook secret.
+ */
+async function ensureDeliveryMode() {
+  if (!isConfigured()) {
+    console.log('[Telegram] Bot token not set; delivery mode skipped');
+    return { ok: false, reason: 'not_configured' };
+  }
+
+  const config = getConfig();
+
+  if (config.usePolling) {
+    try {
+      await clearWebhook();
+      console.log('[Telegram] Webhook cleared for polling mode');
+    } catch (error) {
+      console.warn('[Telegram] deleteWebhook failed (continuing to poll):', error.message);
+    }
+    startPolling();
+    return { ok: true, mode: 'polling' };
+  }
+
+  try {
+    const result = await registerWebhook();
+    if (result.ok) {
+      console.log(`[Telegram] Webhook registered (mode=webhook) url=${result.url}`);
+    }
+    return { ...result, mode: 'webhook' };
+  } catch (error) {
+    console.error(`[Telegram] setWebhook failed (mode=webhook) url=${config.webhookUrl}:`, error.message);
+    return { ok: false, mode: 'webhook', reason: 'set_webhook_failed', error: error.message };
+  }
+}
+
 module.exports = {
   isConfigured,
   getConfig,
@@ -565,5 +632,6 @@ module.exports = {
   handleWebhook,
   startPolling,
   stopPolling,
+  ensureDeliveryMode,
   getBotDeepLink
 };

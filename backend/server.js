@@ -2377,9 +2377,8 @@ server.on('listening', () => {
     console.error('[WeightLearning] Boot init error (scanner continues):', err.message);
   });
   if (TelegramService.isConfigured()) {
-    TelegramService.startPolling();
-    if (!process.env.TELEGRAM_USE_POLLING) {
-      console.log('[Telegram] Bot configured. Set TELEGRAM_USE_POLLING=true for local dev or configure webhook for production.');
-    }
+    TelegramService.ensureDeliveryMode().catch(err => {
+      console.error('[Telegram] Delivery mode setup failed:', err.message);
+    });
   }
 });
