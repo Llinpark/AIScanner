@@ -104,7 +104,14 @@ let _defaultRegistry = null;
 
 function getDefaultRegistry() {
   if (!_defaultRegistry) {
-    _defaultRegistry = createDefaultRegistry();
+    let options = {};
+    try {
+      // Prefer live admin/runtime overrides when available
+      options = require('../utils/strategyRuntimeConfig').getRegistryOptions();
+    } catch (_) {
+      options = {};
+    }
+    _defaultRegistry = createDefaultRegistry(options);
   }
   return _defaultRegistry;
 }
@@ -113,9 +120,15 @@ function resetDefaultRegistry() {
   _defaultRegistry = null;
 }
 
+function setDefaultRegistry(registry) {
+  _defaultRegistry = registry || null;
+  return _defaultRegistry;
+}
+
 module.exports = {
   StrategyRegistry,
   createDefaultRegistry,
   getDefaultRegistry,
-  resetDefaultRegistry
+  resetDefaultRegistry,
+  setDefaultRegistry
 };

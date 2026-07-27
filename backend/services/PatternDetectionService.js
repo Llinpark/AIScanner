@@ -351,11 +351,7 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', 
     : options.htfCandles;
   const registry = getDefaultRegistry();
 
-  if (
-    dayHtf?.length &&
-    process.env.DAYTRADING_SWEEP_FVG_ENABLED !== 'false' &&
-    options.allowDaytradingFallback !== false
-  ) {
+  if (dayHtf?.length && options.allowDaytradingFallback !== false) {
     const day = registry.get(DAYTRADING_ID);
     if (day?.enabled) {
       const dayResult = day.analyze({
@@ -389,11 +385,7 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', 
     }
   }
 
-  if (
-    scalpHtf?.length &&
-    process.env.SCALPING_STRATEGY_ENABLED !== 'false' &&
-    options.allowScalpingFallback !== false
-  ) {
+  if (scalpHtf?.length && options.allowScalpingFallback !== false) {
     const scalp = registry.get(SCALPING_ID);
     if (scalp?.enabled) {
       const scalpResult = scalp.analyze({

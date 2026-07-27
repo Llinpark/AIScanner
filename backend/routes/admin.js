@@ -21,6 +21,9 @@ const MarketScannerService = require('../services/MarketScannerService');
 const { SUBSCRIPTION_PERIOD_DAYS } = require('../services/SubscriptionService');
 const ReferralService = require('../services/ReferralService');
 const { getScannerConfig, applyScannerConfig } = require('../utils/scannerRuntimeConfig');
+const {
+  persistStrategyConfig
+} = require('../utils/strategyRuntimeConfig');
 const WeightLearningService = require('../services/WeightLearningService');
 const { canManageScannerConfig } = require('../utils/adminAccess');
 
@@ -552,18 +555,41 @@ function createAdminRouter({ io } = {}) {
         }
       }
 
+      let persisted = null;
+      if (req.body?.strategies) {
+        persisted = await persistStrategyConfig({
+          updatedBy: req.user?.email || req.user?.id || null
+        });
+      }
+
       await logAdminAction(req, {
         action: 'scanner.config.update',
         targetType: 'scanner',
-        summary: 'Updated scanner runtime configuration',
-        metadata: updated
+        summary: req.body?.strategies
+          ? 'Updated scanner + strategy runtime configuration'
+          : 'Updated scanner runtime configuration',
+        metadata: {
+          autoScanEnabled: updated.autoScanEnabled,
+          strategies: updated.strategies
+            ? {
+                scalpingEnabled: updated.strategies.scalping?.enabled,
+                daytradingEnabled: updated.strategies.daytrading?.enabled,
+                legacyEnabled: updated.strategies.legacy?.enabled
+              }
+            : undefined,
+          persisted: Boolean(persisted)
+        }
       });
 
       res.json({
-        message: 'Scanner configuration updated.',
+        message: persisted
+          ? 'Scanner and strategy configuration saved.'
+          : 'Scanner configuration updated.',
         config: updated,
         status: MarketScannerService.getScannerStatus(),
-        note: 'Runtime changes apply until backend restart unless mirrored in backend/.env.'
+        note: persisted
+          ? 'Strategy overrides are persisted in the database and survive restarts. Core scan settings still need backend/.env if you want them durable.'
+          : 'Runtime changes apply until backend restart unless mirrored in backend/.env.'
       });
     } catch (error) {
       console.error('Admin scanner config error:', error);

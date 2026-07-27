@@ -136,10 +136,12 @@ async function fetchHtfCandles(symbol, options = {}) {
 }
 
 async function fetchScalpingHtfCandles(symbol, options = {}) {
-  if (process.env.SCALPING_STRATEGY_ENABLED === 'false') return [];
+  const registry = getDefaultRegistry();
+  const scalp = registry.get(SCALPING_ID);
+  if (!scalp?.enabled) return [];
   return fetchHtfCandles(symbol, {
     ...options,
-    timeframe: process.env.SCALPING_HTF_TF || '15m',
+    timeframe: scalp.config?.htfTimeframe || process.env.SCALPING_HTF_TF || '15m',
     force: true
   });
 }

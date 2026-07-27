@@ -15,10 +15,14 @@ class LegacySmcPipelineStrategy extends IStrategy {
   constructor(options = {}) {
     super();
     this.config = options.config || PATTERN_SCANNER_CONFIG;
-    this._enabled =
-      options.enabled !== false &&
-      this.config.pipeline?.enabled !== false &&
-      process.env.LEGACY_SMC_PIPELINE_STRATEGY !== 'false';
+    const pipelineOn = this.config.pipeline?.enabled !== false;
+    if (Object.prototype.hasOwnProperty.call(options, 'enabled')) {
+      // Explicit registry/admin override wins over LEGACY_SMC_PIPELINE_STRATEGY env
+      this._enabled = Boolean(options.enabled) && pipelineOn;
+    } else {
+      this._enabled =
+        pipelineOn && process.env.LEGACY_SMC_PIPELINE_STRATEGY !== 'false';
+    }
   }
 
   get id() {

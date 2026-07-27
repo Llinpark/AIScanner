@@ -2380,6 +2380,14 @@ server.on('listening', () => {
   WeightLearningService.initWeightLearning().catch(err => {
     console.error('[WeightLearning] Boot init error (scanner continues):', err.message);
   });
+  try {
+    const { initStrategyRuntimeConfig } = require('./utils/strategyRuntimeConfig');
+    initStrategyRuntimeConfig().catch(err => {
+      console.error('[StrategyRuntime] Boot init error (env defaults kept):', err.message);
+    });
+  } catch (err) {
+    console.error('[StrategyRuntime] Module load error:', err.message);
+  }
   if (TelegramService.isConfigured()) {
     TelegramService.ensureDeliveryMode().catch(err => {
       console.error('[Telegram] Delivery mode setup failed:', err.message);

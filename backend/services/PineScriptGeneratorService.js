@@ -4,11 +4,9 @@ const crypto = require('crypto');
 const { WEBHOOK_TRADINGVIEW_URL } = require('../config/appUrls');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const {
-  resolveScalpingConfig,
   STRATEGY_NAME: SCALPING_STRATEGY_NAME
 } = require('../strategies/config/scalpingConfig');
 const {
-  resolveDayTradingConfig,
   STRATEGY_NAME: DAYTRADING_SWEEP_NAME
 } = require('../strategies/config/dayTradingConfig');
 const { generateLicenseToken } = require('../utils/webhookSecurity');
@@ -223,7 +221,10 @@ function generateForUser(user, options = {}) {
   let instructionLead;
 
   if (strategyKey === 'scalping') {
-    const scalp = resolveScalpingConfig();
+    const {
+      getResolvedScalpingConfig
+    } = require('../utils/strategyRuntimeConfig');
+    const scalp = getResolvedScalpingConfig();
     variables = buildSweepVariables(
       base,
       scalp,
@@ -236,7 +237,10 @@ function generateForUser(user, options = {}) {
     instructionLead =
       'Open TradingView → attach this script to a 1m or 3m chart (entries blocked elsewhere). HTF liquidity uses 15m context only.';
   } else if (strategyKey === 'daytrading') {
-    const day = resolveDayTradingConfig();
+    const {
+      getResolvedDaytradingConfig
+    } = require('../utils/strategyRuntimeConfig');
+    const day = getResolvedDaytradingConfig();
     variables = buildSweepVariables(
       base,
       day,

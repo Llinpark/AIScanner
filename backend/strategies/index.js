@@ -7,7 +7,8 @@ const {
   StrategyRegistry,
   createDefaultRegistry,
   getDefaultRegistry,
-  resetDefaultRegistry
+  resetDefaultRegistry,
+  setDefaultRegistry
 } = require('./registry');
 const { ScalpingStrategy } = require('./ScalpingStrategy');
 const { DayTradingStrategy, DAYTRADING_ID, DAYTRADING_NAME } = require('./DayTradingStrategy');
@@ -53,6 +54,7 @@ module.exports = {
   createDefaultRegistry,
   getDefaultRegistry,
   resetDefaultRegistry,
+  setDefaultRegistry,
   ScalpingStrategy,
   DayTradingStrategy,
   LegacySmcPipelineStrategy,
