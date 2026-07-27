@@ -21,7 +21,7 @@ function hasLiveAccess(subscription) {
   return subscription.status === 'active';
 }
 
-function AlertCard({ alert, showConfidence }) {
+function AlertCard({ alert, showConfidence, showNewsFilter, showTradeManagement }) {
   const type = alert.alertType || 'signal';
   return (
     <div className={`alert-card alert-${alert.direction} alert-type-${type}`}>
@@ -39,6 +39,12 @@ function AlertCard({ alert, showConfidence }) {
         <DetailRow label="Kaching TP3" value={Number(alert.take_profit_3).toFixed(5)} />
         {showConfidence && alert.confidence > 0 && (
           <DetailRow label="Confidence" value={`${(alert.confidence * 100).toFixed(0)}%`} />
+        )}
+        {showNewsFilter && alert.newsImpact && alert.newsImpact !== 'none' && (
+          <DetailRow label="News" value={alert.newsFilter?.label || alert.newsImpact} />
+        )}
+        {showTradeManagement && alert.tradeManagement?.message && (
+          <DetailRow label="Management" value={alert.tradeManagement.message} />
         )}
       </div>
       {(alert.message || alert.notes) && <p className="notes">{alert.message || alert.notes}</p>}
@@ -76,6 +82,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   const [pineMeta, setPineMeta] = useState(null);
   const [pineCopyState, setPineCopyState] = useState('idle');
   const [pineLoadError, setPineLoadError] = useState('');
+  const [pineStrategy, setPineStrategy] = useState('daytrading');
   const pineScriptRef = useRef('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
 
@@ -143,8 +150,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     }
   }, []);
 
-  const loadPineScriptBundle = useCallback(async () => {
-    const response = await tradingviewApi.getPineScript();
+  const loadPineScriptBundle = useCallback(async (strategy = pineStrategy) => {
+    const response = await tradingviewApi.getPineScript(strategy);
     pineScriptRef.current = response.data.script || '';
     setPineMeta({
       webhookUrl: response.data.webhookUrl,
@@ -155,20 +162,23 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       security: response.data.security,
       instructions: response.data.instructions || [],
       samplePayload: response.data.samplePayload || null,
-      flow: response.data.flow || null
+      flow: response.data.flow || null,
+      strategy: response.data.strategy,
+      strategyName: response.data.strategyName,
+      availableStrategies: response.data.availableStrategies || []
     });
     return pineScriptRef.current;
-  }, []);
+  }, [pineStrategy]);
 
   const loadPineMeta = useCallback(async () => {
     setPineLoadError('');
     try {
-      await loadPineScriptBundle();
+      await loadPineScriptBundle(pineStrategy);
     } catch (error) {
       console.error('Failed to load Pine Script:', error);
       setPineLoadError(error.response?.data?.message || 'Unable to load your Pine Script. Try again or refresh the page.');
     }
-  }, [loadPineScriptBundle]);
+  }, [loadPineScriptBundle, pineStrategy]);
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -331,7 +341,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
           TradingView Setup
         </button>
         <button type="button" className={`tab-btn ${activeTab === 'telegram' ? 'active' : ''}`} onClick={() => setActiveTab('telegram')}>
-          Trade Copier
+          Auto Trading
         </button>
         <button type="button" className={`tab-btn ${activeTab === 'chart' ? 'active' : ''}`} onClick={() => setActiveTab('chart')}>
           Chart
@@ -359,9 +369,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 <button type="button" className="btn-fetch" onClick={fetchAlerts} disabled={loading}>
                   Refresh
                 </button>
-              {tierLimits.telegramAlerts && (
+              {(tierLimits.telegramAlerts || tierLimits.mt5Execution) && (
                 <button type="button" className="btn-toggle" onClick={() => setActiveTab('telegram')}>
-                  Set up Telegram bot alerts
+                  Open Auto Trading
                 </button>
               )}
               </div>
@@ -377,6 +387,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       key={alert.id || alert._id || idx}
                       alert={alert}
                       showConfidence={tierLimits.showConfidence}
+                      showNewsFilter={tierLimits.newsFilter}
+                      showTradeManagement={tierLimits.tradeManagementAlerts}
                     />
                   ))}
                 </div>
@@ -397,6 +409,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 Copy your personal script, add it to a TradingView chart, then create one alert that sends to your
                 webhook URL below. Kaching publishes those trades here — charts stay separate and display-only.
               </p>
+              <p className="setup-note">
+                Keep the script on your TradingView chart. When a signal fires it draws Entry, SL, TP1, TP2, and TP3
+                lines on TradingView — included on Basic, Pro, and Premium.
+              </p>
               {tierLimits.multiMarketScanner && (
                 <p className="premium-feature-hint">
                   Premium: you receive alerts across all markets on your plan.
@@ -404,13 +420,14 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               )}
               {tierLimits.smartMoneyConcepts && (
                 <p className="premium-feature-hint">
-                  Premium: Smart Money overlays (fair value gaps and zones from the alert) show on your charts.
+                  Premium: additional Smart Money overlays (FVG / zones from alert metadata) on your in-app Kaching
+                  charts — separate from the Entry / SL / TP lines on TradingView.
                 </p>
               )}
               {tierLimits.mt5Execution && (
                 <p className="premium-feature-hint">
-                  Trade Copier (Pro+): tap Execute in Telegram to place the trade on MT5 with entry, stop, and targets
-                  filled in.
+                  Auto Trading (Pro+): connect MT5 in the Auto Trading tab. Pro uses Manual Execute; Premium can Auto-queue
+                  trades without Telegram.
                 </p>
               )}
               {tierLimits.trailingStop && (
@@ -431,6 +448,35 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               )}
 
               <div className="pine-script-box">
+                <div className="pine-script-meta">
+                  <label htmlFor="pine-strategy-select">
+                    <strong>Strategy script:</strong>
+                  </label>{' '}
+                  <select
+                    id="pine-strategy-select"
+                    value={pineStrategy}
+                    onChange={async e => {
+                      const next = e.target.value;
+                      setPineStrategy(next);
+                      pineScriptRef.current = '';
+                      setPineLoadError('');
+                      try {
+                        await loadPineScriptBundle(next);
+                      } catch (error) {
+                        setPineLoadError(
+                          error.response?.data?.message || 'Unable to load strategy script.'
+                        );
+                      }
+                    }}
+                  >
+                    <option value="daytrading">Liquidity Sweep + FVG (Day Trading)</option>
+                    <option value="scalping">Liquidity Sweep + FVG (Scalping)</option>
+                    <option value="classic">Classic (FVG / Breakaway)</option>
+                  </select>
+                  {pineMeta?.strategyName && (
+                    <p className="setup-note">Active: {pineMeta.strategyName}</p>
+                  )}
+                </div>
                 {pineMeta && (
                   <div className="pine-script-meta">
                     <p>
@@ -452,6 +498,11 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     )}
                     <p className="setup-note">
                       Charts are display-only. Chart feed issues never block alerts.
+                      {pineStrategy === 'scalping'
+                        ? ' Scalping: use a 1m or 3m chart; HTF liquidity is 15m context only.'
+                        : pineStrategy === 'daytrading'
+                          ? ' Day Trading: use a 15m or 5m chart; HTF bias/liquidity is 4H context only.'
+                          : ''}
                     </p>
                   </div>
                 )}
@@ -462,6 +513,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       ? pineMeta.instructions
                       : [
                           'Open TradingView → Pine Editor → paste your personal script → Add to chart',
+                          'Keep the script on the chart so Entry, SL, and TP1–3 overlays draw when signals fire',
                           'Create one alert for this script and enable webhook notifications',
                           'Paste your Kaching webhook URL into the alert',
                           'Optional: enable TradingView mobile notifications'
@@ -510,7 +562,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       {activeTab === 'telegram' && (
         <div className="tv-section">
           {!subscribed ? (
-            <div className="empty-state">Subscribe to link the KachingFx Telegram bot.</div>
+            <div className="empty-state">Subscribe to set up Auto Trading (Telegram + MT5).</div>
           ) : (
             <TelegramSetup tierLimits={tierLimits} onNavigatePricing={onNavigatePricing} />
           )}
@@ -574,7 +626,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               {tierLimits.newsFilter && historicalData.length > 0 && (
                 <div className="indicators-box">
                   <h4>News Filter</h4>
-                  <p>High-impact news filtering is active on your plan.</p>
+                  <p>
+                    High-impact news windows (NFP / US data heuristics) are evaluated on each alert. Signals may show a
+                    News badge when risk is elevated — use it to skip or size down new entries.
+                  </p>
                 </div>
               )}
 

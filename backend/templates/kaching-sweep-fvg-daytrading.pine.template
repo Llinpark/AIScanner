@@ -1,0 +1,359 @@
+//@version=5
+indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
+
+// Generated for: {{SUBSCRIBER_LABEL}}
+// Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
+// Strategy: Liquidity Sweep + Fair Value Gap (Day Trading)
+// HTF 15m = context only. Entries only when this chart is 15m or 5m.
+// TradingView overlays show ONLY: Kaching Entry, Kaching SL, Kaching TP1–3.
+
+// ===== CONFIGURATION =====
+WEBHOOK_URL = input.string("{{WEBHOOK_URL}}", "Webhook URL (paste in TV alert)", group="KachingFx", display=display.none)
+WEBHOOK_SECRET = input.string("{{WEBHOOK_SECRET}}", "Webhook Secret (optional HMAC)", group="KachingFx", display=display.none)
+LICENSE_TOKEN = input.string("{{LICENSE_TOKEN}}", "License Token (required)", group="KachingFx", display=display.none)
+TV_USERNAME = input.string("{{TV_USERNAME}}", "TradingView Username (optional)", group="KachingFx", display=display.none)
+SHOW_TRADE_LINES = true
+SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
+
+htfTf = input.timeframe("{{HTF_TF}}", "HTF context (never entries)", group="Scalp — Structure")
+swingLen = input.int({{SWING_SENSITIVITY}}, "Swing sensitivity", minval=1, maxval=5, group="Scalp — Structure")
+eqTolAtr = input.float({{EQH_EQL_TOLERANCE}}, "EQH/EQL ATR tolerance", minval=0.01, maxval=0.5, group="Scalp — Structure")
+
+minBodyRatio = input.float({{MIN_BODY_RATIO}}, "Displacement min body/range", minval=0.4, maxval=0.95, group="Scalp — Displacement")
+maxWickRatio = input.float({{MAX_WICK_RATIO}}, "Displacement max wick/range", minval=0.05, maxval=0.5, group="Scalp — Displacement")
+minDispAtr = input.float({{DISP_ATR_MULT}}, "Displacement min range/ATR", minval=0.5, maxval=3.0, group="Scalp — Displacement")
+
+minGapAtr = input.float({{MIN_FVG_ATR}}, "Min FVG / ATR", minval=0.05, maxval=1.0, group="Scalp — FVG")
+entryModel = input.string("{{ENTRY_MODEL}}", "Entry model", options=["ce", "entire", "upper_half", "lower_half"], group="Scalp — Entry")
+stopModel = input.string("{{STOP_MODEL}}", "Stop model", options=["sweep", "fvg", "sweep_or_fvg"], group="Scalp — Risk")
+tp1R = input.float({{TP1_R}}, "Kaching TP1 (R)", group="Scalp — Risk")
+tp2R = input.float({{TP2_R}}, "Kaching TP2 (R)", group="Scalp — Risk")
+tp3R = input.float({{TP3_R}}, "Kaching TP3 (R)", group="Scalp — Risk")
+confThreshold = input.float({{CONFIDENCE_THRESHOLD}}, "Min confidence (0-100)", minval=50, maxval=100, group="Scalp — Filters")
+requireEngulf = input.bool({{REQUIRE_ENGULFING}}, "Require engulfing", group="Scalp — Filters")
+
+// ===== COLORS =====
+colEntry = #38bdf8
+colSl = #f87171
+colTp1 = #4ade80
+colTp2 = #22c55e
+colTp3 = #fbbf24
+colLongZoneBg = color.new(#4ade80, 85)
+colLongZoneBorder = color.new(#4ade80, 30)
+colShortZoneBg = color.new(#f87171, 85)
+colShortZoneBorder = color.new(#f87171, 30)
+
+atr14 = ta.atr(14)
+
+pointSize() =>
+    tick = math.max(nz(syminfo.mintick, 0.0001), 1e-8)
+    t = str.upper(syminfo.ticker)
+    str.contains(t, "JPY") ? 0.01 :
+     str.contains(t, "XAU") or str.contains(t, "GOLD") ? 0.1 :
+     str.contains(t, "XAG") or str.contains(t, "SILVER") ? 0.01 :
+     close >= 1000 or tick >= 1.0 ? math.max(tick, 1.0) :
+     close >= 50 ? math.max(tick, 0.1) :
+     math.max(tick * 10, 0.0001)
+
+fmtPx(float px) =>
+    str.tostring(px, format.mintick)
+
+kachingAlertLabel(string alertType) =>
+    alertType == "entry" ? "Kaching Entry" :
+     alertType == "stop_loss" ? "Kaching SL" :
+     alertType == "take_profit_1" ? "Kaching TP1" :
+     alertType == "take_profit_2" ? "Kaching TP2" :
+     alertType == "take_profit_3" ? "Kaching TP3" :
+     "Kaching Signal"
+
+buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
+    '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"message":"' + kachingAlertLabel(alertType) + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
+
+// ===== HTF LIQUIDITY SWEEP (15m context — never used for entry price) =====
+htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
+htfLow = request.security(syminfo.tickerid, htfTf, low, barmerge.gaps_off, barmerge.lookahead_off)
+htfClose = request.security(syminfo.tickerid, htfTf, close, barmerge.gaps_off, barmerge.lookahead_off)
+htfAtr = request.security(syminfo.tickerid, htfTf, ta.atr(14), barmerge.gaps_off, barmerge.lookahead_off)
+
+htfSwingHigh = request.security(syminfo.tickerid, htfTf, ta.pivothigh(high, swingLen, swingLen), barmerge.gaps_off, barmerge.lookahead_off)
+htfSwingLow = request.security(syminfo.tickerid, htfTf, ta.pivotlow(low, swingLen, swingLen), barmerge.gaps_off, barmerge.lookahead_off)
+
+var float lastSwingHigh = na
+var float lastSwingLow = na
+if not na(htfSwingHigh)
+    lastSwingHigh := htfSwingHigh
+if not na(htfSwingLow)
+    lastSwingLow := htfSwingLow
+
+// Sweep = trade beyond + close back (reject) on HTF series mapped to chart bars
+bullSweep = not na(lastSwingLow) and htfLow < lastSwingLow and htfClose > lastSwingLow
+bearSweep = not na(lastSwingHigh) and htfHigh > lastSwingHigh and htfClose < lastSwingHigh
+
+var int sweepDir = 0
+var float sweepExtreme = na
+var float sweepLevel = na
+var int sweepBar = na
+if bullSweep and barstate.isconfirmed
+    sweepDir := 1
+    sweepExtreme := htfLow
+    sweepLevel := lastSwingLow
+    sweepBar := bar_index
+if bearSweep and barstate.isconfirmed
+    sweepDir := -1
+    sweepExtreme := htfHigh
+    sweepLevel := lastSwingHigh
+    sweepBar := bar_index
+
+// Ignore setups before HTF sweep / stale sweeps
+sweepFresh = not na(sweepBar) and (bar_index - sweepBar) <= 40 and sweepDir != 0
+
+// ===== LTF MSS =====
+pivotHigh = ta.pivothigh(high, swingLen, swingLen)
+pivotLow = ta.pivotlow(low, swingLen, swingLen)
+var float lastLH = na
+var float lastHL = na
+if not na(pivotHigh)
+    lastLH := pivotHigh
+if not na(pivotLow)
+    lastHL := pivotLow
+
+bullMss = sweepFresh and sweepDir == 1 and not na(lastLH) and close > lastLH and barstate.isconfirmed
+bearMss = sweepFresh and sweepDir == -1 and not na(lastHL) and close < lastHL and barstate.isconfirmed
+
+var int mssDir = 0
+var int mssBar = na
+if bullMss
+    mssDir := 1
+    mssBar := bar_index
+if bearMss
+    mssDir := -1
+    mssBar := bar_index
+
+mssActive = not na(mssBar) and mssDir == sweepDir and (bar_index - mssBar) <= 24
+
+// ===== DISPLACEMENT =====
+bodyRatio(cOpen, cClose, cHigh, cLow) =>
+    math.abs(cClose - cOpen) / math.max(cHigh - cLow, syminfo.mintick)
+
+wickRatio(cOpen, cClose, cHigh, cLow) =>
+    (cHigh - math.max(cOpen, cClose) + math.min(cOpen, cClose) - cLow) / math.max(cHigh - cLow, syminfo.mintick)
+
+avgBody = ta.sma(math.abs(close - open), 14)
+cRange = high - low
+bullDisp = mssActive and mssDir == 1 and close > open and bodyRatio(open, close, high, low) >= minBodyRatio and wickRatio(open, close, high, low) <= maxWickRatio and math.abs(close - open) > avgBody * 1.15 and cRange > atr14 * minDispAtr and (high - close) / math.max(cRange, syminfo.mintick) <= 0.25 and barstate.isconfirmed
+bearDisp = mssActive and mssDir == -1 and close < open and bodyRatio(open, close, high, low) >= minBodyRatio and wickRatio(open, close, high, low) <= maxWickRatio and math.abs(close - open) > avgBody * 1.15 and cRange > atr14 * minDispAtr and (close - low) / math.max(cRange, syminfo.mintick) <= 0.25 and barstate.isconfirmed
+
+var int dispBar = na
+var int dispDir = 0
+if bullDisp
+    dispBar := bar_index
+    dispDir := 1
+if bearDisp
+    dispBar := bar_index
+    dispDir := -1
+
+dispActive = not na(dispBar) and dispDir == sweepDir and (bar_index - dispBar) <= 18
+
+// ===== ENGULFING (preferred) =====
+bullEngulf = close > open and close[1] < open[1] and close >= math.max(open[1], close[1]) and open <= math.min(open[1], close[1])
+bearEngulf = close < open and close[1] > open[1] and open >= math.max(open[1], close[1]) and close <= math.min(open[1], close[1])
+engulfOk = not requireEngulf or (dispDir == 1 and bullEngulf) or (dispDir == -1 and bearEngulf)
+
+// ===== ICT FVG =====
+bullFvg = dispActive and high[2] < low[0] and (low[0] - high[2]) >= atr14 * minGapAtr and barstate.isconfirmed and bar_index > dispBar
+bearFvg = dispActive and low[2] > high[0] and (low[2] - high[0]) >= atr14 * minGapAtr and barstate.isconfirmed and bar_index > dispBar
+
+var float fvgTop = na
+var float fvgBot = na
+var float fvgCe = na
+var int fvgBar = na
+var int fvgDir = 0
+if bullFvg and engulfOk
+    fvgTop := low[0]
+    fvgBot := high[2]
+    fvgCe := (fvgTop + fvgBot) / 2
+    fvgBar := bar_index
+    fvgDir := 1
+if bearFvg and engulfOk
+    fvgTop := low[2]
+    fvgBot := high[0]
+    fvgCe := (fvgTop + fvgBot) / 2
+    fvgBar := bar_index
+    fvgDir := -1
+
+fvgActive = not na(fvgBar) and fvgDir == sweepDir and (bar_index - fvgBar) <= 10 and bar_index > fvgBar
+
+// Doji on C3 (confidence only)
+c3Doji = math.abs(close - open) / math.max(high - low, syminfo.mintick) <= 0.12
+
+// ===== RETRACE INTO FVG (never enter on displacement bar) =====
+zoneTop = entryModel == "ce" ? fvgCe + (fvgTop - fvgBot) * 0.08 : entryModel == "upper_half" ? fvgTop : entryModel == "lower_half" ? fvgCe : fvgTop
+zoneBot = entryModel == "ce" ? fvgCe - (fvgTop - fvgBot) * 0.08 : entryModel == "upper_half" ? fvgCe : entryModel == "lower_half" ? fvgBot : fvgBot
+
+retraceLong = fvgActive and fvgDir == 1 and bar_index > dispBar and low <= zoneTop and high >= zoneBot and close >= fvgBot
+retraceShort = fvgActive and fvgDir == -1 and bar_index > dispBar and low <= zoneTop and high >= zoneBot and close <= fvgTop
+
+// ===== CONFIDENCE (weights match backend) =====
+confScore() =>
+    float s = 0.0
+    if sweepFresh
+        s += 30
+    if mssActive
+        s += 20
+    if dispActive
+        s += 15
+    if fvgActive
+        s += 15
+    if retraceLong or retraceShort
+        s += 10
+    if (fvgDir == 1 and bullEngulf) or (fvgDir == -1 and bearEngulf)
+        s += 5
+    if c3Doji
+        s += 5
+    s
+
+// ===== LEVELS =====
+calcLevels(string direction, float entryPx, float slPx) =>
+    risk = math.abs(entryPx - slPx)
+    tp1 = direction == "long" ? entryPx + risk * tp1R : entryPx - risk * tp1R
+    tp2 = direction == "long" ? entryPx + risk * tp2R : entryPx - risk * tp2R
+    tp3 = direction == "long" ? entryPx + risk * tp3R : entryPx - risk * tp3R
+    [entryPx, slPx, tp1, tp2, tp3, risk]
+
+resolveStop(string direction, float entryPx) =>
+    buf = nz(atr14, pointSize()) * 0.05
+    sweepSl = direction == "long" ? sweepExtreme - buf : sweepExtreme + buf
+    fvgSl = direction == "long" ? fvgBot - buf : fvgTop + buf
+    stopModel == "fvg" ? fvgSl : stopModel == "sweep_or_fvg" ? (direction == "long" ? math.min(sweepSl, fvgSl) : math.max(sweepSl, fvgSl)) : sweepSl
+
+resolveEntry(string direction) =>
+    entryModel == "ce" ? fvgCe : close
+
+// Chart TF guard — entries only on 1 / 3 minute charts
+entryTfOk = timeframe.isminutes and (timeframe.multiplier == 15 or timeframe.multiplier == 5)
+
+var line lnEntry = na
+var line lnSl = na
+var line lnTp1 = na
+var line lnTp2 = na
+var line lnTp3 = na
+var label lbEntryTag = na
+var label lbSlTag = na
+var label lbTp1Tag = na
+var label lbTp2Tag = na
+var label lbTp3Tag = na
+var label lbBadge = na
+var box fvgZone = na
+var float activeSl = na
+var float activeTp3 = na
+var string activeDirection = na
+var bool tradeActive = false
+
+clearPreviousDrawings() =>
+    if not na(lnEntry)
+        line.delete(lnEntry)
+    if not na(lnSl)
+        line.delete(lnSl)
+    if not na(lnTp1)
+        line.delete(lnTp1)
+    if not na(lnTp2)
+        line.delete(lnTp2)
+    if not na(lnTp3)
+        line.delete(lnTp3)
+    if not na(lbEntryTag)
+        label.delete(lbEntryTag)
+    if not na(lbSlTag)
+        label.delete(lbSlTag)
+    if not na(lbTp1Tag)
+        label.delete(lbTp1Tag)
+    if not na(lbTp2Tag)
+        label.delete(lbTp2Tag)
+    if not na(lbTp3Tag)
+        label.delete(lbTp3Tag)
+    if not na(lbBadge)
+        label.delete(lbBadge)
+    if not na(fvgZone)
+        box.delete(fvgZone)
+
+if tradeActive and barstate.isconfirmed
+    longTrade = activeDirection == "long"
+    hitSl = longTrade ? low <= activeSl : high >= activeSl
+    hitTp3 = longTrade ? high >= activeTp3 : low <= activeTp3
+    if hitSl or hitTp3
+        clearPreviousDrawings()
+        lnEntry := na
+        lnSl := na
+        lnTp1 := na
+        lnTp2 := na
+        lnTp3 := na
+        lbEntryTag := na
+        lbSlTag := na
+        lbTp1Tag := na
+        lbTp2Tag := na
+        lbTp3Tag := na
+        lbBadge := na
+        fvgZone := na
+        tradeActive := false
+
+fireLong = entryTfOk and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
+fireShort = entryTfOk and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
+
+if fireLong
+    e = resolveEntry("long")
+    sl = resolveStop("long", e)
+    [ee, ssl, t1, t2, t3, _] = calcLevels("long", e, sl)
+    conf = confScore() / 100.0
+    msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf)
+    alert(msg, alert.freq_once_per_bar)
+    clearPreviousDrawings()
+    // Overlay labels: Kaching Entry / SL / TP only — no liquidity/FVG/confidence text on chart
+    lbBadge := label.new(bar_index, low, "Kaching Entry", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.normal)
+    if SHOW_FVG_ZONE
+        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, bgcolor=colLongZoneBg)
+    if SHOW_TRADE_LINES
+        lnEntry := line.new(bar_index, ee, bar_index + 1, ee, extend=extend.right, color=color.new(colEntry, 0), width=2)
+        lnSl := line.new(bar_index, ssl, bar_index + 1, ssl, extend=extend.right, color=color.new(colSl, 0), width=2)
+        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(colTp1, 0), width=2, style=line.style_dashed)
+        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(colTp2, 0), width=2, style=line.style_dashed)
+        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(colTp3, 0), width=2, style=line.style_dashed)
+        lbEntryTag := label.new(bar_index + 1, ee, "Kaching Entry", style=label.style_label_left, color=color.new(colEntry, 0), textcolor=color.white, size=size.small)
+        lbSlTag := label.new(bar_index + 1, ssl, "Kaching SL", style=label.style_label_left, color=color.new(colSl, 0), textcolor=color.white, size=size.small)
+        lbTp1Tag := label.new(bar_index + 1, t1, "Kaching TP1", style=label.style_label_left, color=color.new(colTp1, 0), textcolor=color.black, size=size.small)
+        lbTp2Tag := label.new(bar_index + 1, t2, "Kaching TP2", style=label.style_label_left, color=color.new(colTp2, 0), textcolor=color.white, size=size.small)
+        lbTp3Tag := label.new(bar_index + 1, t3, "Kaching TP3", style=label.style_label_left, color=color.new(colTp3, 0), textcolor=color.black, size=size.small)
+        activeDirection := "long"
+        activeSl := ssl
+        activeTp3 := t3
+        tradeActive := true
+    // Reset sequence after fill
+    fvgBar := na
+    dispBar := na
+
+if fireShort
+    e = resolveEntry("short")
+    sl = resolveStop("short", e)
+    [ee, ssl, t1, t2, t3, _] = calcLevels("short", e, sl)
+    conf = confScore() / 100.0
+    msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf)
+    alert(msg, alert.freq_once_per_bar)
+    clearPreviousDrawings()
+    lbBadge := label.new(bar_index, high, "Kaching Entry", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
+    if SHOW_FVG_ZONE
+        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, bgcolor=colShortZoneBg)
+    if SHOW_TRADE_LINES
+        lnEntry := line.new(bar_index, ee, bar_index + 1, ee, extend=extend.right, color=color.new(colEntry, 0), width=2)
+        lnSl := line.new(bar_index, ssl, bar_index + 1, ssl, extend=extend.right, color=color.new(colSl, 0), width=2)
+        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(colTp1, 0), width=2, style=line.style_dashed)
+        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(colTp2, 0), width=2, style=line.style_dashed)
+        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(colTp3, 0), width=2, style=line.style_dashed)
+        lbEntryTag := label.new(bar_index + 1, ee, "Kaching Entry", style=label.style_label_left, color=color.new(colEntry, 0), textcolor=color.white, size=size.small)
+        lbSlTag := label.new(bar_index + 1, ssl, "Kaching SL", style=label.style_label_left, color=color.new(colSl, 0), textcolor=color.white, size=size.small)
+        lbTp1Tag := label.new(bar_index + 1, t1, "Kaching TP1", style=label.style_label_left, color=color.new(colTp1, 0), textcolor=color.black, size=size.small)
+        lbTp2Tag := label.new(bar_index + 1, t2, "Kaching TP2", style=label.style_label_left, color=color.new(colTp2, 0), textcolor=color.white, size=size.small)
+        lbTp3Tag := label.new(bar_index + 1, t3, "Kaching TP3", style=label.style_label_left, color=color.new(colTp3, 0), textcolor=color.black, size=size.small)
+        activeDirection := "short"
+        activeSl := ssl
+        activeTp3 := t3
+        tradeActive := true
+    fvgBar := na
+    dispBar := na

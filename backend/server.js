@@ -1823,7 +1823,8 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
     const generated = PineScriptGeneratorService.generateForUser(req.user, {
       webhookUrl: WEBHOOK_TRADINGVIEW_URL,
       webhookSecret: TRADINGVIEW_WEBHOOK_SECRET,
-      publicBackendUrl: PUBLIC_BACKEND_URL
+      publicBackendUrl: PUBLIC_BACKEND_URL,
+      strategy: req.query.strategy || req.query.strategyId
     });
 
     res.json({
@@ -1833,6 +1834,9 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
       tier: generated.tier,
       tierLabel: generated.tierLabel,
       subscriberLabel: generated.subscriberLabel,
+      strategy: generated.strategy,
+      strategyName: generated.strategyName,
+      availableStrategies: generated.availableStrategies,
       generatedAt: generated.generatedAt,
       architecture: generated.architecture,
       flow: generated.flow,

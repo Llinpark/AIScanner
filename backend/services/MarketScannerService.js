@@ -12,6 +12,7 @@ const {
   detectTradeOutcome,
   attachActivation
 } = require('../utils/tradeLevelLifecycle');
+const { getDefaultRegistry, SCALPING_ID, DAYTRADING_ID } = require('../strategies');
 
 const candleBuffers = new Map();
 const lastEmittedBar = new Map();
@@ -105,9 +106,9 @@ async function publishEntrySignal(io, symbol, detection) {
 }
 
 async function fetchHtfCandles(symbol, options = {}) {
-  if (!PATTERN_SCANNER_CONFIG.pipeline?.enabled) return [];
+  if (!PATTERN_SCANNER_CONFIG.pipeline?.enabled && !options.force) return [];
 
-  const htfTimeframe = PATTERN_SCANNER_CONFIG.pipeline.htf?.timeframe || '4h';
+  const htfTimeframe = options.timeframe || PATTERN_SCANNER_CONFIG.pipeline.htf?.timeframe || '4h';
   try {
     const hub = getMarketDataHub();
     // Manual/internal scanner may live-fetch; timer/background assist stays cache-only.
@@ -134,6 +135,15 @@ async function fetchHtfCandles(symbol, options = {}) {
   }
 }
 
+async function fetchScalpingHtfCandles(symbol, options = {}) {
+  if (process.env.SCALPING_STRATEGY_ENABLED === 'false') return [];
+  return fetchHtfCandles(symbol, {
+    ...options,
+    timeframe: process.env.SCALPING_HTF_TF || '15m',
+    force: true
+  });
+}
+
 async function processCandles(symbol, candles, io, options = {}) {
   if (candles.length < 3) {
     return { processed: false, reason: 'insufficient_candles' };
@@ -147,13 +157,49 @@ async function processCandles(symbol, candles, io, options = {}) {
   const htfCandles = await fetchHtfCandles(normalizedSymbol, {
     allowProviderFetch: Boolean(options.allowProviderFetch)
   });
+  const scalpingHtfCandles = await fetchScalpingHtfCandles(normalizedSymbol, {
+    allowProviderFetch: Boolean(options.allowProviderFetch)
+  });
 
   const pending = pendingSetups.get(key);
   if (pending) {
-    const pendingResult = TradingPipelineService.checkPendingRetracement(candles, pending, {
-      symbol: normalizedSymbol,
-      htfCandles
-    });
+    const registry = getDefaultRegistry();
+    const strategyId = pending.strategyId || DAYTRADING_ID;
+    const strategy = registry.get(strategyId);
+
+    let pendingResult;
+    if (
+      (strategyId === SCALPING_ID || strategyId === DAYTRADING_ID) &&
+      strategy?.continuePending
+    ) {
+      pendingResult = strategy.continuePending(candles, pending, {
+        symbol: normalizedSymbol,
+        htfCandles: strategyId === SCALPING_ID ? scalpingHtfCandles : htfCandles,
+        htf4hCandles: htfCandles,
+        timeframe: options.timeframe || (strategyId === SCALPING_ID ? '3m' : '15m')
+      });
+      // Normalize strategy result shape to pipeline-like for shared handling below
+      if (pendingResult.signal && pendingResult.entry) {
+        pendingResult = {
+          passed: true,
+          stage: 'entry',
+          entry: pendingResult.entry
+        };
+      } else if (pendingResult.stage === 'pending_retrace') {
+        pendingResult = { stage: 'pending_retrace', pending: pendingResult.pending || pending };
+      } else {
+        pendingResult = {
+          expired: pendingResult.stage === 'rejected' || pendingResult.stage === 'filtered',
+          stage: pendingResult.stage,
+          reason: pendingResult.reason
+        };
+      }
+    } else {
+      pendingResult = TradingPipelineService.checkPendingRetracement(candles, pending, {
+        symbol: normalizedSymbol,
+        htfCandles
+      });
+    }
 
     if (pendingResult.expired) {
       pendingSetups.delete(key);
@@ -172,7 +218,10 @@ async function processCandles(symbol, candles, io, options = {}) {
   }
 
   const result = PatternDetectionService.scanLastCandles(candles, undefined, normalizedSymbol, {
-    htfCandles
+    htfCandles,
+    scalpingHtfCandles,
+    timeframe: options.timeframe || '3m',
+    allowScalpingFallback: true
   });
 
   if (result.pending) {

@@ -14,6 +14,8 @@ primary_region = 'ams'
   NODE_ENV = 'production'
   PORT = '8080'
   # Signal generation is TradingView webhook-driven; do not poll for signals.
+  SCALPING_STRATEGY_ENABLED = 'true'
+  DAYTRADING_SWEEP_FVG_ENABLED = 'true'
   SCANNER_AUTO_ENABLED = 'false'
 
 [http_service]

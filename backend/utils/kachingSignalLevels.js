@@ -42,7 +42,14 @@ function normalizeSignalLevels(body = {}, direction = 'neutral') {
 
 function isStructuredEntryAlert(body = {}) {
   const alertType = String(body.alertType || body.alert_type || body.type || '').toLowerCase();
-  return alertType === 'entry' || body.pattern === 'perfect_fvg' || body.pattern === 'breakaway_gap';
+  return (
+    alertType === 'entry' ||
+    body.pattern === 'perfect_fvg' ||
+    body.pattern === 'breakaway_gap' ||
+    body.pattern === 'liquidity_sweep_fvg_scalp' ||
+    body.pattern === 'liquidity_sweep_fvg_daytrading' ||
+    body.pattern === 'smc_pipeline'
+  );
 }
 
 function validateKachingEntrySignal(signalData) {

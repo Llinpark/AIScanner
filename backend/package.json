@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "generate-secrets": "node scripts/generate-secrets.js"
+    "generate-secrets": "node scripts/generate-secrets.js",
+    "test": "node --test strategies/__tests__/**/*.test.js",
+    "test:strategies": "node --test strategies/__tests__/**/*.test.js",
+    "test:patterns": "node scripts/verify-patterns.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

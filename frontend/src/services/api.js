@@ -99,7 +99,10 @@ export const tradingviewApi = {
   getSetup: () => api.get('/api/tradingview/setup'),
   getAlerts: symbol =>
     api.get('/api/tradingview/alerts', { params: symbol ? { symbol } : {} }),
-  getPineScript: () => api.get('/api/tradingview/pine-script'),
+  getPineScript: (strategy) =>
+    api.get('/api/tradingview/pine-script', {
+      params: strategy ? { strategy } : {}
+    }),
   getHistory: (symbol, options = {}) => api.get(`/api/tradingview/history/${symbol}`, { params: options })
 };
 

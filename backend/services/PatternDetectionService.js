@@ -1,5 +1,11 @@
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const TradingPipelineService = require('./TradingPipelineService');
+const {
+  getDefaultRegistry,
+  DAYTRADING_ID,
+  SCALPING_ID,
+  LEGACY_SMC_ID
+} = require('../strategies');
 
 function normalizeCandle(raw) {
   return {
@@ -239,11 +245,72 @@ function buildActionableNotes(detection, levels) {
   ].join(' | ');
 }
 
+/**
+ * Scan candles with the pluggable strategy registry.
+ * Default coexistence: daytrading SMC pipeline first, then scalping (first_hit).
+ * Pass options.strategyId to force one strategy, or options.mode='all' for diagnostics.
+ *
+ * Scalping requires options.htfCandles (15m) + options.timeframe in {'1m','3m'}.
+ */
 function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', options = {}) {
-  if (config.pipeline?.enabled === false) {
+  if (config.pipeline?.enabled === false && !options.useStrategyRegistry) {
     return legacyScanLastCandles(candles, config, symbol);
   }
 
+  // Explicit multi-strategy path (daytrading + liquidity-sweep FVG scalping)
+  if (options.useStrategyRegistry || options.strategyId || options.runScalping) {
+    const registry = options.registry || getDefaultRegistry();
+    const prefer =
+      options.strategyId ||
+      options.prefer ||
+      (options.runScalping && !options.runDaytrading ? SCALPING_ID : DAYTRADING_ID);
+
+    const multi = registry.analyzeAll(
+      {
+        symbol,
+        candles,
+        htfCandles: options.htfCandles || [],
+        daytradingHtfCandles: options.htfCandles || [],
+        scalpingHtfCandles: options.scalpingHtfCandles || options.htfCandles || [],
+        timeframe: options.timeframe || '3m',
+        spread: options.spread,
+        now: options.now,
+        strictTimeframe: options.strictTimeframe === true
+      },
+      {
+        prefer,
+        mode: options.mode || 'first_hit'
+      }
+    );
+
+    if (multi.signal && multi.entry) {
+      return {
+        entry: { ...multi.entry, symbol },
+        pending: null,
+        strategyId: multi.strategyId,
+        strategies: multi.results
+      };
+    }
+
+    if (multi.stage === 'pending_retrace' && multi.pending) {
+      return {
+        entry: null,
+        pending: { ...multi.pending, symbol },
+        strategyId: multi.strategyId,
+        strategies: multi.results
+      };
+    }
+
+    return {
+      entry: null,
+      pending: null,
+      stage: multi.stage || 'none',
+      strategyId: multi.strategyId,
+      strategies: multi.results
+    };
+  }
+
+  // Backward-compatible daytrading-only path (existing SMC pipeline)
   const pipelineResult = TradingPipelineService.runPipeline(candles, {
     config,
     symbol,
@@ -252,7 +319,7 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', 
 
   if (pipelineResult.passed && pipelineResult.stage === 'entry') {
     return {
-      entry: { ...pipelineResult.entry, symbol },
+      entry: { ...pipelineResult.entry, symbol, strategyId: LEGACY_SMC_ID },
       pending: null,
       pipeline: pipelineResult
     };
@@ -261,7 +328,7 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', 
   if (pipelineResult.stage === 'pending_retrace' && pipelineResult.pending) {
     return {
       entry: null,
-      pending: { ...pipelineResult.pending, symbol },
+      pending: { ...pipelineResult.pending, symbol, strategyId: LEGACY_SMC_ID },
       pipeline: pipelineResult
     };
   }
@@ -275,6 +342,87 @@ function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', 
       pipelineScoreBreakdown: pipelineResult.pipelineScoreBreakdown,
       pipeline: pipelineResult
     };
+  }
+
+  // Optional: probe Sweep+FVG daytrading (15m/5m) then scalping (3m/1m) when HTF present
+  const dayHtf = options.htfCandles || options.daytradingHtfCandles || [];
+  const scalpHtf = options.scalpingHtfCandles?.length
+    ? options.scalpingHtfCandles
+    : options.htfCandles;
+  const registry = getDefaultRegistry();
+
+  if (
+    dayHtf?.length &&
+    process.env.DAYTRADING_SWEEP_FVG_ENABLED !== 'false' &&
+    options.allowDaytradingFallback !== false
+  ) {
+    const day = registry.get(DAYTRADING_ID);
+    if (day?.enabled) {
+      const dayResult = day.analyze({
+        symbol,
+        candles,
+        htfCandles: dayHtf,
+        htf4hCandles: dayHtf,
+        htf1hCandles: options.htf1hCandles || [],
+        timeframe: options.timeframe || '15m',
+        spread: options.spread,
+        now: options.now
+      });
+      if (dayResult.signal && dayResult.entry) {
+        return {
+          entry: { ...dayResult.entry, symbol },
+          pending: null,
+          strategyId: DAYTRADING_ID,
+          pipeline: pipelineResult,
+          daytrading: dayResult
+        };
+      }
+      if (dayResult.stage === 'pending_retrace' && dayResult.pending) {
+        return {
+          entry: null,
+          pending: { ...dayResult.pending, symbol },
+          strategyId: DAYTRADING_ID,
+          pipeline: pipelineResult,
+          daytrading: dayResult
+        };
+      }
+    }
+  }
+
+  if (
+    scalpHtf?.length &&
+    process.env.SCALPING_STRATEGY_ENABLED !== 'false' &&
+    options.allowScalpingFallback !== false
+  ) {
+    const scalp = registry.get(SCALPING_ID);
+    if (scalp?.enabled) {
+      const scalpResult = scalp.analyze({
+        symbol,
+        candles,
+        htfCandles: scalpHtf,
+        timeframe: options.timeframe || '3m',
+        spread: options.spread,
+        now: options.now
+      });
+      if (scalpResult.signal && scalpResult.entry) {
+        return {
+          entry: { ...scalpResult.entry, symbol },
+          pending: null,
+          strategyId: SCALPING_ID,
+          pipeline: pipelineResult,
+          scalping: scalpResult
+        };
+      }
+      if (scalpResult.stage === 'pending_retrace' && scalpResult.pending) {
+        return {
+          entry: null,
+          pending: { ...scalpResult.pending, symbol },
+          strategyId: SCALPING_ID,
+          pipeline: pipelineResult,
+          scalping: scalpResult
+        };
+      }
+    }
   }
 
   return { entry: null, pending: null, pipeline: pipelineResult };
@@ -341,5 +489,8 @@ module.exports = {
   scanLastCandles,
   getPipSize,
   averageVolume,
-  averageRange
+  averageRange,
+  DAYTRADING_ID,
+  SCALPING_ID,
+  LEGACY_SMC_ID
 };
