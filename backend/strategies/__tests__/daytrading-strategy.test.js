@@ -14,7 +14,6 @@ const { ScalpingStrategy } = require('../ScalpingStrategy');
 const { createDefaultRegistry, resetDefaultRegistry } = require('../registry');
 const { resolveDayTradingConfig, STRATEGY_NAME } = require('../config/dayTradingConfig');
 const { STRATEGY_ID: SCALPING_ID } = require('../config/scalpingConfig');
-const { LEGACY_SMC_ID } = require('../LegacySmcPipelineStrategy');
 const { TakeProfitEngine } = require('../engines/TakeProfitEngine');
 const { ConfidenceScoringService } = require('../engines/ConfidenceScoringService');
 const { LiquidityDetector } = require('../detectors/LiquidityDetector');
@@ -189,12 +188,12 @@ describe('DayTradingStrategy orchestrator', () => {
 });
 
 describe('Registry coexistence', () => {
-  it('registers daytrading + scalping + legacy SMC', () => {
+  it('registers daytrading + scalping only', () => {
     resetDefaultRegistry();
     const registry = createDefaultRegistry();
     assert.ok(registry.get(DAYTRADING_ID));
     assert.ok(registry.get(SCALPING_ID));
-    assert.ok(registry.get(LEGACY_SMC_ID));
+    assert.equal(registry.list().length, 2);
     assert.ok(registry.get(DAYTRADING_ID) instanceof DayTradingStrategy);
     assert.ok(registry.get(SCALPING_ID) instanceof ScalpingStrategy);
   });

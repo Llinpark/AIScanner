@@ -22,7 +22,6 @@ const { ScalpingStrategy } = require('../ScalpingStrategy');
 const { createDefaultRegistry } = require('../registry');
 const { DAYTRADING_ID } = require('../DayTradingStrategy');
 const { STRATEGY_ID: SCALPING_ID } = require('../config/scalpingConfig');
-const { LEGACY_SMC_ID } = require('../LegacySmcPipelineStrategy');
 const { resolveScalpingConfig } = require('../config/scalpingConfig');
 const { candleMetrics, atr, findSwingPoints, isSidewaysMarket } = require('../utils/candleMath');
 const { computeSessionLevels, sessionPoolsFromLevels } = require('../utils/sessionLevels');
@@ -466,12 +465,12 @@ describe('TradeSignalGenerator', () => {
 });
 
 describe('StrategyRegistry coexistence', () => {
-  it('registers daytrading + scalping', () => {
+  it('registers daytrading + scalping only', () => {
     const registry = createDefaultRegistry();
     assert.ok(registry.get(DAYTRADING_ID));
     assert.ok(registry.get(SCALPING_ID));
-    assert.ok(registry.get(LEGACY_SMC_ID));
-    assert.equal(registry.listEnabled().length >= 2, true);
+    assert.equal(registry.list().length, 2);
+    assert.equal(registry.listEnabled().length >= 1, true);
   });
 });
 

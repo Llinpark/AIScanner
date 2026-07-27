@@ -1,5 +1,5 @@
 /**
- * Runtime + persisted overrides for Scalping / Day Trading / Legacy SMC strategies.
+ * Runtime + persisted overrides for Scalping / Day Trading strategies.
  * Mirrors scannerRuntimeConfig: env defaults → optional Mongo overrides → hot-reload registry.
  */
 
@@ -14,10 +14,6 @@ const {
   STRATEGY_NAME: DAYTRADING_NAME,
   resolveDayTradingConfig
 } = require('../strategies/config/dayTradingConfig');
-const {
-  LEGACY_SMC_ID,
-  LEGACY_SMC_NAME
-} = require('../strategies/LegacySmcPipelineStrategy');
 
 const DOC_KEY = 'strategies';
 
@@ -25,7 +21,6 @@ const DOC_KEY = 'strategies';
 let scalpingOverrides = {};
 /** @type {Record<string, any>} */
 let daytradingOverrides = {};
-let legacyEnabled = process.env.LEGACY_SMC_PIPELINE_STRATEGY !== 'false';
 
 const SCALPING_WEIGHT_KEYS = ['sweep', 'mss', 'displacement', 'fvg', 'retrace', 'engulfing', 'doji'];
 const DAYTRADING_WEIGHT_KEYS = [
@@ -350,18 +345,12 @@ function getResolvedDaytradingConfig() {
 function getRegistryOptions() {
   return {
     scalpingConfig: getResolvedScalpingConfig(),
-    daytradingConfig: getResolvedDaytradingConfig(),
-    enableLegacySmc: legacyEnabled
+    daytradingConfig: getResolvedDaytradingConfig()
   };
 }
 
 function getStrategyAdminConfig() {
   return {
-    legacy: {
-      id: LEGACY_SMC_ID,
-      name: LEGACY_SMC_NAME,
-      enabled: Boolean(legacyEnabled)
-    },
     scalping: toAdminScalpingView(getResolvedScalpingConfig()),
     daytrading: toAdminDaytradingView(getResolvedDaytradingConfig())
   };
@@ -376,15 +365,9 @@ function rebuildDefaultRegistry() {
 
 /**
  * Apply admin patch in-memory and rebuild strategy registry.
- * @param {{ scalping?: object, daytrading?: object, legacyEnabled?: boolean }} patch
+ * @param {{ scalping?: object, daytrading?: object }} patch
  */
 function applyStrategyConfig(patch = {}) {
-  if (patch.legacyEnabled !== undefined) {
-    legacyEnabled = Boolean(patch.legacyEnabled);
-  }
-  if (patch.legacy && typeof patch.legacy === 'object' && patch.legacy.enabled !== undefined) {
-    legacyEnabled = Boolean(patch.legacy.enabled);
-  }
   if (patch.scalping && typeof patch.scalping === 'object') {
     scalpingOverrides = deepMergeOverrides(scalpingOverrides, pickScalpingAdminPatch(patch.scalping));
   }
@@ -409,10 +392,10 @@ async function persistStrategyConfig({ updatedBy } = {}) {
       $set: {
         scalping: scalpingOverrides,
         daytrading: daytradingOverrides,
-        legacyEnabled,
         updatedAt: new Date(),
         updatedBy: updatedBy || null
-      }
+      },
+      $unset: { legacyEnabled: 1 }
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   ).lean();
@@ -431,9 +414,6 @@ async function loadPersistedStrategyConfig() {
       doc.scalping && typeof doc.scalping === 'object' ? { ...doc.scalping } : {};
     daytradingOverrides =
       doc.daytrading && typeof doc.daytrading === 'object' ? { ...doc.daytrading } : {};
-    if (doc.legacyEnabled !== undefined) {
-      legacyEnabled = Boolean(doc.legacyEnabled);
-    }
   }
   rebuildDefaultRegistry();
   return getStrategyAdminConfig();

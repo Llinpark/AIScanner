@@ -2,7 +2,6 @@ const TradingViewAlertService = require('./TradingViewAlertService');
 const TradingViewService = require('./TradingViewService');
 const SignalEnrichmentService = require('./SignalEnrichmentService');
 const PatternDetectionService = require('./PatternDetectionService');
-const TradingPipelineService = require('./TradingPipelineService');
 const { getMarketDataHub } = require('./MarketDataHubService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { normalizeSymbol } = require('../config/symbols');
@@ -169,18 +168,16 @@ async function processCandles(symbol, candles, io, options = {}) {
     const strategyId = pending.strategyId || DAYTRADING_ID;
     const strategy = registry.get(strategyId);
 
-    let pendingResult;
     if (
       (strategyId === SCALPING_ID || strategyId === DAYTRADING_ID) &&
       strategy?.continuePending
     ) {
-      pendingResult = strategy.continuePending(candles, pending, {
+      let pendingResult = strategy.continuePending(candles, pending, {
         symbol: normalizedSymbol,
         htfCandles: strategyId === SCALPING_ID ? scalpingHtfCandles : htfCandles,
         htf4hCandles: htfCandles,
         timeframe: options.timeframe || (strategyId === SCALPING_ID ? '3m' : '15m')
       });
-      // Normalize strategy result shape to pipeline-like for shared handling below
       if (pendingResult.signal && pendingResult.entry) {
         pendingResult = {
           passed: true,
@@ -196,26 +193,17 @@ async function processCandles(symbol, candles, io, options = {}) {
           reason: pendingResult.reason
         };
       }
-    } else {
-      pendingResult = TradingPipelineService.checkPendingRetracement(candles, pending, {
-        symbol: normalizedSymbol,
-        htfCandles
-      });
-    }
 
-    if (pendingResult.expired) {
+      if (pendingResult.expired) {
+        pendingSetups.delete(key);
+      } else if (pendingResult.passed && pendingResult.stage === 'entry' && shouldEmit(symbol, c3.time)) {
+        pendingSetups.delete(key);
+        await publishEntrySignal(io, normalizedSymbol, pendingResult.entry);
+        return { processed: true, pattern: pendingResult.entry.pattern, stage: 'entry', via: 'pending_retrace' };
+      }
+    } else {
+      // Drop pending setups from removed classic / unknown strategies
       pendingSetups.delete(key);
-    } else if (pendingResult.passed && pendingResult.stage === 'entry' && shouldEmit(symbol, c3.time)) {
-      pendingSetups.delete(key);
-      await publishEntrySignal(io, normalizedSymbol, pendingResult.entry);
-      return { processed: true, pattern: pendingResult.entry.pattern, stage: 'entry', via: 'pending_retrace' };
-    } else if (pendingResult.stage === 'below_premium_threshold') {
-      pendingSetups.delete(key);
-      return {
-        processed: false,
-        stage: 'below_premium_threshold',
-        pipelineScore: pendingResult.pipelineScore
-      };
     }
   }
 
@@ -238,16 +226,12 @@ async function processCandles(symbol, candles, io, options = {}) {
     return { processed: true, pattern: result.entry.pattern, stage: 'entry' };
   }
 
-  if (result.pipeline?.stage === 'below_premium_threshold' || result.stage === 'below_premium_threshold') {
+  if (result.pending) {
     return {
       processed: false,
-      stage: 'below_premium_threshold',
-      pipelineScore: result.pipelineScore ?? result.pipeline?.pipelineScore
+      stage: 'pending_retrace',
+      pattern: result.pending?.pattern || result.strategyId || 'strategy_pending'
     };
-  }
-
-  if (result.pending) {
-    return { processed: false, stage: 'pending_retrace', pattern: 'smc_pipeline' };
   }
 
   return { processed: false };
@@ -381,13 +365,12 @@ function getScannerStatus() {
       candles: getCandles(symbol).length,
       pendingRetrace: pendingSetups.has(bufferKey(symbol))
     })),
-    pipeline: {
-      enabled: PATTERN_SCANNER_CONFIG.pipeline?.enabled !== false,
-      steps: TradingPipelineService.PIPELINE_STEPS,
-      htfTimeframe: PATTERN_SCANNER_CONFIG.pipeline?.htf?.timeframe || '4h',
-      premiumThreshold: PATTERN_SCANNER_CONFIG.pipeline?.scoring?.premiumThreshold || 90
-    },
-    patterns: ['smc_pipeline']
+    strategies: getDefaultRegistry().list().map(s => ({
+      id: s.id,
+      name: s.name,
+      enabled: s.enabled !== false
+    })),
+    patterns: ['liquidity_sweep_fvg_daytrading', 'liquidity_sweep_fvg_scalp']
   };
 }
 

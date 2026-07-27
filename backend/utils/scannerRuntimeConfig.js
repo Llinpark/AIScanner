@@ -2,13 +2,10 @@ const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { getStrategyAdminConfig } = require('./strategyRuntimeConfig');
 
 function getScannerConfig() {
-  const scoring = PATTERN_SCANNER_CONFIG.pipeline?.scoring || {};
   return {
     autoScanEnabled: Boolean(PATTERN_SCANNER_CONFIG.autoScanEnabled),
     autoScanIntervalMs: Number(PATTERN_SCANNER_CONFIG.autoScanIntervalMs),
     scanBatchSize: Number(PATTERN_SCANNER_CONFIG.scanBatchSize),
-    premiumThreshold: Number(scoring.premiumThreshold),
-    weights: { ...(scoring.weights || {}) },
     strategies: getStrategyAdminConfig()
   };
 }
@@ -23,25 +20,6 @@ function applyScannerConfig(patch = {}) {
   }
   if (patch.scanBatchSize !== undefined) {
     PATTERN_SCANNER_CONFIG.scanBatchSize = Math.max(1, parseInt(patch.scanBatchSize, 10) || 2);
-  }
-  if (patch.premiumThreshold !== undefined) {
-    const threshold = Math.min(100, Math.max(50, parseInt(patch.premiumThreshold, 10) || 80));
-    PATTERN_SCANNER_CONFIG.pipeline.scoring.premiumThreshold = threshold;
-  }
-  if (patch.weights && typeof patch.weights === 'object') {
-    const allowed = [
-      'liquiditySweep',
-      'fvgRule',
-      'expansionCandle',
-      'htfBias',
-      'fvgUnmitigated',
-      'marketStructureShift'
-    ];
-    for (const key of allowed) {
-      if (patch.weights[key] !== undefined) {
-        PATTERN_SCANNER_CONFIG.pipeline.scoring.weights[key] = Number(patch.weights[key]);
-      }
-    }
   }
   if (patch.strategies && typeof patch.strategies === 'object') {
     const { applyStrategyConfig } = require('./strategyRuntimeConfig');

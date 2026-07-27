@@ -471,7 +471,6 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                   >
                     <option value="daytrading">Liquidity Sweep + FVG (Day Trading)</option>
                     <option value="scalping">Liquidity Sweep + FVG (Scalping)</option>
-                    <option value="classic">Classic (FVG / Breakaway)</option>
                   </select>
                   {pineMeta?.strategyName && (
                     <p className="setup-note">Active: {pineMeta.strategyName}</p>

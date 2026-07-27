@@ -1,13 +1,16 @@
 //@version=5
-// Legacy reference copy — production scripts are generated from templates/kaching-scanner.pine.template
+// UNUSED ARCHIVE — Classic FVG/Breakaway reference only.
+// Production scripts are generated from:
+//   templates/kaching-sweep-fvg-daytrading.pine.template
+//   templates/kaching-sweep-fvg-scalp.pine.template
 indicator("KachingFx Structural Scanner", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
 
 // ===== CONFIGURATION =====
 WEBHOOK_URL = input.string("https://api.kachingscanner.com/api/webhook/tradingview", "Webhook URL", group="KachingFx")
 WEBHOOK_SECRET = input.string("your_webhook_secret", "Webhook Secret", group="KachingFx")
 SEND_CANDLE_FEED = input.bool(true, "Send each bar to server scanner", group="KachingFx")
-SHOW_TRADE_LINES = input.bool(true, "Auto-draw Entry / SL / TP lines on chart", group="KachingFx")
-SHOW_FVG_ZONE = input.bool(true, "Shade the fair value gap zone", group="KachingFx")
+SHOW_TRADE_LINES = true
+SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
 
 minBodyRatio = input.float(0.62, "Perfect FVG: min C2 body/range", minval=0.4, maxval=0.95, group="Pattern A — FVG")
 maxWickRatio = input.float(0.28, "Perfect FVG: max C2 wick/range", minval=0.05, maxval=0.5, group="Pattern A — FVG")
@@ -40,9 +43,22 @@ wickRatio(c) =>
     (c.high - math.max(c.open, c.close) + math.min(c.open, c.close) - c.low) / math.max(c.high - c.low, syminfo.mintick)
 
 avgVol = ta.sma(volume, 20)
+hasUsableVolume = not na(avgVol) and avgVol > 0
+atr14 = ta.atr(14)
 
-pipSize() =>
-    str.contains(syminfo.ticker, "JPY") ? 0.01 : 0.0001
+// Adaptive pip/point size — FX pips, metal points, index points, crypto ticks.
+pointSize() =>
+    tick = math.max(nz(syminfo.mintick, 0.0001), 1e-8)
+    t = str.upper(syminfo.ticker)
+    str.contains(t, "JPY") ? 0.01 :
+     str.contains(t, "XAU") or str.contains(t, "UAX") or str.contains(t, "GOLD") ? 0.1 :
+     str.contains(t, "XAG") or str.contains(t, "SILVER") ? 0.01 :
+     close >= 1000 or tick >= 1.0 ? math.max(tick, 1.0) :
+     close >= 50 ? math.max(tick, 0.1) :
+     math.max(tick * 10, 0.0001)
+
+fmtPx(float px) =>
+    str.tostring(px, format.mintick)
 
 kachingAlertLabel(string alertType) =>
     alertType == "entry" ? "Kaching Entry" :
@@ -53,11 +69,14 @@ kachingAlertLabel(string alertType) =>
      "Kaching Signal"
 
 buildPayload(string alertType, string pattern, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
-    '{"symbol":"' + syminfo.ticker + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + str.tostring(entry, "#.#####") + ',"stop_loss":' + str.tostring(sl, "#.#####") + ',"stop_loss_1":' + str.tostring(sl, "#.#####") + ',"take_profit_1":' + str.tostring(tp1, "#.#####") + ',"take_profit_2":' + str.tostring(tp2, "#.#####") + ',"take_profit_3":' + str.tostring(tp3, "#.#####") + ',"gapTop":' + str.tostring(gapTop, "#.#####") + ',"gapBottom":' + str.tostring(gapBot, "#.#####") + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"message":"' + kachingAlertLabel(alertType) + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
+    '{"symbol":"' + syminfo.ticker + '","pattern":"' + pattern + '","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"open":' + fmtPx(open) + ',"high":' + fmtPx(high) + ',"low":' + fmtPx(low) + ',"close":' + fmtPx(close) + ',"volume":' + str.tostring(nz(volume, 0)) + ',"time":' + str.tostring(time) + ',"message":"' + kachingAlertLabel(alertType) + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
 
 calcLevels(string direction, float entry, float gapTop, float gapBot) =>
-    pip = pipSize()
-    sl = direction == "long" ? entry - slPips * pip : entry + slPips * pip
+    pip = pointSize()
+    pipDist = slPips * pip
+    atrFloor = nz(atr14, pipDist) * 0.35
+    slDist = math.max(pipDist, atrFloor)
+    sl = direction == "long" ? entry - slDist : entry + slDist
     risk = math.abs(entry - sl)
     tp1 = direction == "long" ? entry + risk * tp1R : entry - risk * tp1R
     tp2 = direction == "long" ? entry + risk * tp2R : entry - risk * tp2R
@@ -113,23 +132,38 @@ clearPreviousDrawings() =>
         box.delete(fvgZone)
 
 // ===== PATTERN A: PERFECT FVG (C1,C2,C3) =====
-[c1o, c1h, c1l, c1c, c1v] = request.security(syminfo.tickerid, timeframe.period, [open[2], high[2], low[2], close[2], volume[2]])
-[c2o, c2h, c2l, c2c, c2v] = request.security(syminfo.tickerid, timeframe.period, [open[1], high[1], low[1], close[1], volume[1]])
-[c3o, c3h, c3l, c3c, c3v] = request.security(syminfo.tickerid, timeframe.period, [open[0], high[0], low[0], close[0], volume[0]])
+c1o = open[2]
+c1h = high[2]
+c1l = low[2]
+c1c = close[2]
+c2o = open[1]
+c2h = high[1]
+c2l = low[1]
+c2c = close[1]
+c2v = volume[1]
+c3h = high[0]
+c3l = low[0]
+c3c = close[0]
 
 bullFVG = c1h < c3l
 bearFVG = c1l > c3h
 
-c2Body = math.abs(c2c - c2o) / math.max(c2h - c2l, syminfo.mintick)
-c2Wick = (c2h - math.max(c2o, c2c) + math.min(c2o, c2c) - c2l) / math.max(c2h - c2l, syminfo.mintick)
-c2VolOk = c2v >= avgVol[1] * volMult
+c2Range = math.max(c2h - c2l, syminfo.mintick)
+c2Body = math.abs(c2c - c2o) / c2Range
+c2Wick = (c2h - math.max(c2o, c2c) + math.min(c2o, c2c) - c2l) / c2Range
+c2VolOk = not hasUsableVolume or (not na(c2v) and c2v >= avgVol[1] * volMult)
 c2Bull = c2c >= c2o
+gapSizeBull = math.abs(c3l - c1h)
+gapSizeBear = math.abs(c1l - c3h)
+minGapAbs = math.max(nz(atr14, syminfo.mintick) * 0.12, syminfo.mintick * 10)
+gapOkBull = gapSizeBull >= minGapAbs
+gapOkBear = gapSizeBear >= minGapAbs
 
 // barstate.isconfirmed gates the signal to the bar close so it evaluates the
 // pattern exactly once per candle instead of repainting/re-firing on every
 // intrabar tick while the condition holds true.
-perfectBullFVG = bullFVG and c2Body >= minBodyRatio and c2Wick <= maxWickRatio and c2VolOk and c2Bull and barstate.isconfirmed
-perfectBearFVG = bearFVG and c2Body >= minBodyRatio and c2Wick <= maxWickRatio and c2VolOk and not c2Bull and barstate.isconfirmed
+perfectBullFVG = bullFVG and gapOkBull and c2Body >= minBodyRatio and c2Wick <= maxWickRatio and c2VolOk and c2Bull and barstate.isconfirmed
+perfectBearFVG = bearFVG and gapOkBear and c2Body >= minBodyRatio and c2Wick <= maxWickRatio and c2VolOk and not c2Bull and barstate.isconfirmed
 
 gapTopBull = c3l
 gapBotBull = c1h
@@ -138,7 +172,7 @@ gapBotBear = c3h
 
 // ===== PATTERN B: BREAKAWAY GAP =====
 c1Body = math.abs(c1c - c1o) / math.max(c1h - c1l, syminfo.mintick)
-c1Range = c1h - c1l
+c1Range = math.max(c1h - c1l, syminfo.mintick)
 
 c2Open = c2o
 bullBreakSetup = c1Body >= c1DispBody and c2Open > c1h and c2l > c1h
@@ -152,14 +186,12 @@ bearBreakSetup := bearBreakSetup and bearGapSize / c1Range >= minGapRatio
 bullBreakConfirm = bullBreakSetup and c3c > c2Open and c3c > c1h and c3c >= open and barstate.isconfirmed
 bearBreakConfirm = bearBreakSetup and c3c < c2Open and c3c < c1l and c3c <= open and barstate.isconfirmed
 
-// Clear levels once SL or any TP is hit on a closed bar
+// Clear overlays when the trade is fully done (SL or final TP3).
 if tradeActive and barstate.isconfirmed
     longTrade = activeDirection == "long"
     hitSl = longTrade ? low <= activeSl : high >= activeSl
-    hitTp1 = longTrade ? high >= activeTp1 : low <= activeTp1
-    hitTp2 = longTrade ? high >= activeTp2 : low <= activeTp2
     hitTp3 = longTrade ? high >= activeTp3 : low <= activeTp3
-    if hitSl or hitTp1 or hitTp2 or hitTp3
+    if hitSl or hitTp3
         clearPreviousDrawings()
         lnEntry := na
         lnSl := na
@@ -285,8 +317,4 @@ if SEND_CANDLE_FEED and barstate.isconfirmed
     feedMsg = '{"symbol":"' + syminfo.ticker + '","alertType":"candle","pattern":"feed","open":' + str.tostring(open, "#.#####") + ',"high":' + str.tostring(high, "#.#####") + ',"low":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + ',"volume":' + str.tostring(volume) + ',"time":' + str.tostring(time) + ',"secret":"' + WEBHOOK_SECRET + '"}'
     alert(feedMsg, alert.freq_once_per_bar)
 
-// Visual gap zones (soft background highlight; the box above is the precise FVG rectangle)
-bgcolor(perfectBullFVG ? color.new(color.green, 88) : na)
-bgcolor(perfectBearFVG ? color.new(color.red, 88) : na)
-bgcolor(bullBreakConfirm ? color.new(color.blue, 90) : na)
-bgcolor(bearBreakConfirm ? color.new(color.orange, 90) : na)
+// No bgcolor() — full-height green/red vertical bands clutter non-FX charts.

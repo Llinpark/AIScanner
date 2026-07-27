@@ -13,11 +13,6 @@ const {
 const { ScalpingStrategy } = require('./ScalpingStrategy');
 const { DayTradingStrategy, DAYTRADING_ID, DAYTRADING_NAME } = require('./DayTradingStrategy');
 const {
-  LegacySmcPipelineStrategy,
-  LEGACY_SMC_ID,
-  LEGACY_SMC_NAME
-} = require('./LegacySmcPipelineStrategy');
-const {
   STRATEGY_ID: SCALPING_ID,
   STRATEGY_NAME: SCALPING_NAME,
   DEFAULT_SCALPING_CONFIG,
@@ -57,13 +52,10 @@ module.exports = {
   setDefaultRegistry,
   ScalpingStrategy,
   DayTradingStrategy,
-  LegacySmcPipelineStrategy,
   DAYTRADING_ID,
   DAYTRADING_NAME,
   DAYTRADING_SWEEP_ID,
   DAYTRADING_SWEEP_NAME,
-  LEGACY_SMC_ID,
-  LEGACY_SMC_NAME,
   SCALPING_ID,
   SCALPING_NAME,
   DEFAULT_SCALPING_CONFIG,

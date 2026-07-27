@@ -573,8 +573,7 @@ function createAdminRouter({ io } = {}) {
           strategies: updated.strategies
             ? {
                 scalpingEnabled: updated.strategies.scalping?.enabled,
-                daytradingEnabled: updated.strategies.daytrading?.enabled,
-                legacyEnabled: updated.strategies.legacy?.enabled
+                daytradingEnabled: updated.strategies.daytrading?.enabled
               }
             : undefined,
           persisted: Boolean(persisted)

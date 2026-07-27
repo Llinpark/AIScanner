@@ -4,8 +4,7 @@ import { useAuth } from '../context/AuthContext';
 
 const STRATEGY_TABS = [
   { id: 'daytrading', label: 'Day Trading' },
-  { id: 'scalping', label: 'Scalping' },
-  { id: 'legacy', label: 'Classic / Legacy' }
+  { id: 'scalping', label: 'Scalping' }
 ];
 
 const SCALPING_WEIGHT_FIELDS = [
@@ -26,15 +25,6 @@ const DAYTRADING_WEIGHT_FIELDS = [
   { key: 'fvg', label: 'Fair value gap' },
   { key: 'retrace', label: 'Retracement' },
   { key: 'optionalConfirmation', label: 'Optional confirmation' }
-];
-
-const LEGACY_WEIGHT_FIELDS = [
-  { key: 'liquiditySweep', label: 'Liquidity sweep' },
-  { key: 'fvgRule', label: 'Valid FVG' },
-  { key: 'htfBias', label: 'HTF alignment' },
-  { key: 'fvgUnmitigated', label: 'FVG unmitigated' },
-  { key: 'marketStructureShift', label: 'Market structure shift' },
-  { key: 'expansionCandle', label: 'Expansion candle' }
 ];
 
 const ENTRY_MODELS = [
@@ -145,13 +135,6 @@ export default function AdminScanner() {
     setForm(prev => ({ ...prev, [key]: value }));
   };
 
-  const updateLegacyWeight = (key, value) => {
-    setForm(prev => ({
-      ...prev,
-      weights: { ...prev.weights, [key]: value }
-    }));
-  };
-
   const updateStrategy = (strategyKey, updater) => {
     setForm(prev => {
       const current = prev.strategies?.[strategyKey] || {};
@@ -205,7 +188,6 @@ export default function AdminScanner() {
   const strategies = form.strategies || {};
   const scalping = strategies.scalping || {};
   const daytrading = strategies.daytrading || {};
-  const legacy = strategies.legacy || {};
 
   return (
     <form className="admin-scanner-form admin-panel" onSubmit={handleSave}>
@@ -272,15 +254,6 @@ export default function AdminScanner() {
             />
             <span>Scalping</span>
             <em>{scalping.enabled ? 'On' : 'Off'}</em>
-          </label>
-          <label className="admin-strategy-chip">
-            <input
-              type="checkbox"
-              checked={Boolean(legacy.enabled)}
-              onChange={e => updateStrategy('legacy', { enabled: e.target.checked })}
-            />
-            <span>Classic / Legacy SMC</span>
-            <em>{legacy.enabled ? 'On' : 'Off'}</em>
           </label>
         </div>
 
@@ -711,35 +684,6 @@ export default function AdminScanner() {
                   }
                 }))
               }
-            />
-          </div>
-        )}
-
-        {activeStrategy === 'legacy' && (
-          <div className="admin-strategy-panel" role="tabpanel">
-            <p className="admin-form-note">
-              Classic SMC pipeline adapter (legacy). Premium threshold and quality factor weights
-              apply only when this strategy is enabled.
-            </p>
-            <div className="admin-form-grid">
-              <Field label="Premium threshold (%)">
-                <input
-                  type="number"
-                  min={50}
-                  max={100}
-                  value={form.premiumThreshold}
-                  onChange={e => updateCore('premiumThreshold', Number(e.target.value))}
-                />
-              </Field>
-            </div>
-            <WeightGrid
-              legend="Legacy quality factor weights (decimal, should sum to ~1.0)"
-              fields={LEGACY_WEIGHT_FIELDS}
-              weights={form.weights}
-              onChange={updateLegacyWeight}
-              min={0}
-              max={1}
-              step={0.01}
             />
           </div>
         )}

@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WEBHOOK_TRADINGVIEW_URL } = require('../config/appUrls');
-const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const {
   STRATEGY_NAME: SCALPING_STRATEGY_NAME
 } = require('../strategies/config/scalpingConfig');
@@ -12,7 +11,6 @@ const {
 const { generateLicenseToken } = require('../utils/webhookSecurity');
 const { getTierDisplayName, getEffectiveSubscription } = require('../utils/subscriptionAccess');
 
-const CLASSIC_TEMPLATE = path.join(__dirname, '..', 'templates', 'kaching-scanner.pine.template');
 const SCALPING_TEMPLATE = path.join(
   __dirname,
   '..',
@@ -57,7 +55,7 @@ function renderTemplate(template, variables) {
 
 /**
  * @param {string} [strategy]
- * @returns {'classic'|'daytrading'|'scalping'}
+ * @returns {'daytrading'|'scalping'}
  */
 function resolveStrategyKey(strategy) {
   const key = String(strategy || process.env.PINE_DEFAULT_STRATEGY || 'daytrading').toLowerCase();
@@ -69,15 +67,7 @@ function resolveStrategyKey(strategy) {
   ) {
     return 'scalping';
   }
-  if (
-    key === 'classic' ||
-    key === 'breakaway' ||
-    key === 'fvg_breakaway' ||
-    key === 'kachingfx_pine'
-  ) {
-    return 'classic';
-  }
-  // daytrading | liquidity_sweep_fvg_daytrading | sweep_fvg
+  // daytrading | liquidity_sweep_fvg_daytrading | sweep_fvg | unknown aliases → daytrading
   return 'daytrading';
 }
 
@@ -103,61 +93,23 @@ function sampleWebhookPayload(strategyKey = 'daytrading') {
     };
   }
 
-  if (strategyKey === 'daytrading') {
-    return {
-      symbol: 'XAUUSD',
-      strategyName: DAYTRADING_SWEEP_NAME,
-      timeframe: '15',
-      pattern: 'liquidity_sweep_fvg_daytrading',
-      alertType: 'entry',
-      direction: 'long',
-      entry: 2650.5,
-      stop_loss: 2644.0,
-      stop_loss_1: 2644.0,
-      take_profit_1: 2663.5,
-      take_profit_2: 2670.0,
-      take_profit_3: 2680.0,
-      confidence: 0.82,
-      message: 'Kaching Entry',
-      licenseToken: '<your-license-token>',
-      broadcast: true
-    };
-  }
-
   return {
     symbol: 'XAUUSD',
-    strategyName: 'KachingFx Pine',
-    timeframe: '60',
-    pattern: 'perfect_fvg',
+    strategyName: DAYTRADING_SWEEP_NAME,
+    timeframe: '15',
+    pattern: 'liquidity_sweep_fvg_daytrading',
     alertType: 'entry',
     direction: 'long',
     entry: 2650.5,
-    stop_loss: 2645.5,
-    stop_loss_1: 2645.5,
-    take_profit_1: 2655.5,
-    take_profit_2: 2660.5,
-    take_profit_3: 2665.5,
+    stop_loss: 2644.0,
+    stop_loss_1: 2644.0,
+    take_profit_1: 2663.5,
+    take_profit_2: 2670.0,
+    take_profit_3: 2680.0,
     confidence: 0.82,
     message: 'Kaching Entry',
     licenseToken: '<your-license-token>',
     broadcast: true
-  };
-}
-
-function buildClassicVariables(base, risk) {
-  return {
-    ...base,
-    INDICATOR_TITLE: escapePineString('KachingFx Scanner'),
-    INDICATOR_SHORTTITLE: escapePineString('KachingFx Scanner'),
-    MIN_BODY_RATIO: PATTERN_SCANNER_CONFIG.fvg?.minDisplacementBodyRatio ?? 0.62,
-    MAX_WICK_RATIO: PATTERN_SCANNER_CONFIG.fvg?.maxWickToRangeRatio ?? 0.28,
-    VOL_MULT: PATTERN_SCANNER_CONFIG.fvg?.volumeMultiplier ?? 1.15,
-    C1_DISP_BODY: PATTERN_SCANNER_CONFIG.breakaway?.minC1BodyRatio ?? 0.55,
-    MIN_GAP_RATIO: PATTERN_SCANNER_CONFIG.breakaway?.minGapToC1RangeRatio ?? 0.08,
-    SL_PIPS: risk.slPips ?? 30,
-    TP1_R: risk.tpRatios?.[0] ?? 1.0,
-    TP2_R: risk.tpRatios?.[1] ?? 2.0,
-    TP3_R: risk.tpRatios?.[2] ?? 3.0
   };
 }
 
@@ -188,7 +140,6 @@ function generateForUser(user, options = {}) {
   const userId = user._id?.toString() || user.id || '';
   const subscription = getEffectiveSubscription(user);
   const tier = subscription.tier || 'basic';
-  const risk = PATTERN_SCANNER_CONFIG.risk || {};
   const webhookUrl = options.webhookUrl || WEBHOOK_TRADINGVIEW_URL;
   const webhookSecret = options.webhookSecret || process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
   const strategyKey = resolveStrategyKey(options.strategy || options.strategyId);
@@ -236,7 +187,7 @@ function generateForUser(user, options = {}) {
     strategyLabel = SCALPING_STRATEGY_NAME;
     instructionLead =
       'Open TradingView → attach this script to a 1m or 3m chart (entries blocked elsewhere). HTF liquidity uses 15m context only.';
-  } else if (strategyKey === 'daytrading') {
+  } else {
     const {
       getResolvedDaytradingConfig
     } = require('../utils/strategyRuntimeConfig');
@@ -252,12 +203,6 @@ function generateForUser(user, options = {}) {
     strategyLabel = DAYTRADING_SWEEP_NAME;
     instructionLead =
       'Open TradingView → attach this script to a 15m or 5m chart (entries blocked on HTF). HTF bias/liquidity uses 4H context.';
-  } else {
-    variables = buildClassicVariables(base, risk);
-    templatePath = CLASSIC_TEMPLATE;
-    strategyLabel = 'KachingFx Classic (FVG / Breakaway)';
-    instructionLead =
-      'Open TradingView → Pine Editor → paste your personal script → Add to any chart (forex, gold, indices, crypto, stocks, etc.).';
   }
 
   const script = renderTemplate(loadTemplate(templatePath), variables);
@@ -278,12 +223,7 @@ function generateForUser(user, options = {}) {
     samplePayload: sampleWebhookPayload(strategyKey),
     availableStrategies: [
       { id: 'daytrading', name: DAYTRADING_SWEEP_NAME, default: strategyKey === 'daytrading' },
-      { id: 'scalping', name: SCALPING_STRATEGY_NAME, default: strategyKey === 'scalping' },
-      {
-        id: 'classic',
-        name: 'KachingFx Classic (FVG / Breakaway)',
-        default: strategyKey === 'classic'
-      }
+      { id: 'scalping', name: SCALPING_STRATEGY_NAME, default: strategyKey === 'scalping' }
     ],
     security: {
       licenseTokenIncluded: Boolean(licenseToken),
@@ -294,7 +234,7 @@ function generateForUser(user, options = {}) {
       'When a signal fires, TradingView shows only Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 — no liquidity/FVG/confidence labels on the chart.',
       `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
       'Your script already includes a private license token — do not share it with anyone.',
-      'Switch strategies with ?strategy=daytrading | scalping | classic.',
+      'Switch strategies with ?strategy=daytrading | scalping.',
       'Re-copy and re-add this script after plan or script updates so TradingView uses the latest overlay logic.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan).`
     ]

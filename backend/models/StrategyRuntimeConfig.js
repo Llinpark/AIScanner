@@ -14,7 +14,6 @@ const StrategyRuntimeConfigSchema = new mongoose.Schema({
   },
   scalping: { type: mongoose.Schema.Types.Mixed, default: {} },
   daytrading: { type: mongoose.Schema.Types.Mixed, default: {} },
-  legacyEnabled: { type: Boolean, default: true },
   updatedAt: { type: Date, default: Date.now },
   updatedBy: { type: String }
 });

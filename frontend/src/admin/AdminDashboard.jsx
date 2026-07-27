@@ -37,7 +37,7 @@ export default function AdminDashboard() {
 
   const scanner = stats?.scanner || {};
   const config = scanner.config || {};
-  const showConfig = canManageScanner && Boolean(config.premiumThreshold != null || config.autoScanEnabled != null);
+  const showConfig = canManageScanner && Boolean(config.autoScanEnabled != null);
 
   return (
     <div className="admin-dashboard">
@@ -54,19 +54,11 @@ export default function AdminDashboard() {
         <StatCard label="Completed payments" value={stats?.payments?.completed ?? 0} tone="success" />
         <StatCard label="Failed payments" value={stats?.payments?.failed ?? 0} tone="danger" />
         {showConfig && (
-          <>
-            <StatCard
-              label="Premium threshold"
-              value={`${config.premiumThreshold ?? '—'}%`}
-              hint="Live scanner config"
-              tone="accent"
-            />
-            <StatCard
-              label="Auto-scan"
-              value={config.autoScanEnabled ? 'On' : 'Off'}
-              hint={`Every ${Math.round((config.autoScanIntervalMs || 0) / 1000)}s`}
-            />
-          </>
+          <StatCard
+            label="Auto-scan"
+            value={config.autoScanEnabled ? 'On' : 'Off'}
+            hint={`Every ${Math.round((config.autoScanIntervalMs || 0) / 1000)}s`}
+          />
         )}
       </div>
 
@@ -74,8 +66,8 @@ export default function AdminDashboard() {
         <div className="admin-panel">
           <div className="admin-panel-header">
             <h3>Scanner runtime</h3>
-            <span className={`admin-pill ${scanner.pipeline?.enabled ? 'status-active' : 'status-inactive'}`}>
-              {scanner.pipeline?.enabled ? 'Pipeline active' : 'Pipeline off'}
+            <span className={`admin-pill ${config.autoScanEnabled ? 'status-active' : 'status-inactive'}`}>
+              {config.autoScanEnabled ? 'Auto-scan on' : 'TradingView-only'}
             </span>
           </div>
           <dl className="admin-meta-grid">
@@ -86,8 +78,12 @@ export default function AdminDashboard() {
               </div>
             )}
             <div className="admin-meta-item">
-              <dt>HTF timeframe</dt>
-              <dd>{scanner.pipeline?.htfTimeframe ?? '—'}</dd>
+              <dt>Strategies</dt>
+              <dd>
+                {(scanner.strategies || [])
+                  .map(s => `${s.name}${s.enabled === false ? ' (off)' : ''}`)
+                  .join(', ') || 'Day Trading, Scalping'}
+              </dd>
             </div>
           </dl>
         </div>

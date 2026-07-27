@@ -30,7 +30,7 @@ The following must not publish production trading signals from provider candles:
 - `POST /api/scanner/run` / `scanSymbol`
 - Dashboard `GET /api/scanner/analyze` (no longer used to invent levels)
 
-Legacy pattern-detection code may remain for admin/diagnostics but is not the production signal path.
+Legacy pattern-detection helpers may remain for offline math / weight learning but are not a selectable production strategy. Active strategies are Sweep+FVG Day Trading and Scalping only.
 
 ## Decision: AI commentary is descriptive, not generative of trades
 

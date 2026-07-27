@@ -1,6 +1,6 @@
 /**
  * StrategyRegistry — DI container for pluggable strategies.
- * Registers: Sweep+FVG Day Trading, Sweep+FVG Scalping, legacy SMC pipeline.
+ * Registers: Sweep+FVG Day Trading, Sweep+FVG Scalping.
  */
 
 const { assertStrategy } = require('./interfaces/IStrategy');
@@ -84,19 +84,10 @@ class StrategyRegistry {
 function createDefaultRegistry(options = {}) {
   const { DayTradingStrategy } = require('./DayTradingStrategy');
   const { ScalpingStrategy } = require('./ScalpingStrategy');
-  const { LegacySmcPipelineStrategy } = require('./LegacySmcPipelineStrategy');
 
   const registry = new StrategyRegistry();
-  // New Sweep+FVG daytrading first (preferred for 15m/5m contexts)
   registry.register(new DayTradingStrategy({ config: options.daytradingConfig }));
   registry.register(new ScalpingStrategy({ config: options.scalpingConfig }));
-  // Legacy SMC pipeline kept for diagnostics / backward compatibility
-  registry.register(
-    new LegacySmcPipelineStrategy({
-      config: options.legacySmcConfig,
-      enabled: options.enableLegacySmc !== false
-    })
-  );
   return registry;
 }
 
