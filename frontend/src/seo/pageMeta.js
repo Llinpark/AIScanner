@@ -86,12 +86,12 @@ export const PRICING_FAQS = [
   {
     question: 'What does a KachingScanner subscription include?',
     answer:
-      'Plans unlock TradingView alert distribution to your dashboard, Telegram, and MT5. Higher tiers add more chart catalog markets, insights, and automation options.'
+      'Basic unlocks AI/TradingView alerts with email and in-app delivery, Entry/SL/TP overlays, 5 chart markets, and 7-day history. Pro adds confidence, news filter, analytics, journal, Telegram, and Manual MT5. Premium adds SMC overlays, AI explanations, auto MT5, auto lot sizing, and 90-day advanced analytics.'
   },
   {
     question: 'How do TradingView alerts work with KachingScanner?',
     answer:
-      'Subscribers follow the in-app TradingView setup guide to create alerts for Entry, Stop Loss, and Take Profit levels. Alerts can notify you and sync with the live signal dashboard.'
+      'Subscribers follow the in-app TradingView setup guide, paste their personal Pine script, and create a webhook alert. The script draws Entry, SL, and TP1–3 on the TradingView chart when signals fire (Basic and up), and syncs those levels to the live signal dashboard.'
   },
   {
     question: 'Which payment methods are supported?',

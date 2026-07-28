@@ -11,7 +11,7 @@ const {
 } = require('./appUrls');
 const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
-const ALL_TIMEFRAMES = ['1M', '1W', '1D', '4h', '1h', '30m', '15m', '5m', '1m'];
+const ALL_TIMEFRAMES = ['1M', '1W', '1D', '4h', '1h', '30m', '15m', '5m', '3m', '1m'];
 
 const TIERS = {
   basic: {
@@ -23,10 +23,13 @@ const TIERS = {
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
-    description: 'Essential AI and TradingView alerts',
+    description: 'Essential AI and TradingView alerts with in-app and email delivery',
     features: [
       'AI Alerts',
       'TradingView Alerts',
+      'In-app live alerts',
+      'Email alert notifications',
+      'Entry, SL & TP1–3 overlays on your TradingView chart',
       '5 chart-catalog markets (EUR/USD, GBP/USD, XAU/USD, BTC/USD, USD/JPY)',
       'TradingView alerts on any chart symbol your script is attached to',
       '4 timeframes (1h, 15m, 3m, 1m)',
@@ -42,7 +45,7 @@ const TIERS = {
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
-    description: 'Advanced alerts with confidence, Telegram copier, and trade automation',
+    description: 'Advanced alerts with confidence, Telegram notifications, and manual MT5 execution',
     features: [
       'Everything in Basic',
       'Most major chart-catalog markets (9 symbols incl. gold & indices)',
@@ -53,8 +56,8 @@ const TIERS = {
       'Performance dashboard',
       'Trade journal',
       'Risk analysis (R:R, position sizing)',
-      'Telegram alerts',
-      'One-click MT5 execution via Telegram',
+      'Telegram notifications',
+      'Manual MT5 execution (Execute button)',
       'Trailing stop',
       'Break-even automation',
       '30-day signal history'
@@ -69,7 +72,7 @@ const TIERS = {
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
-    description: 'All-market TradingView signal distribution with MT5 automation and SMC overlays',
+    description: 'All-market TradingView signal distribution with automatic MT5 execution and SMC overlays',
     features: [
       'Everything in Pro',
       'Any TradingView instrument (webhook pass-through — not limited to a forex list)',
@@ -79,7 +82,7 @@ const TIERS = {
       'Trade management alerts',
       'AI trade explanation',
       'Advanced analytics',
-      'Telegram trade copier (Pro+: tap Execute; Premium: auto lot from MT5 balance)',
+      'Automatic MT5 execution (Telegram remains notification-only)',
       'Auto lot sizing based on synced MT5 account balance',
       '90-day signal history'
     ]
@@ -91,6 +94,8 @@ const TIER_FEATURES = {
   basic: {
     aiAlerts: true,
     tradingViewAlerts: true,
+    // Pine draws Entry/SL/TP1–3 on the user's TradingView chart (all paid tiers).
+    tradingViewLevelOverlays: true,
     // Chart / scanner catalog only — TV webhooks accept any instrument when anyTradingViewInstrument.
     currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'BTC/USD', 'USD/JPY'],
     anyTradingViewInstrument: true,
@@ -101,11 +106,14 @@ const TIER_FEATURES = {
     tradeJournal: false,
     riskAnalysis: false,
     telegramAlerts: false,
+    emailAlerts: true,
     multiMarketScanner: false,
     smartMoneyConcepts: false,
     tradeManagementAlerts: false,
     aiTradeExplanation: false,
+    advancedAnalytics: false,
     mt5Execution: false,
+    mt5AutoExecution: false,
     trailingStop: false,
     breakEvenAutomation: false,
     autoLotSizing: false,
@@ -115,6 +123,7 @@ const TIER_FEATURES = {
   professional: {
     aiAlerts: true,
     tradingViewAlerts: true,
+    tradingViewLevelOverlays: true,
     currencyPairs: [
       'EUR/USD',
       'GBP/USD',
@@ -134,11 +143,14 @@ const TIER_FEATURES = {
     tradeJournal: true,
     riskAnalysis: true,
     telegramAlerts: true,
+    emailAlerts: true,
     multiMarketScanner: false,
     smartMoneyConcepts: false,
     tradeManagementAlerts: false,
     aiTradeExplanation: false,
+    advancedAnalytics: false,
     mt5Execution: true,
+    mt5AutoExecution: false,
     trailingStop: true,
     breakEvenAutomation: true,
     autoLotSizing: false,
@@ -148,6 +160,7 @@ const TIER_FEATURES = {
   premium: {
     aiAlerts: true,
     tradingViewAlerts: true,
+    tradingViewLevelOverlays: true,
     // Chart catalog seed list — webhook / distribution is not limited to these.
     currencyPairs: ALL_CURRENCY_PAIRS,
     anyTradingViewInstrument: true,
@@ -158,11 +171,15 @@ const TIER_FEATURES = {
     tradeJournal: true,
     riskAnalysis: true,
     telegramAlerts: true,
+    emailAlerts: true,
     multiMarketScanner: true,
     smartMoneyConcepts: true,
     tradeManagementAlerts: true,
     aiTradeExplanation: true,
+    // Same performance dashboard as Pro, with the 90-day window + extended breakdowns.
+    advancedAnalytics: true,
     mt5Execution: true,
+    mt5AutoExecution: true,
     trailingStop: true,
     breakEvenAutomation: true,
     autoLotSizing: true,
@@ -174,19 +191,23 @@ const TIER_FEATURES = {
 const FEATURE_MATRIX = [
   { key: 'aiAlerts', label: 'AI Alerts', basic: true, professional: true, premium: true },
   { key: 'tradingViewAlerts', label: 'TradingView Alerts', basic: true, professional: true, premium: true },
+  { key: 'tradingViewLevelOverlays', label: 'TV Entry / SL / TP Overlays', basic: true, professional: true, premium: true },
   { key: 'currencyPairs', label: 'Chart Markets', basic: 'Limited catalog', professional: 'Most catalog', premium: 'Any TV instrument' },
   { key: 'timeframes', label: 'Timeframes', basic: '4', professional: '6', premium: 'All' },
   { key: 'showConfidence', label: 'Confidence Score', basic: false, professional: true, premium: true },
   { key: 'newsFilter', label: 'News Filter', basic: false, professional: true, premium: true },
   { key: 'performanceDashboard', label: 'Performance Dashboard', basic: false, professional: true, premium: true },
+  { key: 'advancedAnalytics', label: 'Advanced Analytics', basic: false, professional: false, premium: true },
   { key: 'tradeJournal', label: 'Trade Journal', basic: false, professional: true, premium: true },
   { key: 'riskAnalysis', label: 'Risk Analysis', basic: false, professional: true, premium: true },
-  { key: 'telegramAlerts', label: 'Telegram Alerts', basic: false, professional: true, premium: true },
+  { key: 'telegramAlerts', label: 'Telegram Notifications', basic: false, professional: true, premium: true },
+  { key: 'emailAlerts', label: 'Email Alerts', basic: true, professional: true, premium: true },
   { key: 'multiMarketScanner', label: 'Multi-Market Distribution', basic: false, professional: false, premium: true },
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', basic: false, professional: false, premium: true },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', basic: false, professional: false, premium: true },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', basic: false, professional: false, premium: true },
-  { key: 'mt5Execution', label: 'One-click MT5 Execution', basic: false, professional: true, premium: true },
+  { key: 'mt5Execution', label: 'MT5 Execution', basic: false, professional: true, premium: true },
+  { key: 'mt5AutoExecution', label: 'Automatic MT5 Execution', basic: false, professional: false, premium: true },
   { key: 'trailingStop', label: 'Trailing Stop', basic: false, professional: true, premium: true },
   { key: 'breakEvenAutomation', label: 'Break-even Automation', basic: false, professional: true, premium: true },
   { key: 'autoLotSizing', label: 'Auto Lot Sizing', basic: false, professional: false, premium: true }

@@ -32,7 +32,7 @@ function createMt5Router() {
       });
     } catch (error) {
       console.error('MT5 status error:', error);
-      res.status(500).json({ message: 'Unable to load MT5 trade copier status', error: error.message });
+      res.status(500).json({ message: 'Unable to load MT5 auto trading status', error: error.message });
     }
   });
 
@@ -54,6 +54,7 @@ function createMt5Router() {
             'Allow the backend URL under Tools → Options → Expert Advisors → WebRequest',
             'Enable Algo Trading in MT5',
             'The EA syncs balance, places queued trades, then manages trailing stop + break-even on open positions',
+            'Pro: Manual execution mode (Execute in Telegram). Premium: Automatic MT5 execution (default)',
             'Pro: uses fixed lot size from dashboard settings. Premium: auto-sizes from synced balance × risk %'
           ]
         });

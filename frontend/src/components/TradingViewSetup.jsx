@@ -17,7 +17,8 @@ export default function TradingViewSetup() {
           <strong>2. Add your personal script</strong>
           <p>
             On the TradingView Setup tab, copy your personal script, paste it into TradingView&apos;s Pine Editor, and
-            add it to any chart you trade (forex, metals, indices, crypto, stocks).
+            add it to any chart you trade (forex, metals, indices, crypto, stocks). Leave it on the chart so Entry,
+            SL, and TP1–3 overlays draw when signals fire (Basic and up).
           </p>
         </div>
         <div className="setup-step">
@@ -30,8 +31,8 @@ export default function TradingViewSetup() {
         <div className="setup-step">
           <strong>4. Receive everywhere you trade</strong>
           <p>
-            When TradingView fires, Kaching publishes the trade to your dashboard, Telegram, and optional MT5
-            execution.
+            When TradingView fires, you see Entry / SL / TP overlays on that chart, and Kaching publishes the trade to
+            your dashboard (plus Telegram / MT5 on higher plans).
           </p>
         </div>
       </div>

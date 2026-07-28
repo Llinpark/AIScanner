@@ -48,10 +48,29 @@ function defaultMt5Config() {
     riskPercent: 1,
     fixedLotSize: 0.01,
     symbolSuffix: '',
+    executionMode: null,
     lastSyncAt: null,
     linkedAt: null,
     terminalId: null
   };
+}
+
+/**
+ * Premium defaults to auto; Pro (and tiers without mt5AutoExecution) to manual.
+ * Explicit user setting wins when the tier allows auto.
+ */
+function resolveExecutionMode(user) {
+  const mt5 = user?.mt5 || {};
+  const canAuto = userHasTierFeature(user, 'mt5AutoExecution');
+
+  if (mt5.executionMode === 'auto') {
+    return canAuto ? 'auto' : 'manual';
+  }
+  if (mt5.executionMode === 'manual') {
+    return 'manual';
+  }
+
+  return canAuto ? 'auto' : 'manual';
 }
 
 async function generateLinkToken(userId) {
@@ -69,17 +88,54 @@ async function generateLinkToken(userId) {
   return { token, mt5 };
 }
 
+const RISK_PERCENT_MIN = 0.1;
+/** Safety ceiling only (allow aggressive sizing); not a product recommendation. Must match frontend RISK_MAX. */
+const RISK_PERCENT_MAX = 100;
+const FIXED_LOT_MIN = 0.01;
+const FIXED_LOT_MAX = 100;
+
+function clampRiskPercent(value, fallback = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return Number(fallback) || 1;
+  return Math.min(RISK_PERCENT_MAX, Math.max(RISK_PERCENT_MIN, Number(n.toFixed(2))));
+}
+
+function clampFixedLotSize(value, fallback = 0.01) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return Number(fallback) || 0.01;
+  return Math.min(FIXED_LOT_MAX, Math.max(FIXED_LOT_MIN, Number(n.toFixed(2))));
+}
+
 async function updateSettings(userId, settings = {}) {
   const user = await findUserById(userId);
   const current = user?.mt5 || defaultMt5Config();
+
+  let executionMode = current.executionMode;
+  if (settings.executionMode != null) {
+    const requested = String(settings.executionMode).toLowerCase();
+    if (requested === 'auto' || requested === 'manual') {
+      if (requested === 'auto' && !userHasTierFeature(user, 'mt5AutoExecution')) {
+        executionMode = 'manual';
+      } else {
+        executionMode = requested;
+      }
+    }
+  }
+
   const mt5 = {
     ...current,
-    riskPercent: settings.riskPercent != null ? Number(settings.riskPercent) : current.riskPercent,
+    riskPercent:
+      settings.riskPercent != null
+        ? clampRiskPercent(settings.riskPercent, current.riskPercent ?? 1)
+        : clampRiskPercent(current.riskPercent ?? 1),
     fixedLotSize:
-      settings.fixedLotSize != null ? Number(settings.fixedLotSize) : current.fixedLotSize ?? 0.01,
+      settings.fixedLotSize != null
+        ? clampFixedLotSize(settings.fixedLotSize, current.fixedLotSize ?? 0.01)
+        : clampFixedLotSize(current.fixedLotSize ?? 0.01),
     symbolSuffix:
       settings.symbolSuffix != null ? String(settings.symbolSuffix) : current.symbolSuffix || '',
-    enabled: settings.enabled != null ? Boolean(settings.enabled) : current.enabled !== false
+    enabled: settings.enabled != null ? Boolean(settings.enabled) : current.enabled !== false,
+    executionMode
   };
 
   await persistUserMt5(userId, mt5);
@@ -123,12 +179,8 @@ function computeLotSize(signal, user) {
     return null;
   }
 
-  const riskPercent = Number(mt5.riskPercent || 1);
-
-  if (signal.riskMetrics?.suggestedLotSize) {
-    return signal.riskMetrics.suggestedLotSize;
-  }
-
+  // Always size from the user's current saved risk % (ignore stale signal.riskMetrics).
+  const riskPercent = clampRiskPercent(mt5.riskPercent || 1);
   const metrics = computeRiskMetrics(signal, {
     accountBalance: balance,
     riskPercent
@@ -200,7 +252,7 @@ async function findExistingExecution(userId, signalId) {
   );
 }
 
-async function createExecution(user, signalDoc) {
+async function createExecution(user, signalDoc, options = {}) {
   const userId = user._id?.toString() || user.id;
   const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
   const signalId = String(signal._id || signal.id || '');
@@ -246,6 +298,11 @@ async function createExecution(user, signalDoc) {
 
   const stopLoss = Number(signal.stop_loss_1 ?? signal.stop_loss);
   const management = buildTradeManagementParams(signal, user);
+  const source =
+    options.source === 'manual' || options.source === 'telegram' || options.source === 'auto'
+      ? options.source
+      : 'auto';
+
   const payload = {
     userId,
     signalId,
@@ -262,7 +319,7 @@ async function createExecution(user, signalDoc) {
     accountBalance: Number(mt5.accountBalance || 0) || null,
     ...management,
     status: 'pending',
-    source: 'telegram'
+    source
   };
 
   let execution;
@@ -275,7 +332,7 @@ async function createExecution(user, signalDoc) {
   return { ok: true, execution };
 }
 
-async function queueExecutionForUser(userId, signalId) {
+async function queueExecutionForUser(userId, signalId, options = {}) {
   const user = await findUserById(userId);
   if (!user) return { ok: false, reason: 'user_not_found' };
 
@@ -284,7 +341,7 @@ async function queueExecutionForUser(userId, signalId) {
     return { ok: false, reason: 'signal_not_found' };
   }
 
-  return createExecution(user, signal);
+  return createExecution(user, signal, options);
 }
 
 async function getPendingExecutions(token) {
@@ -393,14 +450,16 @@ async function getPublicStatus(user) {
   return {
     featureEnabled,
     autoLotSizing: userHasTierFeature(user, 'autoLotSizing'),
+    mt5AutoExecution: userHasTierFeature(user, 'mt5AutoExecution'),
     trailingStop: userHasTierFeature(user, 'trailingStop'),
     breakEvenAutomation: userHasTierFeature(user, 'breakEvenAutomation'),
     linked: Boolean(mt5.linkToken),
     enabled: mt5.enabled !== false,
+    executionMode: resolveExecutionMode(user),
     accountBalance: mt5.accountBalance,
     accountCurrency: mt5.accountCurrency || 'USD',
-    riskPercent: mt5.riskPercent ?? 1,
-    fixedLotSize: mt5.fixedLotSize ?? 0.01,
+    riskPercent: clampRiskPercent(mt5.riskPercent ?? 1),
+    fixedLotSize: clampFixedLotSize(mt5.fixedLotSize ?? 0.01),
     symbolSuffix: mt5.symbolSuffix || '',
     lastSyncAt: mt5.lastSyncAt,
     linkedAt: mt5.linkedAt,
@@ -423,6 +482,7 @@ function formatExecutionSummary(execution) {
 
 module.exports = {
   defaultMt5Config,
+  resolveExecutionMode,
   generateLinkToken,
   updateSettings,
   syncAccountFromEa,

@@ -50,6 +50,8 @@ const FX_CURRENCY_CODES = new Set([
 
 const SYMBOL_ALIASES = {
   XAUUSD: 'XAU/USD',
+  // Common mistype / broker variant seen on some feeds
+  UAXUSD: 'XAU/USD',
   XAGUSD: 'XAG/USD',
   EURUSD: 'EUR/USD',
   GBPUSD: 'GBP/USD',

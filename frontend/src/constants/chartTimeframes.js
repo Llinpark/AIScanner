@@ -2,6 +2,7 @@ import { normalizeInterval } from '../utils/chartLevels';
 
 export const CHART_TIMEFRAME_OPTIONS = [
   { label: '1m', apiInterval: '1m' },
+  { label: '3m', apiInterval: '3m' },
   { label: '5m', apiInterval: '5m' },
   { label: '15m', apiInterval: '15m' },
   { label: '30m', apiInterval: '30m' },
@@ -34,4 +35,16 @@ export function timeframeLabel(apiInterval) {
     option => normalizeInterval(option.apiInterval) === normalizeInterval(apiInterval)
   );
   return match?.label || apiInterval;
+}
+
+/** Merge master options with any allowed TFs missing from the catalog (e.g. future intervals). */
+export function buildToolbarTimeframeOptions(allowedTimeframes = []) {
+  const options = [...CHART_TIMEFRAME_OPTIONS];
+  for (const tf of allowedTimeframes || []) {
+    const canonical = normalizeInterval(tf);
+    if (!options.some(o => normalizeInterval(o.apiInterval) === canonical)) {
+      options.push({ label: canonical, apiInterval: canonical });
+    }
+  }
+  return options;
 }

@@ -15,6 +15,7 @@ const TWELVE_DATA_SYMBOL_MAP = {
 
 const TWELVE_DATA_INTERVAL_MAP = {
   '1m': '1min',
+  '3m': '3min',
   '5m': '5min',
   '15m': '15min',
   '30m': '30min',

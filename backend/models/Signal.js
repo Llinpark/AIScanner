@@ -59,6 +59,7 @@ const SignalSchema = new mongoose.Schema({
   },
   telegramSent: { type: Boolean, default: false },
   mt5Sent: { type: Boolean, default: false },
+  emailSent: { type: Boolean, default: false },
   chartSnapshot: { type: String },
   pattern: { type: String },
   patternLabel: { type: String },
@@ -92,6 +93,11 @@ const SignalSchema = new mongoose.Schema({
   tradeExplanation: { type: String },
   aiFactors: { type: mongoose.Schema.Types.Mixed },
   riskMetrics: RiskMetricsSchema,
+  newsImpact: { type: String },
+  newsFilter: { type: mongoose.Schema.Types.Mixed },
+  tradeManagement: { type: mongoose.Schema.Types.Mixed },
+  partialClose: { type: mongoose.Schema.Types.Mixed },
+  breakEven: { type: mongoose.Schema.Types.Mixed },
   createdAt: { type: Date, default: Date.now }
 });
 

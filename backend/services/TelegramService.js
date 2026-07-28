@@ -17,7 +17,7 @@ let pollingOffset = 0;
 function getConfig() {
   return {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'KachingFx_Official').replace(/^@/, ''),
+    botUsername: (process.env.TELEGRAM_BOT_USERNAME || 'KachingAIBot').replace(/^@/, ''),
     usePolling: process.env.TELEGRAM_USE_POLLING === 'true',
     webhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET || '',
     webhookUrl: (process.env.WEBHOOK_TELEGRAM_URL || WEBHOOK_TELEGRAM_URL || '').replace(/\/$/, '')
@@ -175,7 +175,7 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
-function formatSignalMessage(signal, subscriber = null) {
+function formatSignalMessage(signal, subscriber = null, { includeExecuteButton = false } = {}) {
   const alertType = signal.alertType || 'signal';
   const title = escapeHtml(formatKachingAlertMessage(signal).split('|')[0]?.trim() || 'Kaching Alert');
   const sl = signal.stop_loss_1 ?? signal.stop_loss;
@@ -197,16 +197,22 @@ function formatSignalMessage(signal, subscriber = null) {
     }
   }
 
-  if (signal.confidence != null) {
+  if (subscriber && userHasTierFeature(subscriber, 'showConfidence') && signal.confidence != null) {
     lines.push(`<b>Confidence:</b> ${Math.round(Number(signal.confidence) * 100)}%`);
   }
 
-  if (signal.tradeExplanation) {
+  if (subscriber && userHasTierFeature(subscriber, 'aiTradeExplanation') && signal.tradeExplanation) {
     lines.push(`\n<i>${escapeHtml(signal.tradeExplanation)}</i>`);
   }
 
-  if (isEntryAlert(alertType) && subscriber && userHasTierFeature(subscriber, 'mt5Execution')) {
-    lines.push('\n<i>Tap Execute to copy this trade to MT5 — entry, SL, TP, and lot size are filled automatically.</i>');
+  if (subscriber && userHasTierFeature(subscriber, 'tradeManagementAlerts') && signal.tradeManagement?.message) {
+    lines.push(`\n<b>Management:</b> <i>${escapeHtml(signal.tradeManagement.message)}</i>`);
+  }
+
+  if (includeExecuteButton && isEntryAlert(alertType)) {
+    lines.push(
+      '\n<i>Tap Execute to queue this trade for MT5 — entry, SL, TP, and lot size are filled automatically.</i>'
+    );
   }
 
   return lines.filter(Boolean).join('\n');
@@ -222,7 +228,8 @@ function parseExecuteCallbackData(data) {
   return raw.slice(5);
 }
 
-function buildSignalReplyMarkup(signal, subscriber) {
+function buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton = false } = {}) {
+  if (!includeExecuteButton) return null;
   if (!subscriber || !userHasTierFeature(subscriber, 'mt5Execution')) {
     return null;
   }
@@ -244,7 +251,11 @@ function buildSignalReplyMarkup(signal, subscriber) {
   };
 }
 
-async function notifySubscriber(subscriber, signalDoc) {
+/**
+ * Notification-only channel. Execute button is opt-in via options (Manual mode).
+ * MT5 auto-queue is owned by TradeDeliveryService — not Telegram.
+ */
+async function notifySubscriber(subscriber, signalDoc, options = {}) {
   if (!subscriber || !userHasTierFeature(subscriber, 'telegramAlerts')) {
     return false;
   }
@@ -254,9 +265,10 @@ async function notifySubscriber(subscriber, signalDoc) {
     return false;
   }
 
+  const includeExecuteButton = Boolean(options.includeExecuteButton);
   const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
-  const text = formatSignalMessage(signal, subscriber);
-  const replyMarkup = buildSignalReplyMarkup(signal, subscriber);
+  const text = formatSignalMessage(signal, subscriber, { includeExecuteButton });
+  const replyMarkup = buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton });
   const result = await sendMessage(telegram.chatId, text, { replyMarkup });
   return Boolean(result);
 }
@@ -329,7 +341,7 @@ async function handleCommand(chatId, text, fromUsername) {
       if (linked.ok) {
         await sendMessage(
           chatId,
-          `✅ Linked to <b>${escapeHtml(linked.email)}</b>.\nYou will receive Kaching trade alerts here. Pro and Premium users can tap <b>Execute on MT5</b> to copy trades automatically.`
+          `✅ Linked to <b>${escapeHtml(linked.email)}</b>.\nYou will receive Kaching trade alerts here. In Manual mode, tap <b>Execute on MT5</b> to queue a trade.`
         );
         return;
       }
@@ -340,13 +352,13 @@ async function handleCommand(chatId, text, fromUsername) {
     await sendMessage(
       chatId,
       [
-        '<b>Welcome to KachingScanner Trade Copier</b>',
+        '<b>Welcome to KachingScanner alerts</b>',
         '',
-        '1. Open KachingScanner → TradingView Setup → Telegram',
-        '2. Generate a link code and send <code>/link YOUR_CODE</code> here',
-        '3. Pro/Premium: install the MT5 EA and generate a link token in the dashboard',
-        '4. When a signal arrives, tap <b>Execute on MT5</b> — entry, SL, TP, and lot size are filled for you',
-        '5. Premium: auto lot sizing uses your synced MT5 balance + risk %'
+        '1. Open KachingScanner → Auto Trading',
+        '2. Generate a Telegram link code and send <code>/link YOUR_CODE</code> here',
+        '3. Pro/Premium: connect the MT5 EA in the dashboard (independent of Telegram)',
+        '4. Manual mode: tap <b>Execute on MT5</b> on entry alerts to queue the trade',
+        '5. Premium Auto mode: trades queue for MT5 automatically — Telegram is notification-only'
       ].join('\n')
     );
     return;
@@ -391,11 +403,11 @@ async function handleCommand(chatId, text, fromUsername) {
     await sendMessage(
       chatId,
       [
-        `<b>KachingScanner Trade Copier</b>`,
+        `<b>KachingScanner Auto Trading</b>`,
         `Plan: ${escapeHtml(status.tier)}`,
         `Telegram: ${status.linked ? 'linked' : 'not linked'} (${status.enabled ? 'alerts on' : 'alerts off'})`,
         mt5Status.featureEnabled
-          ? `MT5: ${mt5Status.linked ? 'EA linked' : 'EA not linked'}${mt5Status.accountBalance ? ` | Balance: ${mt5Status.accountBalance} ${mt5Status.accountCurrency}` : ''}`
+          ? `MT5: ${mt5Status.linked ? 'EA linked' : 'EA not linked'} | Mode: ${mt5Status.executionMode}${mt5Status.accountBalance ? ` | Balance: ${mt5Status.accountBalance} ${mt5Status.accountCurrency}` : ''}`
           : 'MT5 execution: upgrade to Pro or Premium'
       ].join('\n')
     );
@@ -409,12 +421,12 @@ async function handleCommand(chatId, text, fromUsername) {
         '<b>Commands</b>',
         '/link CODE — link your KachingScanner account',
         '/unlink — stop alerts in this chat',
-        '/status — show link and trade copier status',
+        '/status — show link and auto trading status',
         '/help — show this message',
         '',
-        '<b>Trade Copier</b>',
-        'Pro/Premium: link the MT5 EA in the dashboard, then tap Execute on any entry alert.',
-        'Premium auto lot sizing needs the EA running so account balance stays synced.'
+        '<b>Auto Trading</b>',
+        'Telegram is notifications only. Connect MT5 in the dashboard.',
+        'Manual mode: tap Execute on entry alerts. Premium Auto mode queues trades without Telegram.'
       ].join('\n')
     );
   }
@@ -448,14 +460,17 @@ async function handleExecuteCallback(callbackQuery) {
   }
 
   const userId = user._id?.toString() || user.id;
-  const result = await Mt5TradeCopierService.queueExecutionForUser(userId, signalId);
+  // Manual Execute only — queues via TradeDeliveryService (source=manual).
+  const TradeDeliveryService = require('./TradeDeliveryService');
+  const result = await TradeDeliveryService.queueManualExecution(userId, signalId);
 
   if (!result.ok) {
     const messages = {
       subscription_required: 'MT5 execution requires Pro or Premium.',
-      mt5_not_linked: 'Link the MT5 EA in your dashboard first.',
-      mt5_disabled: 'MT5 trade copier is paused in your dashboard.',
-      lot_size_unavailable: 'Premium: sync MT5 balance via the EA first. Pro: set a fixed lot size in the dashboard.',
+      mt5_not_linked: 'Connect MT5 in your dashboard first.',
+      mt5_disabled: 'MT5 auto trading is paused in your dashboard.',
+      lot_size_unavailable:
+        'Premium: sync MT5 balance via the EA first. Pro: set a fixed lot size in the dashboard.',
       already_queued: 'This trade is already queued or executed.',
       not_entry_signal: 'Only entry signals can be executed.',
       signal_not_found: 'Signal expired or not found.'
@@ -472,7 +487,9 @@ async function handleExecuteCallback(callbackQuery) {
   );
 
   if (messageId) {
-    await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [[{ text: '✅ Queued for MT5', callback_data: 'noop' }]] });
+    await editMessageReplyMarkup(chatId, messageId, {
+      inline_keyboard: [[{ text: '✅ Queued for MT5', callback_data: 'noop' }]]
+    });
   }
 }
 

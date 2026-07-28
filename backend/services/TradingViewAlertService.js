@@ -5,8 +5,7 @@ const {
   userCanAccessLiveAlerts,
   getEffectiveSubscription,
   isTradingViewSymbolAllowed,
-  isTradingViewTimeframeAllowed,
-  sanitizeSignalForTier
+  isTradingViewTimeframeAllowed
 } = require('../utils/subscriptionAccess');
 const devUserStore = require('../utils/devUserStore');
 const {
@@ -17,7 +16,7 @@ const {
 } = require('../utils/kachingSignalLevels');
 const SignalOutcomeService = require('../services/SignalOutcomeService');
 const SignalEnrichmentService = require('../services/SignalEnrichmentService');
-const TelegramService = require('../services/TelegramService');
+const TradeDeliveryService = require('../services/TradeDeliveryService');
 const { normalizeSymbol } = require('../config/symbols');
 
 function isDbConnected() {
@@ -82,52 +81,9 @@ function formatLiveAlertMessage(signal) {
   return formatKachingAlertMessage(signal);
 }
 
+/** @deprecated Prefer TradeDeliveryService.toLiveAlertPayload */
 function toLiveAlertPayload(signalDoc) {
-  const signal = signalDoc.toObject ? signalDoc.toObject() : signalDoc;
-  return {
-    id: signal._id,
-    _id: signal._id,
-    alertType: signal.alertType || 'signal',
-    symbol: signal.symbol,
-    direction: signal.direction,
-    entry: signal.entry,
-    stop_loss: signal.stop_loss,
-    stop_loss_1: signal.stop_loss_1 ?? signal.stop_loss,
-    take_profit_1: signal.take_profit_1,
-    take_profit_2: signal.take_profit_2,
-    take_profit_3: signal.take_profit_3,
-    confidence: signal.confidence,
-    notes: signal.notes,
-    tradeExplanation: signal.tradeExplanation,
-    aiFactors: signal.aiFactors,
-    riskMetrics: signal.riskMetrics,
-    outcome: signal.outcome,
-    tradeStatus: signal.tradeStatus,
-    outcomeR: signal.outcomeR,
-    signalSource: signal.signalSource || signal.source || 'tradingview',
-    strategyName: signal.strategyName || signal.strategy || signal.patternLabel || null,
-    timeframe: signal.timeframe || null,
-    deliveryStatus: signal.deliveryStatus || 'pending',
-    executionStatus: signal.executionStatus || 'pending',
-    telegramSent: Boolean(signal.telegramSent),
-    mt5Sent: Boolean(signal.mt5Sent),
-    userId: signal.userId,
-    createdAt: signal.createdAt,
-    pattern: signal.pattern || null,
-    patternLabel: signal.patternLabel || signal.pattern_label || null,
-    gapTop: signal.gapTop,
-    gapBottom: signal.gapBottom,
-    chartZones: signal.chartZones,
-    orderBlockTop: signal.orderBlockTop,
-    orderBlockBottom: signal.orderBlockBottom,
-    orderBlockTimeStart: signal.orderBlockTimeStart,
-    orderBlockTimeEnd: signal.orderBlockTimeEnd,
-    liquidityZoneTop: signal.liquidityZoneTop,
-    liquidityZoneBottom: signal.liquidityZoneBottom,
-    liquidityTimeStart: signal.liquidityTimeStart,
-    liquidityTimeEnd: signal.liquidityTimeEnd,
-    message: formatLiveAlertMessage(signal)
-  };
+  return TradeDeliveryService.toLiveAlertPayload(signalDoc);
 }
 
 /** TV webhook distribution: any sanitized instrument for entitled subscribers (chart = source of truth). */
@@ -151,7 +107,8 @@ function toSubscriberRecord(user) {
     displayName: user.displayName,
     subscription: getEffectiveSubscription(user),
     telegram: user.telegram || null,
-    mt5: user.mt5 || null
+    mt5: user.mt5 || null,
+    preferences: user.preferences || {}
   };
 }
 
@@ -179,7 +136,7 @@ async function findActiveSubscribers() {
         }
       ]
     })
-      .select('email displayName subscription telegram mt5 role')
+      .select('email displayName subscription telegram mt5 preferences role')
       .lean();
     return users.map(toSubscriberRecord).filter(Boolean);
   } catch (error) {
@@ -196,7 +153,7 @@ const FANOUT_CONCURRENCY = Math.max(
   Math.min(32, Number(process.env.TV_FANOUT_CONCURRENCY || 8))
 );
 
-/** Bounded parallel fan-out — Telegram/MT5 are independent per subscriber. */
+/** Bounded parallel fan-out — delivery channels are independent per subscriber. */
 async function mapWithConcurrency(items, concurrency, mapper) {
   const results = new Array(items.length);
   let nextIndex = 0;
@@ -239,71 +196,12 @@ async function saveSignal(signalData, inMemorySignals) {
   }
 }
 
+/**
+ * Publish a saved Signal through TradeDeliveryService (Socket.IO, email, Telegram, MT5).
+ * TradingViewAlertService no longer drives Telegram or MT5 directly.
+ */
 async function deliverLiveAlert(io, signalDoc, subscriber = null) {
-  let telegramSent = Boolean(signalDoc.telegramSent);
-  let mt5Sent = Boolean(signalDoc.mt5Sent);
-  let executionStatus = signalDoc.executionStatus || 'pending';
-
-  if (subscriber) {
-    try {
-      const tgResult = await TelegramService.notifySubscriber(subscriber, signalDoc);
-      if (tgResult !== false) {
-        telegramSent = true;
-      }
-    } catch (err) {
-      console.warn('[Telegram] notify failed:', err.message);
-    }
-
-    try {
-      const Mt5TradeCopierService = require('./Mt5TradeCopierService');
-      if (subscriber?.id && signalDoc?._id && typeof Mt5TradeCopierService.queueExecutionForUser === 'function') {
-        const mt5Result = await Mt5TradeCopierService.queueExecutionForUser(subscriber.id, signalDoc._id);
-        if (mt5Result?.ok) {
-          mt5Sent = true;
-          executionStatus = 'sent';
-        } else if (mt5Result?.reason === 'mt5_not_linked' || mt5Result?.reason === 'mt5_disabled') {
-          executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
-        }
-      }
-    } catch (err) {
-      // MT5 is optional; never fail webhook distribution because of copier errors.
-      console.warn('[MT5] queue failed:', err.message);
-    }
-  }
-
-  const enrichedDoc = {
-    ...(signalDoc.toObject ? signalDoc.toObject() : signalDoc),
-    telegramSent,
-    mt5Sent,
-    executionStatus,
-    deliveryStatus: 'delivered'
-  };
-
-  // Persist delivery flags when we have a real Mongo document id.
-  if (isDbConnected() && enrichedDoc._id && !String(enrichedDoc._id).startsWith('mem_')) {
-    Signal.findByIdAndUpdate(enrichedDoc._id, {
-      telegramSent,
-      mt5Sent,
-      executionStatus,
-      deliveryStatus: 'delivered'
-    }).catch(err => console.warn('[Alerts] delivery status update failed:', err.message));
-  }
-
-  const forClient = subscriber?.subscription
-    ? sanitizeSignalForTier(enrichedDoc, subscriber.subscription)
-    : enrichedDoc;
-  const payload = toLiveAlertPayload(forClient);
-
-  if (payload.userId) {
-    // Per-user room only — avoids leaking Premium SMC / pair data to other tiers.
-    io.to(`user:${payload.userId}`).emit('tv:live-alert', payload);
-    io.to(`user:${payload.userId}`).emit('signal:update', forClient);
-  } else {
-    io.emit('tv:live-alert', payload);
-    io.emit('signal:update', forClient);
-  }
-
-  return payload;
+  return TradeDeliveryService.deliverToSubscriber(io, signalDoc, subscriber);
 }
 
 async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
@@ -419,6 +317,7 @@ function buildSignalData(body) {
     executionStatus: 'pending',
     telegramSent: false,
     mt5Sent: false,
+    emailSent: false,
     chartSnapshot: body.chartSnapshot || body.chart_snapshot || undefined
   };
 
@@ -435,7 +334,8 @@ function buildSignalData(body) {
 }
 
 /**
- * TradingView webhook / inject path — validate, persist, and publish only.
+ * TradingView webhook / inject path — validate, enrich, and publish a Signal.
+ * Delivery (Socket.IO / email / Telegram / MT5) is owned by TradeDeliveryService.
  * Never fetches candles, never runs indicator / liquidity / FVG / SMC pipelines.
  */
 async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {

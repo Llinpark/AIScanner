@@ -1,9 +1,13 @@
 import {
-  CHART_TIMEFRAME_OPTIONS,
+  buildToolbarTimeframeOptions,
   isChartTimeframeAllowed
 } from '../../constants/chartTimeframes';
-import { getUpgradeLabelForTimeframe } from '../../constants/subscriptionLimits';
+import {
+  getUpgradeLabelForTimeframe,
+  isTimeframeUpgradeForTier
+} from '../../constants/subscriptionLimits';
 import { normalizeInterval } from '../../utils/chartLevels';
+import { useAuth } from '../../context/AuthContext';
 
 export default function ChartTimeframeToolbar({
   symbol,
@@ -14,7 +18,10 @@ export default function ChartTimeframeToolbar({
   onTimeframeChange,
   loading = false
 }) {
+  const { subscription } = useAuth();
+  const currentTier = subscription?.tier || 'basic';
   const showSymbolSelect = allowedSymbols.length > 1 && onSymbolChange;
+  const toolbarOptions = buildToolbarTimeframeOptions(allowedTimeframes);
 
   return (
     <div className="chart-timeframe-toolbar">
@@ -38,8 +45,11 @@ export default function ChartTimeframeToolbar({
       </div>
 
       <div className="chart-toolbar-timeframes" role="toolbar" aria-label="Chart timeframes">
-        {CHART_TIMEFRAME_OPTIONS.map(option => {
+        {toolbarOptions.map(option => {
           const allowed = isChartTimeframeAllowed(option.apiInterval, allowedTimeframes);
+          const showAsUpgrade = !allowed && isTimeframeUpgradeForTier(option.apiInterval, currentTier);
+          if (!allowed && !showAsUpgrade) return null;
+
           const active =
             normalizeInterval(activeInterval) === normalizeInterval(option.apiInterval);
 

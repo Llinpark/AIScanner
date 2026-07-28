@@ -1,6 +1,7 @@
 const REFRESH_MS_BY_CANONICAL = {
-  // Keep 1m/5m slower than Twelve Data free-tier (~8 credits/min) allows.
+  // Keep 1m/3m/5m slower than Twelve Data free-tier (~8 credits/min) allows.
   '1m': 60_000,
+  '3m': 60_000,
   '5m': 60_000,
   '15m': 45_000,
   '30m': 60_000,
@@ -15,6 +16,9 @@ const INTERVAL_ALIASES = {
   '1m': '1m',
   '1min': '1m',
   M1: '1m',
+  '3m': '3m',
+  '3min': '3m',
+  M3: '3m',
   '5m': '5m',
   '5min': '5m',
   M5: '5m',

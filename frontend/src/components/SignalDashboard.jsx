@@ -18,14 +18,17 @@ const FEATURE_LABELS = [
   { key: 'showConfidence', label: 'Confidence Score', minTier: 'Pro' },
   { key: 'riskAnalysis', label: 'Risk Analysis', minTier: 'Pro' },
   { key: 'performanceDashboard', label: 'Analytics Dashboard', minTier: 'Pro' },
+  { key: 'advancedAnalytics', label: 'Advanced Analytics', minTier: 'Premium' },
   { key: 'tradeJournal', label: 'Trade Journal', minTier: 'Pro' },
   { key: 'newsFilter', label: 'News Filter', minTier: 'Pro' },
-  { key: 'telegramAlerts', label: 'Telegram Alerts', minTier: 'Pro' },
+  { key: 'telegramAlerts', label: 'Telegram Notifications', minTier: 'Pro' },
+  { key: 'emailAlerts', label: 'Email Alerts', minTier: 'Basic' },
   { key: 'multiMarketScanner', label: 'Multi-Market Distribution', minTier: 'Premium' },
   { key: 'smartMoneyConcepts', label: 'Smart Money Concepts', minTier: 'Premium' },
   { key: 'tradeManagementAlerts', label: 'Trade Management Alerts', minTier: 'Premium' },
   { key: 'aiTradeExplanation', label: 'AI Trade Explanation', minTier: 'Premium' },
-  { key: 'mt5Execution', label: 'One-click MT5 Execution', minTier: 'Pro' },
+  { key: 'mt5Execution', label: 'MT5 Execution', minTier: 'Pro' },
+  { key: 'mt5AutoExecution', label: 'Automatic MT5 Execution', minTier: 'Premium' },
   { key: 'trailingStop', label: 'Trailing Stop', minTier: 'Pro' },
   { key: 'breakEvenAutomation', label: 'Break-even Automation', minTier: 'Pro' },
   { key: 'autoLotSizing', label: 'Auto Lot Sizing', minTier: 'Premium' }
@@ -254,6 +257,14 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
                   ) : (
                     <small>Confidence: upgrade to Pro</small>
                   )}
+                  {tierLimits.newsFilter && signal.newsImpact && signal.newsImpact !== 'none' && (
+                    <small className={`news-impact news-impact-${signal.newsImpact}`}>
+                      News: {signal.newsFilter?.label || signal.newsImpact}
+                    </small>
+                  )}
+                  {tierLimits.tradeManagementAlerts && signal.tradeManagement?.message && (
+                    <small className="trade-mgmt-hint">{signal.tradeManagement.message}</small>
+                  )}
                   {signal.outcomeR != null && <small>Result: {signal.outcomeR}R</small>}
                   {notesClean && <span>{notesClean}</span>}
                 </div>
@@ -277,6 +288,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
                         riskMetrics={signal.riskMetrics}
                         accountBalance={accountBalance}
                         onAccountBalanceChange={setAccountBalance}
+                        symbol={signal.symbol}
                       />
                     )}
                   </>
@@ -301,7 +313,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
         </div>
         {tierLimits.mt5Execution && (
           <p className="api-hint">
-            MT5 Trade Copier (Pro+): one-click Execute fills entry, SL, TP
+            Auto Trading (Pro+): connect MT5 in Auto Trading. Manual Execute (Pro) or Auto-queue (Premium)
             {tierLimits.trailingStop ? ', trailing stop' : ''}
             {tierLimits.breakEvenAutomation ? ', break-even' : ''}
             {tierLimits.autoLotSizing
@@ -312,7 +324,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
         )}
         {tierLimits.telegramAlerts && (
           <p className="telegram-hint">
-            Telegram alerts are enabled for your {TIER_LABELS[tierKey] || tierDisplayName} plan.
+            Telegram notifications are enabled for your {TIER_LABELS[tierKey] || tierDisplayName} plan.
           </p>
         )}
       </div>

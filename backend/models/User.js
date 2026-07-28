@@ -28,6 +28,12 @@ const UserConfigSchema = new mongoose.Schema({
     /** Used when autoLotSizing is off (Pro): fixed volume per trade. */
     fixedLotSize: { type: Number, default: 0.01 },
     symbolSuffix: { type: String, default: '' },
+    /**
+     * Auto: queue MT5 on entry signal (Premium).
+     * Manual: notify + Execute button only (Pro default).
+     * Undefined = resolve from tier (Premium→auto, Pro→manual).
+     */
+    executionMode: { type: String, enum: ['auto', 'manual'], required: false },
     lastSyncAt: { type: Date, default: null },
     linkedAt: { type: Date, default: null },
     terminalId: { type: String, default: null }

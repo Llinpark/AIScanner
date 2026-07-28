@@ -26,12 +26,12 @@ const ECOSYSTEM_CARDS = [
     title: 'Professional Trade Execution',
     hook: 'From signal to execution in seconds.',
     description: [
-      'Receive instant alerts directly inside TradingView, Telegram, or execute trades automatically on MetaTrader 5 with our One-Click Trade Copier.',
+      'Receive instant alerts in-app, by email, or on Telegram — and execute on MetaTrader 5 with Auto Trading (Manual or Auto).',
       'Spend less time placing trades and more time managing risk.'
     ],
     features: [
       'TradingView alerts',
-      'One-click MT5 execution',
+      'Manual or automatic MT5 execution',
       'Telegram notifications',
       'Automatic Stop Loss & Take Profit',
       'Risk-based position sizing',

@@ -25,7 +25,7 @@ const SHOWCASE_TEMPLATE = [
     highlights: [
       'Webhook ingest for any chart symbol',
       'Personal license-bound Pine script',
-      'Optional MT5 trade copier with broker suffix mapping'
+      'Optional MT5 Auto Trading with broker suffix mapping'
     ],
     reverse: true
   },

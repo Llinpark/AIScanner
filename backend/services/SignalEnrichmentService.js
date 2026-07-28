@@ -2,6 +2,8 @@ const { computeRiskMetrics } = require('../utils/signalRisk');
 const { generateTradeExplanation } = require('../utils/signalExplanation');
 const { analyzeSignalFactors, normalizeCandles } = require('../utils/signalFactors');
 const { enrichEntrySignal, isEntryAlert } = require('../utils/signalOutcome');
+const { attachNewsFilterToSignal } = require('../utils/newsFilter');
+const { attachTradeManagementToSignal } = require('../utils/tradeManagement');
 const ChartDataService = require('../services/ChartDataService');
 const PatternDetectionService = require('../services/PatternDetectionService');
 const { getMarketDataHub } = require('../services/MarketDataHubService');
@@ -69,6 +71,10 @@ async function enrichFromTradingViewWebhook(signalData, options = {}) {
   }
 
   payload.tradeExplanation = generateTradeExplanation(payload, riskMetrics);
+
+  // Pro+ news filter metadata; Premium trade-management metadata for SL/TP alerts.
+  payload = attachNewsFilterToSignal(payload);
+  payload = attachTradeManagementToSignal(payload);
 
   return preserveTradeLevels(original, payload);
 }

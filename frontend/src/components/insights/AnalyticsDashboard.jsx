@@ -125,8 +125,11 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
   return (
     <div className="insights-section">
       <div className="insights-section-header">
-        <h3>Signal Performance</h3>
-        <p>Win rate, R multiples, and breakdowns for TradingView webhook signals</p>
+        <h3>{tierLimits.advancedAnalytics ? 'Advanced Signal Performance' : 'Signal Performance'}</h3>
+        <p>
+          Win rate, R multiples, and breakdowns for TradingView webhook signals
+          {tierLimits.historyDays ? ` (${tierLimits.historyDays}-day window)` : ''}
+        </p>
       </div>
 
       <div className="analytics-grid">
@@ -187,20 +190,24 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
           <BarChart rows={summary.byPair || []} valueKey="winRate" labelKey="label" />
         </div>
 
-        <div className="analytics-panel">
-          <h4>By timeframe</h4>
-          <BarChart rows={summary.byTimeframe || []} valueKey="winRate" labelKey="label" />
-        </div>
+        {tierLimits.advancedAnalytics && (
+          <>
+            <div className="analytics-panel">
+              <h4>By timeframe</h4>
+              <BarChart rows={summary.byTimeframe || []} valueKey="winRate" labelKey="label" />
+            </div>
 
-        <div className="analytics-panel">
-          <h4>By session (UTC)</h4>
-          <BarChart rows={summary.bySession || []} valueKey="winRate" labelKey="label" />
-        </div>
+            <div className="analytics-panel">
+              <h4>By session (UTC)</h4>
+              <BarChart rows={summary.bySession || []} valueKey="winRate" labelKey="label" />
+            </div>
 
-        <div className="analytics-panel">
-          <h4>Confidence vs win rate</h4>
-          <BarChart rows={summary.confidenceVsWinRate || []} valueKey="winRate" labelKey="bucket" />
-        </div>
+            <div className="analytics-panel">
+              <h4>Confidence vs win rate</h4>
+              <BarChart rows={summary.confidenceVsWinRate || []} valueKey="winRate" labelKey="bucket" />
+            </div>
+          </>
+        )}
 
         <div className="analytics-panel analytics-panel--table">
           <h4>Strategy performance</h4>

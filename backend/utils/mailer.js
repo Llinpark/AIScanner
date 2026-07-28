@@ -162,9 +162,55 @@ async function sendPasswordResetEmail({ to, token, displayName }) {
   });
 }
 
+async function sendTradeAlertEmail({ to, displayName, signal }) {
+  if (!to || !signal) return null;
+
+  const name = displayName || String(to).split('@')[0];
+  const direction = String(signal.direction || '').toUpperCase();
+  const sl = signal.stop_loss_1 ?? signal.stop_loss;
+  const title = `${signal.symbol || 'Signal'} ${direction}`.trim();
+  const subject = `${APP_NAME} alert: ${title}`;
+
+  const lines = [
+    `Hi ${name},`,
+    '',
+    `New ${APP_NAME} trade alert`,
+    `Symbol: ${signal.symbol || '—'}`,
+    `Direction: ${direction || '—'}`,
+    `Entry: ${signal.entry != null ? Number(signal.entry).toFixed(5) : '—'}`,
+    `SL: ${sl != null ? Number(sl).toFixed(5) : '—'}`,
+    `TP1: ${signal.take_profit_1 != null ? Number(signal.take_profit_1).toFixed(5) : '—'}`,
+    `TP2: ${signal.take_profit_2 != null ? Number(signal.take_profit_2).toFixed(5) : '—'}`,
+    `TP3: ${signal.take_profit_3 != null ? Number(signal.take_profit_3).toFixed(5) : '—'}`,
+    '',
+    `Open your dashboard: ${FRONTEND_URL.replace(/\/$/, '')}`
+  ];
+
+  return sendMail({
+    to,
+    subject,
+    text: lines.join('\n'),
+    html: `
+      <p>Hi ${name},</p>
+      <p><strong>New ${APP_NAME} trade alert</strong></p>
+      <ul>
+        <li><strong>Symbol:</strong> ${signal.symbol || '—'}</li>
+        <li><strong>Direction:</strong> ${direction || '—'}</li>
+        <li><strong>Entry:</strong> ${signal.entry != null ? Number(signal.entry).toFixed(5) : '—'}</li>
+        <li><strong>SL:</strong> ${sl != null ? Number(sl).toFixed(5) : '—'}</li>
+        <li><strong>TP1:</strong> ${signal.take_profit_1 != null ? Number(signal.take_profit_1).toFixed(5) : '—'}</li>
+        <li><strong>TP2:</strong> ${signal.take_profit_2 != null ? Number(signal.take_profit_2).toFixed(5) : '—'}</li>
+        <li><strong>TP3:</strong> ${signal.take_profit_3 != null ? Number(signal.take_profit_3).toFixed(5) : '—'}</li>
+      </ul>
+      <p><a href="${FRONTEND_URL.replace(/\/$/, '')}">Open your dashboard</a></p>
+    `
+  });
+}
+
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
+  sendTradeAlertEmail,
   isSmtpConfigured,
   isMailConfigured
 };

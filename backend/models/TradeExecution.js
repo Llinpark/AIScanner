@@ -33,7 +33,8 @@ const TradeExecutionSchema = new mongoose.Schema({
   mt5Ticket: { type: String },
   fillPrice: { type: Number },
   errorMessage: { type: String },
-  source: { type: String, default: 'telegram' },
+  /** auto | manual | telegram (legacy) */
+  source: { type: String, default: 'auto' },
   createdAt: { type: Date, default: Date.now },
   executedAt: { type: Date }
 });

@@ -16,7 +16,35 @@ function OutcomeBadge({ outcome, tradeStatus }) {
   return <span className={className}>{label}</span>;
 }
 
-export function RiskAnalysisCard({ riskMetrics, accountBalance, onAccountBalanceChange, locked }) {
+function pipValuePerLot(symbol, entry) {
+  const sym = String(symbol || '').toUpperCase();
+  if (sym.includes('JPY') && Number.isFinite(entry) && entry > 0) {
+    return 1000 / entry;
+  }
+  return 10;
+}
+
+/** Client-side lot suggestion so changing balance updates immediately. */
+export function suggestLotSize(riskMetrics, accountBalance, riskPercent = 1, symbol) {
+  const pipRisk = Number(riskMetrics?.pipRisk);
+  const balance = Number(accountBalance);
+  if (!Number.isFinite(pipRisk) || pipRisk <= 0 || !Number.isFinite(balance) || balance <= 0) {
+    return null;
+  }
+  const riskAmount = balance * (Number(riskPercent) || 1) / 100;
+  const pipValue = pipValuePerLot(symbol, null);
+  const lots = riskAmount / (pipRisk * pipValue);
+  if (!Number.isFinite(lots) || lots <= 0) return null;
+  return Number(lots.toFixed(2));
+}
+
+export function RiskAnalysisCard({
+  riskMetrics,
+  accountBalance,
+  onAccountBalanceChange,
+  locked,
+  symbol
+}) {
   if (locked) {
     return <div className="feature-lock">Risk analysis (R:R, pip risk, lot sizing) requires Pro or Premium.</div>;
   }
@@ -24,6 +52,9 @@ export function RiskAnalysisCard({ riskMetrics, accountBalance, onAccountBalance
   if (!riskMetrics) {
     return <div className="risk-panel-empty">Risk metrics unavailable for this signal.</div>;
   }
+
+  const suggested =
+    suggestLotSize(riskMetrics, accountBalance, 1, symbol) ?? riskMetrics.suggestedLotSize;
 
   return (
     <div className="risk-panel">
@@ -48,9 +79,9 @@ export function RiskAnalysisCard({ riskMetrics, accountBalance, onAccountBalance
           onChange={e => onAccountBalanceChange?.(Number(e.target.value) || 0)}
           placeholder="e.g. 10000"
         />
-        {accountBalance > 0 && riskMetrics.suggestedLotSize != null && (
+        {accountBalance > 0 && suggested != null && (
           <p className="lot-hint">
-            Suggested lot size at 1% risk: <strong>{riskMetrics.suggestedLotSize}</strong> lots
+            Suggested lot size at 1% risk: <strong>{suggested}</strong> lots
           </p>
         )}
       </div>

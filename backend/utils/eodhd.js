@@ -21,6 +21,8 @@ const EODHD_SYMBOL_MAP = {
 
 const EODHD_INTRADAY_INTERVAL_MAP = {
   '1m': '1m',
+  // EODHD has no 3m — nearest higher-resolution fallback.
+  '3m': '1m',
   '5m': '5m',
   '15m': '5m',
   '30m': '5m',
