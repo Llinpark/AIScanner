@@ -426,8 +426,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               )}
               {tierLimits.mt5Execution && (
                 <p className="premium-feature-hint">
-                  Auto Trading (Pro+): connect MT5 in the Auto Trading tab. Pro uses Manual Execute; Premium can Auto-queue
-                  trades without Telegram.
+                  Auto Trading (Pro+): connect MT5 in the Auto Trading tab. Premium Auto queues entries without
+                  Telegram; Pro Manual confirms with Execute on the Telegram alert (queue only — MT5 does not depend
+                  on Telegram).
                 </p>
               )}
               {tierLimits.trailingStop && (
@@ -561,7 +562,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       {activeTab === 'telegram' && (
         <div className="tv-section">
           {!subscribed ? (
-            <div className="empty-state">Subscribe to set up Auto Trading (Telegram + MT5).</div>
+            <div className="empty-state">Subscribe to set up Auto Trading (MT5 execution; Telegram optional).</div>
           ) : (
             <TelegramSetup tierLimits={tierLimits} onNavigatePricing={onNavigatePricing} />
           )}

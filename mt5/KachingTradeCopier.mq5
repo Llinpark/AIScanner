@@ -473,7 +473,7 @@ int OnInit()
 
    EventSetTimer(PollSeconds);
    SyncAccount();
-   Print("KachingTradeCopier v1.10 started. Backend: ", BackendURL);
+   Print("KachingTradeCopier v1.11 started. Backend: ", BackendURL);
    Print("Trail + break-even managed on OnTick for MagicNumber=", MagicNumber);
    return INIT_SUCCEEDED;
 }

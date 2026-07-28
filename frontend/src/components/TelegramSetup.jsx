@@ -178,17 +178,14 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
 
   const eaConnected = Boolean(mt5Status?.linked);
   const mt5Enabled = mt5Status?.enabled !== false;
-  const brokerLabel = mt5Status?.symbolSuffix
-    ? `Broker suffix ${mt5Status.symbolSuffix}`
-    : 'Default symbols (no suffix)';
 
   return (
     <div className="insights-section telegram-setup">
       <div className="insights-section-header">
         <h3>Auto Trading</h3>
         <p>
-          TradingView signals go to your live dashboard, email, Telegram (notifications), and MT5. MT5 execution does
-          not depend on Telegram.
+          Connect MT5 to place trades from TradingView entry signals. Telegram is optional and notifications-only —
+          the EA never depends on Telegram.
         </p>
       </div>
 
@@ -196,14 +193,43 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
 
       {canMt5 && (
         <div className="telegram-status-card">
-          <h4>MT5 Auto Trading</h4>
+          <h4>Enable MT5 execution</h4>
+          <ol className="mt5-setup-steps">
+            <li>
+              Compile and attach <code>mt5/KachingTradeCopier.mq5</code> (v1.11+) on your MT5 terminal.
+            </li>
+            <li>
+              In MT5: Tools → Options → Expert Advisors → allow WebRequest for your Kaching backend URL.
+            </li>
+            <li>
+              Click <strong>Connect MT5</strong>, paste the link token into the EA, and set the Backend URL shown
+              below.
+            </li>
+            <li>Enable Algo Trading, attach the EA to a chart, and keep it running.</li>
+            {canAuto ? (
+              <>
+                <li>Leave Execution Mode on <strong>Auto</strong> (Premium default).</li>
+                <li>Set risk % and broker suffix, save, then wait for balance sync.</li>
+                <li>
+                  Done: each entry signal queues to MT5 automatically. Link Telegram only if you want alert
+                  notifications.
+                </li>
+              </>
+            ) : (
+              <>
+                <li>Set fixed lot size and broker suffix, then save.</li>
+                <li>
+                  Pro uses <strong>Manual</strong> mode: MT5 is ready after the steps above. Confirm each entry with{' '}
+                  <strong>Execute</strong> on the Telegram alert to queue it for the EA (that button only queues —
+                  Telegram does not talk to MT5).
+                </li>
+                <li>Upgrade to Premium for automatic queueing with no confirmation step.</li>
+              </>
+            )}
+          </ol>
+
           {!eaConnected ? (
             <>
-              <p>
-                Connect your MetaTrader 5 Expert Advisor to queue and place trades. Install{' '}
-                <code>mt5/KachingTradeCopier.mq5</code>, allow the backend URL in MT5 WebRequest settings, then generate
-                a link token.
-              </p>
               <div className="telegram-actions">
                 <button type="button" className="btn-fetch" disabled={busy} onClick={generateMt5Token}>
                   {busy ? 'Working…' : 'Connect MT5'}
@@ -214,9 +240,6 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
             <>
               <p>
                 <strong>Status:</strong> {mt5Enabled ? 'Active' : 'Paused'}
-              </p>
-              <p>
-                <strong>Broker:</strong> {brokerLabel}
               </p>
               <p>
                 <strong>EA Connected:</strong> yes
@@ -256,15 +279,21 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                       onChange={e => setExecutionMode(e.target.value)}
                       disabled={!canAuto}
                     >
-                      <option value="auto">Auto — queue on every entry signal</option>
-                      <option value="manual">Manual — Execute button only</option>
+                      <option value="auto">Auto — queue every entry to MT5</option>
+                      <option value="manual">Manual — confirm each entry before queueing</option>
                     </select>
                   </label>
                 )}
                 {!canAuto && (
                   <p className="page-notice info-box">
-                    Pro uses Manual execution: tap Execute in Telegram to queue. Upgrade to Premium for Automatic MT5
-                    execution.
+                    Pro is Manual: after MT5 is connected, confirm each entry with Execute on the Telegram alert to
+                    queue it. Upgrade to Premium for automatic MT5 queueing (Telegram stays notifications-only).
+                  </p>
+                )}
+                {canAuto && executionMode === 'manual' && (
+                  <p className="page-notice info-box">
+                    Manual mode: entry signals will not auto-queue. Confirm with Execute on the Telegram alert (queue
+                    only). Switch back to Auto for hands-off MT5 execution.
                   </p>
                 )}
                 {usesRiskPercent ? (
@@ -349,7 +378,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               )}
               {(tierLimits.trailingStop || tierLimits.breakEvenAutomation) && (
                 <p className="page-notice info-box">
-                  Install EA v1.10+ so trailing stop and break-even run on open positions after fill.
+                  Install EA v1.11+ so trailing stop and break-even run on open positions after fill.
                 </p>
               )}
             </>
@@ -380,8 +409,11 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
 
       {canTelegram && (
         <div className="telegram-status-card">
-          <h4>Telegram notifications</h4>
-          <p>Telegram delivers alerts only. It does not drive MT5 execution.</p>
+          <h4>Telegram notifications (optional)</h4>
+          <p>
+            Link Telegram for alert messages only. It does not connect to MT5. In Manual mode, alerts can include an
+            Execute control that queues a trade for your already-linked EA.
+          </p>
 
           {!status?.configured && (
             <div className="feature-lock">
@@ -445,17 +477,19 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
       )}
 
       <div className="telegram-status-card">
-        <h4>How it works</h4>
+        <h4>After setup — how trades run</h4>
         <ol>
-          <li>TradingView Pine sends an entry signal with Kaching Entry, SL, and TP levels via webhook.</li>
-          <li>Signals are delivered to your live dashboard, email, Telegram, and MT5 as allowed by your plan.</li>
+          <li>TradingView Pine sends an entry signal (Entry, SL, TP) via webhook.</li>
+          <li>You get the alert in-app and by email; Telegram only if you linked it for notifications.</li>
           <li>
-            <strong>Manual</strong> (Pro default): Telegram shows Execute — tap to queue for the EA.
+            <strong>Premium Auto</strong> (default): the backend queues the trade for MT5 immediately — no Telegram
+            involved.
           </li>
           <li>
-            <strong>Auto</strong> (Premium default): entry signals queue for MT5 immediately without Telegram.
+            <strong>Pro Manual</strong> (default): the trade queues only after you confirm Execute on the Telegram
+            alert; your EA then picks it up from the MT5 bridge.
           </li>
-          <li>The MT5 EA polls the bridge, places the trade, then manages trailing stop and break-even.</li>
+          <li>The EA polls the bridge, places a market deal, then manages trailing stop and break-even.</li>
         </ol>
       </div>
     </div>

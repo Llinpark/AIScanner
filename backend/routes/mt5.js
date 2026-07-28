@@ -48,14 +48,15 @@ function createMt5Router() {
           token: link.token,
           bridgeUrl: `${PUBLIC_BACKEND_URL}/api/mt5/bridge`,
           instructions: [
-            'Compile and install mt5/KachingTradeCopier.mq5 (or .ex5) on your MT5 terminal',
+            'Compile and attach mt5/KachingTradeCopier.mq5 (or .ex5) v1.11+ on your MT5 terminal',
             `Set Backend URL to ${PUBLIC_BACKEND_URL}`,
-            'Paste the link token into the EA inputs',
-            'Allow the backend URL under Tools → Options → Expert Advisors → WebRequest',
-            'Enable Algo Trading in MT5',
-            'The EA syncs balance, places queued trades, then manages trailing stop + break-even on open positions',
-            'Pro: Manual execution mode (Execute in Telegram). Premium: Automatic MT5 execution (default)',
-            'Pro: uses fixed lot size from dashboard settings. Premium: auto-sizes from synced balance × risk %'
+            'Paste this link token into the EA LinkToken input',
+            'Allow the backend URL under Tools → Options → Expert Advisors → Allow WebRequest',
+            'Enable Algo Trading, attach the EA to a chart, and keep it running',
+            'Save lot / risk and broker suffix in Auto Trading (Pro: fixed lot; Premium: risk % × synced balance)',
+            'Premium (default Auto): entry signals queue to MT5 automatically — Telegram is optional notifications only',
+            'Pro (Manual): MT5 is ready after the steps above; confirm each entry with Execute on the Telegram alert to queue (Telegram does not talk to MT5)',
+            'The EA polls the bridge, places market deals, then manages trailing stop and break-even'
           ]
         });
       } catch (error) {
