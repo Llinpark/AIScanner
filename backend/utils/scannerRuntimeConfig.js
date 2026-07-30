@@ -1,12 +1,28 @@
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
-const { getStrategyAdminConfig } = require('./strategyRuntimeConfig');
+const {
+  getStrategyAdminConfig,
+  getStrategyCatalog,
+  getActiveStrategy,
+  setActiveStrategy,
+  applyStrategyConfig
+} = require('./strategyRuntimeConfig');
+const {
+  getMarketRegimeConfig,
+  applyMarketRegimeConfig
+} = require('./marketRegimeConfig');
 
 function getScannerConfig() {
   return {
     autoScanEnabled: Boolean(PATTERN_SCANNER_CONFIG.autoScanEnabled),
     autoScanIntervalMs: Number(PATTERN_SCANNER_CONFIG.autoScanIntervalMs),
     scanBatchSize: Number(PATTERN_SCANNER_CONFIG.scanBatchSize),
-    strategies: getStrategyAdminConfig()
+    activeStrategy: getActiveStrategy(),
+    // BC: nested settings keyed by scalping | daytrading
+    strategies: getStrategyAdminConfig(),
+    // Strategy Engine catalog (live + stub profiles) for Admin Strategies list
+    strategyCatalog: getStrategyCatalog(),
+    // Independent of strategy profiles — pre-scan market suitability gate
+    marketRegime: getMarketRegimeConfig()
   };
 }
 
@@ -21,9 +37,18 @@ function applyScannerConfig(patch = {}) {
   if (patch.scanBatchSize !== undefined) {
     PATTERN_SCANNER_CONFIG.scanBatchSize = Math.max(1, parseInt(patch.scanBatchSize, 10) || 2);
   }
+  if (patch.activeStrategy !== undefined) {
+    setActiveStrategy(patch.activeStrategy);
+  }
   if (patch.strategies && typeof patch.strategies === 'object') {
-    const { applyStrategyConfig } = require('./strategyRuntimeConfig');
+    // Honor nested activeStrategy only when top-level was omitted
+    if (patch.activeStrategy === undefined && patch.strategies.activeStrategy !== undefined) {
+      setActiveStrategy(patch.strategies.activeStrategy);
+    }
     applyStrategyConfig(patch.strategies);
+  }
+  if (patch.marketRegime && typeof patch.marketRegime === 'object') {
+    applyMarketRegimeConfig(patch.marketRegime);
   }
   return getScannerConfig();
 }

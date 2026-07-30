@@ -3,7 +3,7 @@ import { adminApi } from '../services/api';
 
 const TIERS = ['basic', 'professional', 'premium'];
 const STATUSES = ['inactive', 'pending', 'active', 'cancelled'];
-const BILLING_CYCLES = ['monthly', 'weekly'];
+const BILLING_CYCLES = ['monthly', 'yearly'];
 
 function formatDate(value) {
   if (!value) return '—';
@@ -11,7 +11,8 @@ function formatDate(value) {
 }
 
 function formatBillingCycle(cycle) {
-  return cycle === 'weekly' ? 'weekly' : cycle === 'monthly' ? 'monthly' : null;
+  // Legacy weekly values may still exist on historical subscriptions.
+  return cycle === 'weekly' || cycle === 'monthly' || cycle === 'yearly' ? cycle : null;
 }
 
 // Billing cycle is only meaningful while a plan is actually in effect;
@@ -28,8 +29,12 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
   const subscription = user.subscription || {};
   const [tier, setTier] = useState(subscription.tier || 'basic');
   const [status, setStatus] = useState(subscription.status || 'inactive');
-  const [billingCycle, setBillingCycle] = useState(formatBillingCycle(subscription.billingCycle) || 'monthly');
-  const [extendDays, setExtendDays] = useState(30);
+  const [billingCycle, setBillingCycle] = useState(
+    formatBillingCycle(subscription.billingCycle) === 'yearly' ? 'yearly' : 'monthly'
+  );
+  const [extendDays, setExtendDays] = useState(
+    formatBillingCycle(subscription.billingCycle) === 'yearly' ? 365 : 30
+  );
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -109,7 +114,15 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
 
         <label className="admin-field">
           <span>Billing cycle</span>
-          <select className="admin-select" value={billingCycle} onChange={e => setBillingCycle(e.target.value)}>
+          <select
+            className="admin-select"
+            value={billingCycle}
+            onChange={e => {
+              const next = e.target.value;
+              setBillingCycle(next);
+              setExtendDays(next === 'yearly' ? 365 : 30);
+            }}
+          >
             {BILLING_CYCLES.map(option => (
               <option key={option} value={option}>
                 {option}

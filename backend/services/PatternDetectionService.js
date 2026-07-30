@@ -244,17 +244,33 @@ function buildActionableNotes(detection, levels) {
 }
 
 /**
- * Scan candles with the pluggable strategy registry (Day Trading + Scalping).
+ * Scan candles via Strategy Registry (profile-driven).
  * Pass options.strategyId to force one strategy, or options.mode='all' for diagnostics.
  *
- * Scalping requires options.htfCandles (15m) + options.timeframe in {'1m','3m'}.
+ * Active strategy (admin) resolves prefer via Strategy Profile Registry (no scalp/day if-branches).
  */
 function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', options = {}) {
   const registry = options.registry || getDefaultRegistry();
+
+  let activePrefer = DAYTRADING_ID;
+  try {
+    const { getActiveStrategy } = require('../utils/strategyRuntimeConfig');
+    const { resolvePreferStrategyId } = require('../strategies/engine');
+    activePrefer = resolvePreferStrategyId(getActiveStrategy(), DAYTRADING_ID);
+  } catch (_) {
+    activePrefer = DAYTRADING_ID;
+  }
+
+  // Legacy flags still supported; resolve through profile registry when possible
+  let flagPrefer = null;
+  if (options.runScalping && !options.runDaytrading) flagPrefer = SCALPING_ID;
+  else if (options.runDaytrading && !options.runScalping) flagPrefer = DAYTRADING_ID;
+
   const prefer =
     options.strategyId ||
     options.prefer ||
-    (options.runScalping && !options.runDaytrading ? SCALPING_ID : DAYTRADING_ID);
+    flagPrefer ||
+    activePrefer;
 
   const multi = registry.analyzeAll(
     {

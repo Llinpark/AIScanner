@@ -5,6 +5,8 @@ const UserConfigSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   displayName: { type: String, trim: true },
   phone: { type: String },
+  /** Normalized TradingView username this subscriber's Pine license is bound to. */
+  tradingviewUsername: { type: String, trim: true, lowercase: true, default: null, index: true },
   preferences: { type: mongoose.Schema.Types.Mixed, default: {} },
   referralCode: { type: String, unique: true, sparse: true, uppercase: true, trim: true },
   referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'UserConfig', default: null, index: true },
@@ -47,7 +49,7 @@ const UserConfigSchema = new mongoose.Schema({
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },
     current_period_end: { type: Date },
-    billingCycle: { type: String, enum: ['weekly', 'monthly'], default: 'monthly' },
+    billingCycle: { type: String, enum: ['weekly', 'monthly', 'yearly'], default: 'monthly' },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
   },

@@ -62,7 +62,7 @@ function DetailRow({ label, value }) {
 }
 
 export default function TradingViewDashboard({ subscription, onNavigatePricing, initialTab }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, updateUser, user } = useAuth();
   const [setup, setSetup] = useState(null);
   const [liveFilter, setLiveFilter] = useState('ALL');
   const [chartSymbol, setChartSymbol] = useState('EUR/USD');
@@ -85,6 +85,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   const [pineStrategy, setPineStrategy] = useState('daytrading');
   const pineScriptRef = useRef('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
+  const [tvUsernameInput, setTvUsernameInput] = useState('');
+  const [tvLinkState, setTvLinkState] = useState('idle');
+  const [tvLinkError, setTvLinkError] = useState('');
+  const [linkedTvUsername, setLinkedTvUsername] = useState('');
 
   const [tierLimits, setTierLimits] = useState({
     showConfidence: false,
@@ -145,6 +149,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
     try {
       const response = await tradingviewApi.getSetup();
       setSetup(response.data);
+      const tv = response.data.tradingviewUsername || '';
+      setLinkedTvUsername(tv);
+      if (tv) setTvUsernameInput(tv);
     } catch (error) {
       console.error('Failed to fetch TradingView setup:', error);
     }
@@ -158,6 +165,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       scriptId: response.data.scriptId,
       tierLabel: response.data.tierLabel,
       subscriberLabel: response.data.subscriberLabel,
+      tradingviewUsername: response.data.tradingviewUsername,
       generatedAt: response.data.generatedAt,
       security: response.data.security,
       instructions: response.data.instructions || [],
@@ -167,6 +175,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       strategyName: response.data.strategyName,
       availableStrategies: response.data.availableStrategies || []
     });
+    if (response.data.tradingviewUsername) {
+      setLinkedTvUsername(response.data.tradingviewUsername);
+    }
     return pineScriptRef.current;
   }, [pineStrategy]);
 
@@ -176,9 +187,48 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       await loadPineScriptBundle(pineStrategy);
     } catch (error) {
       console.error('Failed to load Pine Script:', error);
-      setPineLoadError(error.response?.data?.message || 'Unable to load your Pine Script. Try again or refresh the page.');
+      pineScriptRef.current = '';
+      setPineMeta(null);
+      const data = error.response?.data;
+      if (data?.code === 'tradingview_username_required' || data?.requiresTradingViewUsername) {
+        setPineLoadError(
+          data.message || 'Link your TradingView username before generating your personal script.'
+        );
+      } else {
+        setPineLoadError(data?.message || 'Unable to load your Pine Script. Try again or refresh the page.');
+      }
     }
   }, [loadPineScriptBundle, pineStrategy]);
+
+  const linkTradingViewUsername = async event => {
+    event.preventDefault();
+    const value = tvUsernameInput.trim().replace(/^@/, '');
+    if (!value) {
+      setTvLinkError('Enter your TradingView username.');
+      return;
+    }
+    setTvLinkState('loading');
+    setTvLinkError('');
+    try {
+      const response = await tradingviewApi.linkAccount(value);
+      const linked = response.data.tradingviewUsername || value.toLowerCase();
+      setLinkedTvUsername(linked);
+      setTvUsernameInput(linked);
+      if (user && updateUser) {
+        updateUser({ ...user, tradingviewUsername: linked });
+      }
+      pineScriptRef.current = '';
+      setPineMeta(null);
+      await fetchSetup();
+      await loadPineMeta();
+      setTvLinkState('success');
+      window.setTimeout(() => setTvLinkState('idle'), 3000);
+    } catch (error) {
+      console.error('Failed to link TradingView username:', error);
+      setTvLinkError(error.response?.data?.message || 'Unable to link TradingView username.');
+      setTvLinkState('error');
+    }
+  };
 
   const fetchAlerts = useCallback(async () => {
     try {
@@ -191,6 +241,13 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       setLoading(false);
     }
   }, [liveFilter]);
+
+  useEffect(() => {
+    if (user?.tradingviewUsername) {
+      setLinkedTvUsername(user.tradingviewUsername);
+      setTvUsernameInput(user.tradingviewUsername);
+    }
+  }, [user?.tradingviewUsername]);
 
   useEffect(() => {
     if (subscribed) {
@@ -406,13 +463,57 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
             <div className="pine-script-section">
               <h3>Connect TradingView</h3>
               <p>
-                Copy your personal script, add it to a TradingView chart, then create one alert that sends to your
-                webhook URL below. Kaching publishes those trades here — charts stay separate and display-only.
+                Link the TradingView username you will run the script under, copy your personal script, add it to a
+                chart, then create one alert that sends to your webhook URL below. Kaching publishes those trades here —
+                charts stay separate and display-only.
               </p>
               <p className="setup-note">
                 Keep the script on your TradingView chart. When a signal fires it draws Entry, SL, TP1, TP2, and TP3
-                lines on TradingView — included on Basic, Pro, and Premium.
+                lines on TradingView — included on Basic, Pro, and Premium. The script is licensed to your TradingView
+                username and will not send valid alerts from another TradingView account.
               </p>
+
+              <form className="tv-username-link" onSubmit={linkTradingViewUsername}>
+                <label htmlFor="tv-username-input">
+                  <strong>TradingView username</strong>
+                </label>
+                <div className="tv-username-link-row">
+                  <input
+                    id="tv-username-input"
+                    type="text"
+                    value={tvUsernameInput}
+                    onChange={e => setTvUsernameInput(e.target.value)}
+                    placeholder="Exact TradingView username"
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button type="submit" className="btn-copy-script" disabled={tvLinkState === 'loading'}>
+                    {tvLinkState === 'loading'
+                      ? 'Saving…'
+                      : linkedTvUsername
+                        ? 'Update username'
+                        : 'Save username'}
+                  </button>
+                </div>
+                {linkedTvUsername ? (
+                  <p className="setup-note">
+                    Licensed to <code>{linkedTvUsername}</code>. After changing it, re-copy the script and confirm the
+                    same username in TradingView script settings.
+                  </p>
+                ) : (
+                  <p className="setup-note">
+                    Required before your personal script can be generated. Use the exact username shown on your
+                    TradingView profile.
+                  </p>
+                )}
+                {tvLinkError && <p className="pine-script-copy-feedback error">{tvLinkError}</p>}
+                {tvLinkState === 'success' && (
+                  <p className="pine-script-copy-feedback success">
+                    TradingView username saved. Your personal script is ready to copy.
+                  </p>
+                )}
+              </form>
+
               {tierLimits.multiMarketScanner && (
                 <p className="premium-feature-hint">
                   Premium: you receive alerts across all markets on your plan.
@@ -482,6 +583,11 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     <p>
                       <strong>Generated for:</strong> {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
                     </p>
+                    {pineMeta.tradingviewUsername && (
+                      <p>
+                        <strong>Licensed TradingView user:</strong> <code>{pineMeta.tradingviewUsername}</code>
+                      </p>
+                    )}
                     <p className="setup-webhook-url">
                       <strong>Webhook URL:</strong> <code>{pineMeta.webhookUrl}</code>
                     </p>
@@ -512,7 +618,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     {(pineMeta?.instructions?.length
                       ? pineMeta.instructions
                       : [
+                          'Link your TradingView username above',
                           'Open TradingView → Pine Editor → paste your personal script → Add to chart',
+                          'In script settings, confirm the same TradingView username to unlock signals',
                           'Keep the script on the chart so Entry, SL, and TP1–3 overlays draw when signals fire',
                           'Create one alert for this script and enable webhook notifications',
                           'Paste your Kaching webhook URL into the alert',
@@ -529,12 +637,13 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     type="button"
                     className="btn-copy-script"
                     onClick={copyPineScript}
-                    disabled={pineCopyState === 'loading'}
+                    disabled={pineCopyState === 'loading' || !linkedTvUsername}
                   >
                     {pineCopyState === 'loading' ? 'Copying…' : 'Copy Script'}
                   </button>
                   <p className="pine-script-copy-note">
                     Your personal Pine Script is copied to the clipboard only — it is not shown on this page.
+                    {!linkedTvUsername && ' Save your TradingView username first.'}
                   </p>
                   {!pineMeta && !pineLoadError && pineCopyState !== 'loading' && (
                     <p className="pine-script-loading">Preparing your script…</p>

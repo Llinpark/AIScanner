@@ -84,7 +84,7 @@ export default function MarketChartPanel({
     onChartErrorChange?.(error || null);
   }, [error, onChartErrorChange]);
 
-  const { liveSignal, stage, closedOutcome } = useLiveChartLevels({
+  const { liveSignal, stage, closedOutcome, historicalSignals } = useLiveChartLevels({
     symbol: debouncedSymbol,
     interval,
     candles,
@@ -94,6 +94,7 @@ export default function MarketChartPanel({
   });
 
   const overlaySignal = useLiveLevels ? liveSignal : null;
+  const historicalOverlaySignals = useLiveLevels ? historicalSignals : [];
   const chartFailed = Boolean(error && candles.length === 0);
 
   if (!subscribed) {
@@ -140,6 +141,7 @@ export default function MarketChartPanel({
         <KachingLightweightChart
           candles={candles}
           overlaySignal={overlaySignal}
+          historicalOverlaySignals={historicalOverlaySignals}
           symbol={debouncedSymbol}
           interval={interval}
           liveEnabled={liveEnabled}

@@ -8,7 +8,10 @@ const {
 const {
   STRATEGY_NAME: DAYTRADING_SWEEP_NAME
 } = require('../strategies/config/dayTradingConfig');
-const { generateLicenseToken } = require('../utils/webhookSecurity');
+const {
+  generateLicenseToken,
+  normalizeTradingViewUsername
+} = require('../utils/webhookSecurity');
 const { getTierDisplayName, getEffectiveSubscription } = require('../utils/subscriptionAccess');
 
 const SCALPING_TEMPLATE = path.join(
@@ -23,6 +26,13 @@ const DAYTRADING_SWEEP_TEMPLATE = path.join(
   'templates',
   'kaching-sweep-fvg-daytrading.pine.template'
 );
+const DRAWING_ENGINE_SNIPPET = path.join(
+  __dirname,
+  '..',
+  'templates',
+  'snippets',
+  'kaching-trade-drawing.pine.snippet'
+);
 
 const templateCache = new Map();
 
@@ -31,6 +41,10 @@ function loadTemplate(templatePath) {
   const src = fs.readFileSync(templatePath, 'utf8');
   templateCache.set(templatePath, src);
   return src;
+}
+
+function loadDrawingEngine() {
+  return loadTemplate(DRAWING_ENGINE_SNIPPET);
 }
 
 function escapePineString(value) {
@@ -71,6 +85,17 @@ function resolveStrategyKey(strategy) {
   return 'daytrading';
 }
 
+function resolveTradingViewUsername(user) {
+  return normalizeTradingViewUsername(
+    user?.tradingviewUsername || user?.preferences?.tradingviewUsername || ''
+  );
+}
+
+function sampleHumanAlertMessage(direction, entry, sl, tp1, tp2, tp3) {
+  const header = direction === 'short' ? '🟥 Kaching SELL' : '🟦 Kaching BUY';
+  return `${header}\nEntry: ${entry}\nSL: ${sl}\nTP1: ${tp1}\nTP2: ${tp2}\nTP3: ${tp3}`;
+}
+
 function sampleWebhookPayload(strategyKey = 'daytrading') {
   if (strategyKey === 'scalping') {
     return {
@@ -87,8 +112,9 @@ function sampleWebhookPayload(strategyKey = 'daytrading') {
       take_profit_2: 2657.4,
       take_profit_3: 2659.7,
       confidence: 0.85,
-      message: 'Kaching Entry',
+      message: sampleHumanAlertMessage('long', 2650.5, 2648.2, 2655.1, 2657.4, 2659.7),
       licenseToken: '<your-license-token>',
+      tradingviewUsername: '<your-tradingview-username>',
       broadcast: true
     };
   }
@@ -107,14 +133,24 @@ function sampleWebhookPayload(strategyKey = 'daytrading') {
     take_profit_2: 2670.0,
     take_profit_3: 2680.0,
     confidence: 0.82,
-    message: 'Kaching Entry',
+    message: sampleHumanAlertMessage('long', 2650.5, 2644.0, 2663.5, 2670.0, 2680.0),
     licenseToken: '<your-license-token>',
+    tradingviewUsername: '<your-tradingview-username>',
     broadcast: true
   };
 }
 
 function buildSweepVariables(base, config, title, shortTitle, htfPine) {
-  const rr = config.takeProfit?.rrMultiples || [2, 3, 4];
+  const rr = config.takeProfit?.rrMultiples || [1.5, 2, 3];
+  const atrCaps = config.takeProfit?.atrCaps || [0.7, 1.3, 2.0];
+  const model = String(config.takeProfit?.model || 'smart_scoring').toLowerCase();
+  const enableSmart =
+    (config.takeProfit?.enableSmartTpScoring !== false &&
+      config.takeProfit?.enableDynamicTp !== false) &&
+    (model === 'smart_scoring' ||
+      model === 'smart_tp' ||
+      model === 'dynamic_liquidity' ||
+      model === 'dynamic');
   return {
     ...base,
     INDICATOR_TITLE: escapePineString(title),
@@ -128,9 +164,13 @@ function buildSweepVariables(base, config, title, shortTitle, htfPine) {
     MIN_FVG_ATR: config.fvg?.minGapToAtrRatio ?? 0.12,
     ENTRY_MODEL: escapePineString(config.entry?.model || 'ce'),
     STOP_MODEL: escapePineString(config.stop?.model || 'sweep'),
-    TP1_R: rr[0] ?? 2,
-    TP2_R: rr[1] ?? 3,
-    TP3_R: rr[2] ?? 4,
+    TP1_R: rr[0] ?? 1.5,
+    TP2_R: rr[1] ?? 2,
+    TP3_R: rr[2] ?? 3,
+    ENABLE_DYNAMIC_TP: enableSmart ? 'true' : 'false',
+    TP1_ATR_CAP: atrCaps[0] ?? 0.7,
+    TP2_ATR_CAP: atrCaps[1] ?? 1.3,
+    TP3_ATR_CAP: atrCaps[2] ?? 2.0,
     CONFIDENCE_THRESHOLD: config.confidence?.threshold ?? 70,
     REQUIRE_ENGULFING: config.engulfing?.required ? 'true' : 'false'
   };
@@ -144,16 +184,19 @@ function generateForUser(user, options = {}) {
   const webhookSecret = options.webhookSecret || process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
   const strategyKey = resolveStrategyKey(options.strategy || options.strategyId);
 
-  const tvUsername =
-    user.tradingviewUsername ||
-    user.preferences?.tradingviewUsername ||
-    user.displayName ||
-    '';
+  const tvUsername = resolveTradingViewUsername(user);
+  if (!tvUsername) {
+    const err = new Error(
+      'Link your TradingView username before generating your personal script.'
+    );
+    err.code = 'tradingview_username_required';
+    throw err;
+  }
 
   const scriptId = buildScriptId(userId);
   const tierLabel = getTierDisplayName(tier);
   const subscriberLabel = user.email || user.displayName || userId || 'subscriber';
-  const licenseToken = userId ? generateLicenseToken(userId) : '';
+  const licenseToken = userId ? generateLicenseToken(userId, tvUsername) : '';
 
   const base = {
     SUBSCRIBER_LABEL: escapePineString(subscriberLabel),
@@ -205,13 +248,17 @@ function generateForUser(user, options = {}) {
       'Open TradingView → attach this script to a 15m or 5m chart (entries blocked on HTF). HTF bias/liquidity uses 4H context.';
   }
 
-  const script = renderTemplate(loadTemplate(templatePath), variables);
+  const script = renderTemplate(loadTemplate(templatePath), {
+    ...variables,
+    DRAWING_ENGINE: loadDrawingEngine()
+  });
 
   return {
     script,
     scriptId,
     webhookUrl,
     licenseToken,
+    tradingviewUsername: tvUsername,
     tier,
     tierLabel,
     subscriberLabel,
@@ -227,16 +274,20 @@ function generateForUser(user, options = {}) {
     ],
     security: {
       licenseTokenIncluded: Boolean(licenseToken),
-      authNote: 'Your script already includes a private license token. Do not share the generated script.'
+      tradingviewUsernameBound: true,
+      tradingviewUsername: tvUsername,
+      authNote:
+        'This script is licensed to your TradingView username and includes a private license token. It will not send valid alerts from another TradingView account. Do not share the generated script.'
     },
     instructions: [
       instructionLead,
-      'When a signal fires, TradingView shows only Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 — no liquidity/FVG/confidence labels on the chart.',
+      `In TradingView script settings, enter your TradingView username exactly: ${tvUsername}. Signals stay locked until it matches.`,
+      'When a signal fires, TradingView shows Kaching Buy/Sell plus short Entry/SL/TP1–3 levels with prices (latest trade only). Adjust “Trade level length (bars)” under KachingFx Display (default 22).',
       `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
-      'Your script already includes a private license token — do not share it with anyone.',
+      'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
       'Switch strategies with ?strategy=daytrading | scalping.',
-      'Re-copy and re-add this script after plan or script updates so TradingView uses the latest overlay logic.',
-      `This script was generated for ${subscriberLabel} (${tierLabel} plan).`
+      'Re-copy and re-add this script after plan, username, or script updates so TradingView uses the latest overlay logic.',
+      `This script was generated for ${subscriberLabel} (${tierLabel} plan) · TV: ${tvUsername}.`
     ]
   };
 }
@@ -246,5 +297,6 @@ module.exports = {
   escapePineString,
   buildScriptId,
   sampleWebhookPayload,
-  resolveStrategyKey
+  resolveStrategyKey,
+  resolveTradingViewUsername
 };

@@ -3,6 +3,7 @@ const PaymentTransaction = require('../models/PaymentTransaction');
 const devUserStore = require('../utils/devUserStore');
 const devPaymentStore = require('../utils/devPaymentStore');
 const { sanitizeUser } = require('../utils/auth');
+const { normalizeBillingCycle } = require('../config/subscriptions');
 
 const SUBSCRIPTION_PERIOD_DAYS = 30;
 
@@ -16,8 +17,9 @@ async function activateSubscription(
   { tier, provider, providerOrderId, providerCustomerId, billingCycle = 'monthly', periodDays },
   io
 ) {
-  const normalizedCycle = billingCycle === 'weekly' ? 'weekly' : 'monthly';
-  const days = periodDays || (normalizedCycle === 'weekly' ? 7 : SUBSCRIPTION_PERIOD_DAYS);
+  const normalizedCycle = normalizeBillingCycle(billingCycle);
+  const days =
+    periodDays || (normalizedCycle === 'yearly' ? 365 : SUBSCRIPTION_PERIOD_DAYS);
   const periodEnd = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
   const subscription = {
     tier,

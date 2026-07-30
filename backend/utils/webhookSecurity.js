@@ -18,15 +18,31 @@ function timingSafeEqualString(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-function generateLicenseToken(userId) {
+function normalizeTradingViewUsername(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^@/, '')
+    .toLowerCase();
+}
+
+/**
+ * @param {string} userId
+ * @param {string} tradingviewUsername Required — bound into the HMAC payload (tvu).
+ */
+function generateLicenseToken(userId, tradingviewUsername) {
   const signingSecret = getSigningSecret();
+  const tvu = normalizeTradingViewUsername(tradingviewUsername);
   if (!signingSecret || !userId) {
     throw new Error('Cannot generate license token without signing secret and user id');
+  }
+  if (!tvu) {
+    throw new Error('Cannot generate license token without TradingView username');
   }
 
   const payload = {
     uid: String(userId),
-    v: 1,
+    tvu,
+    v: 2,
     iat: Math.floor(Date.now() / 1000)
   };
 
@@ -49,6 +65,9 @@ function verifyLicenseToken(token) {
   try {
     const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     if (!payload?.uid) return null;
+    if (payload.tvu) {
+      payload.tvu = normalizeTradingViewUsername(payload.tvu);
+    }
     return payload;
   } catch {
     return null;
@@ -107,6 +126,12 @@ function verifyGlobalWebhookSecret(req, body) {
   );
 }
 
+function extractBodyTradingViewUsername(body) {
+  return normalizeTradingViewUsername(
+    body.tradingviewUsername || body.tradingview_username || body.username || body.user || body.trader || ''
+  );
+}
+
 async function verifyTradingViewWebhook(req, resolveUserById) {
   /**
    * Auth order (harden server-side without mass-breaking Pine scripts):
@@ -114,6 +139,10 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
    * 2) Per-user licenseToken (kls_v1.*) — preferred for TradingView alert JSON
    * 3) Legacy global TRADINGVIEW_WEBHOOK_SECRET — disabled in production unless
    *    ALLOW_LEGACY_WEBHOOK_SECRET=true
+   *
+   * License tokens (v2) bind uid + TradingView username (tvu). Payload must include
+   * the same tradingviewUsername, and the subscriber account must still store that
+   * username with an active subscription.
    *
    * Rotation: rotate WEBHOOK_SIGNING_SECRET carefully — regenerating signing secret
    * invalidates all existing licenseTokens; users must re-copy Pine / alert JSON.
@@ -123,6 +152,7 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
   const body = parseWebhookBody(req);
   const rawBody = req.rawBody || Buffer.from(JSON.stringify(body), 'utf8');
   const bodyUserId = body.userId || body.user_id;
+  const bodyTvUsername = extractBodyTradingViewUsername(body);
 
   const signatureHeader = req.headers['x-kaching-signature'] || req.headers['x-webhook-signature'];
   if (signatureHeader && verifyRequestSignature(rawBody, signatureHeader)) {
@@ -140,14 +170,35 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
       return { ok: false, reason: 'license_user_mismatch', body };
     }
 
+    // v2+ tokens bind TradingView username; reject legacy tokens and mismatches.
+    if (!claims.tvu) {
+      return { ok: false, reason: 'license_requires_tv_username', body };
+    }
+    if (!bodyTvUsername || bodyTvUsername !== claims.tvu) {
+      return { ok: false, reason: 'license_tv_username_mismatch', body };
+    }
+
     if (resolveUserById) {
       const user = await resolveUserById(claims.uid);
       if (!user || !isSubscriptionActive(user.subscription)) {
         return { ok: false, reason: 'inactive_subscription', body };
       }
+
+      const storedTv = normalizeTradingViewUsername(
+        user.tradingviewUsername || user.preferences?.tradingviewUsername || ''
+      );
+      if (!storedTv || storedTv !== claims.tvu) {
+        return { ok: false, reason: 'stored_tv_username_mismatch', body };
+      }
     }
 
-    return { ok: true, mode: 'license', body, userId: claims.uid };
+    return {
+      ok: true,
+      mode: 'license',
+      body,
+      userId: claims.uid,
+      tradingviewUsername: claims.tvu
+    };
   }
 
   if (bodyUserId) {
@@ -167,5 +218,6 @@ module.exports = {
   signRequestBody,
   verifyRequestSignature,
   verifyTradingViewWebhook,
-  parseWebhookBody
+  parseWebhookBody,
+  normalizeTradingViewUsername
 };

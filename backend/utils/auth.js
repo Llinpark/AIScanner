@@ -43,6 +43,7 @@ function sanitizeUser(user) {
     email: obj.email,
     displayName: obj.displayName,
     phone: obj.phone,
+    tradingviewUsername: obj.tradingviewUsername || obj.preferences?.tradingviewUsername || null,
     role,
     isAdmin: isAdmin(obj),
     isSuperAdmin: isSuperAdmin(obj),

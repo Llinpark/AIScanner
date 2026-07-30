@@ -27,20 +27,57 @@ export default function useLiveChartLevels({
   const matchingOverlay = useMemo(() => {
     if (!symbol || !overlaySignals?.length) return null;
     const normalizedInterval = normalizeInterval(interval);
-    const open = overlaySignals.find(s => {
+    const matchingSignals = overlaySignals.filter(s => {
       if (!symbolsMatch(s.symbol, symbol)) return false;
       const alertType = s.alertType || 'signal';
       if (alertType !== 'entry' && alertType !== 'signal') return false;
-      if (s.outcome && s.outcome !== 'pending') return false;
-      if (s.tradeStatus && !['open', 'partial'].includes(s.tradeStatus)) return false;
       if (s.timeframe && normalizeInterval(s.timeframe) !== normalizedInterval) {
         // Allow overlay when timeframe missing on legacy signals.
         return false;
       }
       return s.entry != null && (s.stop_loss != null || s.stop_loss_1 != null);
     });
-    return open || null;
+    if (!matchingSignals.length) return null;
+
+    const open = matchingSignals.find(s => {
+      if (s.outcome && s.outcome !== 'pending') return false;
+      if (s.tradeStatus && !['open', 'partial'].includes(s.tradeStatus)) return false;
+      return true;
+    });
+    if (open) return open;
+
+    return [...matchingSignals].sort((left, right) => {
+      const leftTime = Date.parse(left.createdAt || left.updatedAt || 0) || 0;
+      const rightTime = Date.parse(right.createdAt || right.updatedAt || 0) || 0;
+      return rightTime - leftTime;
+    })[0] || null;
   }, [overlaySignals, symbol, interval]);
+
+  const historicalSignals = useMemo(() => {
+    if (!symbol || !overlaySignals?.length) return [];
+    const normalizedInterval = normalizeInterval(interval);
+    const primaryId = matchingOverlay
+      ? String(matchingOverlay._id || matchingOverlay.id || matchingOverlay.signalId || '')
+      : '';
+
+    return overlaySignals
+      .filter(s => {
+        if (!symbolsMatch(s.symbol, symbol)) return false;
+        const alertType = s.alertType || 'signal';
+        if (alertType !== 'entry' && alertType !== 'signal') return false;
+        if (s.timeframe && normalizeInterval(s.timeframe) !== normalizedInterval) return false;
+        if (s.entry == null || (s.stop_loss == null && s.stop_loss_1 == null)) return false;
+        const id = String(s._id || s.id || s.signalId || '');
+        if (primaryId && id && id === primaryId) return false;
+        return true;
+      })
+      .sort((left, right) => {
+        const leftTime = Date.parse(left.createdAt || left.updatedAt || 0) || 0;
+        const rightTime = Date.parse(right.createdAt || right.updatedAt || 0) || 0;
+        return rightTime - leftTime;
+      })
+      .slice(0, 40);
+  }, [overlaySignals, symbol, interval, matchingOverlay]);
 
   useEffect(() => {
     setClosedOutcome(null);
@@ -110,5 +147,5 @@ export default function useLiveChartLevels({
     return () => clearTimeout(timer);
   }, [closedOutcome]);
 
-  return { liveSignal, stage, analyzing: false, closedOutcome };
+  return { liveSignal, stage, analyzing: false, closedOutcome, historicalSignals };
 }

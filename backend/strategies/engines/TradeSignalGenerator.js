@@ -42,6 +42,10 @@ class TradeSignalGenerator {
 
     const strategyName = this.config.name || 'Kaching Strategy';
     const strategyId = this.config.id || 'kaching_strategy';
+    const strategyVersion =
+      this.config.version != null && Number.isFinite(Number(this.config.version))
+        ? Number(this.config.version)
+        : 1;
     const pattern = strategyId;
 
     return {
@@ -78,6 +82,7 @@ class TradeSignalGenerator {
       tpPartials: tpPartials || null,
       strategyName,
       strategyId,
+      strategyVersion,
       pattern,
       patternLabel: strategyName,
       alertType: 'entry',

@@ -157,7 +157,12 @@ async function recordCommissionFromPayment(transaction) {
     paymentTransactionId: paymentId,
     commissionType,
     tier: transaction.tier,
-    billingCycle: referredUser.subscription?.billingCycle === 'weekly' ? 'weekly' : 'monthly',
+    billingCycle:
+      transaction.billingCycle === 'yearly'
+        ? 'yearly'
+        : transaction.billingCycle === 'weekly'
+          ? 'weekly'
+          : 'monthly',
     planAmount: transaction.amount,
     currency: transaction.currency,
     commissionRate,

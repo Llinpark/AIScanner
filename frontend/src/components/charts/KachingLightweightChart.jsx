@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BaselineSeries,
   CandlestickSeries,
@@ -9,9 +9,14 @@ import {
 } from 'lightweight-charts';
 import {
   buildChartOverlay,
+  buildHistoricalOverlays,
   normalizeCandles,
   normalizeInterval
 } from '../../utils/chartLevels';
+import {
+  SMART_LABEL_LAYOUT_DEFAULTS,
+  SmartLabelLayoutEngine
+} from '../../utils/smartLabelLayout';
 import { timeframeLabel } from '../../constants/chartTimeframes';
 import {
   CHART_RANGE_PRESETS,
@@ -148,15 +153,40 @@ const LEVEL_COLORS = {
   liquidityLine: 'rgba(125, 211, 252, 0.95)'
 };
 
+const SMART_LABEL_DEFAULTS = {
+  minimumVerticalGap: SMART_LABEL_LAYOUT_DEFAULTS.minimumVerticalGap,
+  minimumHorizontalGap: SMART_LABEL_LAYOUT_DEFAULTS.minimumHorizontalGap,
+  labelWidth: SMART_LABEL_LAYOUT_DEFAULTS.labelWidth,
+  labelHeight: SMART_LABEL_LAYOUT_DEFAULTS.labelHeight,
+  animationMs: SMART_LABEL_LAYOUT_DEFAULTS.animationMs,
+  debounceMs: 80,
+  historicalLimit: 40
+};
+
+const smartLabelEngine = new SmartLabelLayoutEngine({
+  minimumVerticalGap: SMART_LABEL_DEFAULTS.minimumVerticalGap,
+  minimumHorizontalGap: SMART_LABEL_DEFAULTS.minimumHorizontalGap,
+  labelWidth: SMART_LABEL_DEFAULTS.labelWidth,
+  labelHeight: SMART_LABEL_DEFAULTS.labelHeight,
+  animationMs: SMART_LABEL_DEFAULTS.animationMs
+});
+
+
+function getLabelKindColor(kind) {
+  if (kind === 'buy' || kind === 'sell' || kind === 'entry') return LEVEL_COLORS.entry;
+  if (kind === 'sl' || kind === 'stopLoss') return LEVEL_COLORS.sl;
+  return LEVEL_COLORS[kind] || LEVEL_COLORS.entry;
+}
+
 function applyTradeLevels(series, overlay, priceLinesRef) {
   if (!series || !overlay) return;
 
   const lines = [
-    { price: overlay.entry, color: LEVEL_COLORS.entry, title: 'Kaching Entry', style: LineStyle.Solid },
-    { price: overlay.stopLoss, color: LEVEL_COLORS.sl, title: 'Kaching SL', style: LineStyle.Solid },
-    { price: overlay.tp1, color: LEVEL_COLORS.tp1, title: 'Kaching TP1', style: LineStyle.Solid },
-    { price: overlay.tp2, color: LEVEL_COLORS.tp2, title: 'Kaching TP2', style: LineStyle.Solid },
-    { price: overlay.tp3, color: LEVEL_COLORS.tp3, title: 'Kaching TP3', style: LineStyle.Solid }
+    { price: overlay.entry, color: LEVEL_COLORS.entry, title: '', style: LineStyle.Solid },
+    { price: overlay.stopLoss, color: LEVEL_COLORS.sl, title: '', style: LineStyle.Solid },
+    { price: overlay.tp1, color: LEVEL_COLORS.tp1, title: '', style: LineStyle.Solid },
+    { price: overlay.tp2, color: LEVEL_COLORS.tp2, title: '', style: LineStyle.Solid },
+    { price: overlay.tp3, color: LEVEL_COLORS.tp3, title: '', style: LineStyle.Solid }
   ];
 
   lines.forEach(line => {
@@ -281,9 +311,79 @@ function buildMarkers(candles, overlay) {
   return markers;
 }
 
+function resolveOverlayAnchorX(chart, overlay, candles, width) {
+  const timeScale = chart.timeScale();
+  const anchorTime = overlay?.anchorTime || candles[candles.length - 1]?.time;
+  const anchorCoordinate = anchorTime != null ? timeScale.timeToCoordinate(anchorTime) : null;
+  if (Number.isFinite(anchorCoordinate)) return anchorCoordinate;
+
+  const fallbackTime = candles[candles.length - 1]?.time;
+  const fallbackCoordinate = fallbackTime != null ? timeScale.timeToCoordinate(fallbackTime) : null;
+  if (Number.isFinite(fallbackCoordinate)) return fallbackCoordinate;
+  return width * 0.72;
+}
+
+function collectOverlayLabelItems({ series, overlays, chart, candles, symbol, width }) {
+  const items = [];
+
+  for (const overlay of overlays) {
+    if (!overlay?.labels?.length) continue;
+    const anchorX = resolveOverlayAnchorX(chart, overlay, candles, width);
+    // Skip overlays whose candle is far off-screen (keeps historical layout cheap).
+    if (anchorX < -80 || anchorX > width + 80) continue;
+
+    for (const label of overlay.labels) {
+      const anchorY = series.priceToCoordinate(label.price);
+      if (!Number.isFinite(anchorY)) continue;
+      items.push({
+        ...label,
+        anchorX,
+        anchorY,
+        width: SMART_LABEL_DEFAULTS.labelWidth,
+        height: SMART_LABEL_DEFAULTS.labelHeight,
+        color: getLabelKindColor(label.kind),
+        priceText: formatInstrumentPrice(label.price, symbol),
+        historical: Boolean(overlay.historical)
+      });
+    }
+  }
+
+  return items;
+}
+
+function buildSmartLabelLayer({ chart, series, overlays, candles, symbol, container }) {
+  if (!chart || !series || !container || !candles.length) return null;
+  if (!overlays?.length) return null;
+
+  const width = container.clientWidth || 0;
+  const height = container.clientHeight || 0;
+  if (width <= 0 || height <= 0) return null;
+
+  const items = collectOverlayLabelItems({
+    series,
+    overlays,
+    chart,
+    candles,
+    symbol,
+    width
+  });
+  if (!items.length) return null;
+
+  const placements = smartLabelEngine.layout(items, {
+    width,
+    height,
+    minY: SMART_LABEL_LAYOUT_DEFAULTS.paddingTop,
+    maxY: height - SMART_LABEL_LAYOUT_DEFAULTS.paddingBottom
+  });
+  const labels = smartLabelEngine.withLeaders(placements);
+
+  return { width, height, labels };
+}
+
 export default function KachingLightweightChart({
   candles = [],
   overlaySignal = null,
+  historicalOverlaySignals = [],
   symbol,
   interval = '1h',
   liveEnabled = true,
@@ -304,9 +404,12 @@ export default function KachingLightweightChart({
   const viewKeyRef = useRef('');
   const resetViewRef = useRef(() => {});
   const applyRangeRef = useRef(() => {});
+  const layoutTimerRef = useRef(null);
+  const layoutFrameRef = useRef(null);
   const [chartReady, setChartReady] = useState(false);
   const [activeRange, setActiveRange] = useState(null);
   const [ohlcLegend, setOhlcLegend] = useState(null);
+  const [smartLabelLayer, setSmartLabelLayer] = useState(null);
 
   symbolRef.current = symbol;
 
@@ -319,6 +422,49 @@ export default function KachingLightweightChart({
       }),
     [overlaySignal, candles, interval, enableSmcOverlays]
   );
+
+  const historicalOverlays = useMemo(() => {
+    const primaryKey = overlay?.signalKey;
+    const filtered = (historicalOverlaySignals || []).filter(signal => {
+      if (!signal) return false;
+      const key = String(signal._id || signal.id || signal.signalId || '');
+      if (primaryKey && key && key === primaryKey) return false;
+      return true;
+    });
+    return buildHistoricalOverlays(filtered, { limit: SMART_LABEL_DEFAULTS.historicalLimit });
+  }, [historicalOverlaySignals, overlay?.signalKey]);
+
+  const labelOverlays = useMemo(() => {
+    const list = [];
+    if (overlay) list.push(overlay);
+    for (const hist of historicalOverlays) {
+      if (overlay?.signalKey && hist.signalKey === overlay.signalKey) continue;
+      list.push(hist);
+    }
+    return list;
+  }, [overlay, historicalOverlays]);
+
+  const recomputeSmartLabels = useCallback(() => {
+    const nextLayer = buildSmartLabelLayer({
+      chart: chartRef.current,
+      series: seriesRef.current,
+      overlays: labelOverlays,
+      candles: candlesRef.current,
+      symbol,
+      container: containerRef.current
+    });
+    setSmartLabelLayer(nextLayer);
+  }, [labelOverlays, symbol]);
+
+  const scheduleSmartLabels = useCallback(() => {
+    if (layoutTimerRef.current) window.clearTimeout(layoutTimerRef.current);
+    if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
+    layoutTimerRef.current = window.setTimeout(() => {
+      layoutFrameRef.current = window.requestAnimationFrame(() => {
+        recomputeSmartLabels();
+      });
+    }, SMART_LABEL_DEFAULTS.debounceMs);
+  }, [recomputeSmartLabels]);
 
   useEffect(() => {
     if (!containerRef.current) return undefined;
@@ -364,6 +510,7 @@ export default function KachingLightweightChart({
     const handleDoubleClick = () => {
       setActiveRange(null);
       applyDefaultChartView(chart, candlesRef.current.length, interval);
+      scheduleSmartLabels();
     };
 
     const handleCrosshairMove = param => {
@@ -390,18 +537,34 @@ export default function KachingLightweightChart({
 
     chart.subscribeDblClick(handleDoubleClick);
     chart.subscribeCrosshairMove(handleCrosshairMove);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleSmartLabels);
+    chart.timeScale().subscribeVisibleTimeRangeChange(scheduleSmartLabels);
 
     const resizeObserver = new ResizeObserver(entries => {
       const entry = entries[0];
       if (!entry) return;
       chart.applyOptions({ width: entry.contentRect.width });
+      scheduleSmartLabels();
     });
     resizeObserver.observe(containerRef.current);
+
+    const container = containerRef.current;
+    const interactionEvents = ['wheel', 'pointerup', 'touchend', 'mouseleave'];
+    interactionEvents.forEach(eventName => {
+      container.addEventListener(eventName, scheduleSmartLabels, { passive: true });
+    });
 
     return () => {
       chart.unsubscribeDblClick(handleDoubleClick);
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(scheduleSmartLabels);
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(scheduleSmartLabels);
       resizeObserver.disconnect();
+      interactionEvents.forEach(eventName => {
+        container.removeEventListener(eventName, scheduleSmartLabels);
+      });
+      if (layoutTimerRef.current) window.clearTimeout(layoutTimerRef.current);
+      if (layoutFrameRef.current) window.cancelAnimationFrame(layoutFrameRef.current);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -410,8 +573,9 @@ export default function KachingLightweightChart({
       zoneSeriesRef.current = [];
       setChartReady(false);
       setOhlcLegend(null);
+      setSmartLabelLayer(null);
     };
-  }, [height, interval]);
+  }, [height, interval, scheduleSmartLabels]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -480,6 +644,7 @@ export default function KachingLightweightChart({
       series.setData([]);
       volumeSeries?.setData([]);
       setOhlcLegend(null);
+      setSmartLabelLayer(null);
       return;
     }
 
@@ -495,6 +660,7 @@ export default function KachingLightweightChart({
         candlesRef.current = normalized;
         applyLivePriceLine(normalized);
         syncLegend(normalized);
+        scheduleSmartLabels();
         return;
       }
 
@@ -509,6 +675,7 @@ export default function KachingLightweightChart({
         candlesRef.current = normalized;
         applyLivePriceLine(normalized);
         syncLegend(normalized);
+        scheduleSmartLabels();
         return;
       }
     }
@@ -604,7 +771,8 @@ export default function KachingLightweightChart({
     if (shouldResetView) {
       applyDefaultChartView(chart, normalized.length, interval);
     }
-  }, [candles, overlay, symbol, interval, chartReady]);
+    scheduleSmartLabels();
+  }, [candles, overlay, symbol, interval, chartReady, scheduleSmartLabels]);
 
   const handleResetView = () => resetViewRef.current();
 
@@ -663,6 +831,40 @@ export default function KachingLightweightChart({
           </div>
         )}
         <div ref={containerRef} className="kaching-chart-container" />
+        {smartLabelLayer && (
+          <div className="kaching-smart-label-layer" aria-hidden="true">
+            <svg className="kaching-smart-label-leaders" width={smartLabelLayer.width} height={smartLabelLayer.height}>
+              {smartLabelLayer.labels.map(label => (
+                <path
+                  key={`leader-${label.id}`}
+                  className="kaching-smart-label-leader"
+                  d={label.leaderPath}
+                  stroke={label.color}
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeDasharray="4 3"
+                  fill="none"
+                  opacity={label.historical ? 0.55 : 0.92}
+                />
+              ))}
+            </svg>
+            {smartLabelLayer.labels.map(label => (
+              <div
+                key={label.id}
+                className={`kaching-smart-label side-${label.side} kind-${label.kind}${label.historical ? ' is-historical' : ''}`}
+                style={{
+                  transform: `translate(${label.boxX}px, ${label.boxY}px)`,
+                  borderColor: label.color,
+                  color: label.color,
+                  transitionDuration: `${SMART_LABEL_DEFAULTS.animationMs}ms`
+                }}
+              >
+                <span className="smart-label-tag">{label.shortText}</span>
+                <span className="smart-label-price">{label.priceText}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       {overlay && (
         <div className="kaching-chart-legend">

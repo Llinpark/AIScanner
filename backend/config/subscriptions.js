@@ -16,8 +16,6 @@ const ALL_TIMEFRAMES = ['1M', '1W', '1D', '4h', '1h', '30m', '15m', '5m', '3m', 
 const TIERS = {
   basic: {
     name: 'Basic',
-    weeklyPrice: 1500,
-    weeklyPriceCents: 1650,
     monthlyPrice: 5000,
     priceCents: 5500,
     currency: 'KES',
@@ -38,8 +36,6 @@ const TIERS = {
   },
   professional: {
     name: 'Pro',
-    weeklyPrice: 4000,
-    weeklyPriceCents: 4627,
     monthlyPrice: 12000,
     priceCents: 13882,
     currency: 'KES',
@@ -65,10 +61,8 @@ const TIERS = {
   },
   premium: {
     name: 'Premium',
-    weeklyPrice: 13000,
-    weeklyPriceCents: 16250,
-    monthlyPrice: 50000,
-    priceCents: 62500,
+    monthlyPrice: 25000,
+    priceCents: 31250,
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
@@ -268,8 +262,16 @@ const PAYMENT_CONFIG = {
   }
 };
 
+const YEARLY_DISCOUNT = 0.95; // 5% cheaper than 12× monthly
+
 function normalizeBillingCycle(billingCycle) {
-  return billingCycle === 'weekly' ? 'weekly' : 'monthly';
+  // Weekly billing has been retired. New flows: monthly or yearly only.
+  // Legacy `weekly` (and unknown values) normalize to monthly.
+  return billingCycle === 'yearly' ? 'yearly' : 'monthly';
+}
+
+function applyYearlyDiscount(amount) {
+  return Math.round(Number(amount || 0) * 12 * YEARLY_DISCOUNT);
 }
 
 function getTierPricing(tierKey, billingCycle = 'monthly') {
@@ -279,16 +281,16 @@ function getTierPricing(tierKey, billingCycle = 'monthly') {
   }
 
   const cycle = normalizeBillingCycle(billingCycle);
-  if (cycle === 'weekly') {
+  if (cycle === 'yearly') {
     return {
-      price: tier.weeklyPrice,
-      priceCents: tier.weeklyPriceCents,
+      price: applyYearlyDiscount(tier.monthlyPrice),
+      priceCents: applyYearlyDiscount(tier.priceCents),
       currency: tier.currency,
       currencyPayPal: tier.currencyPayPal,
       currencyBinance: tier.currencyBinance,
-      periodDays: 7,
-      billingCycle: 'weekly',
-      periodLabel: 'week'
+      periodDays: 365,
+      billingCycle: 'yearly',
+      periodLabel: 'year'
     };
   }
 
@@ -307,8 +309,8 @@ function getTierPricing(tierKey, billingCycle = 'monthly') {
 function getPublicTiers() {
   const publicTiers = {};
   for (const [key, tier] of Object.entries(TIERS)) {
-    const weekly = getTierPricing(key, 'weekly');
     const monthly = getTierPricing(key, 'monthly');
+    const yearly = getTierPricing(key, 'yearly');
     publicTiers[key] = {
       name: tier.name,
       description: tier.description,
@@ -316,8 +318,8 @@ function getPublicTiers() {
       currency: tier.currency,
       currencyPayPal: tier.currencyPayPal,
       pricing: {
-        weekly,
-        monthly
+        monthly,
+        yearly
       },
       // Default display price (monthly) for backward compatibility
       price: monthly.price,
@@ -378,7 +380,9 @@ module.exports = {
   ALL_CURRENCY_PAIRS,
   ALL_TIMEFRAMES,
   PAYMENT_CONFIG,
+  YEARLY_DISCOUNT,
   normalizeBillingCycle,
+  applyYearlyDiscount,
   getTierPricing,
   getPublicTiers,
   getPublicPaymentMethods

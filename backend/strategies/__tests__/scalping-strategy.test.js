@@ -378,7 +378,12 @@ describe('RiskManager + TakeProfitEngine', () => {
   it('places sweep stop below sweep low and RR TPs', () => {
     const config = resolveScalpingConfig({
       stop: { model: 'sweep', bufferAtrRatio: 0.05 },
-      takeProfit: { model: 'rr', rrMultiples: [2, 3, 4], manualRr: [1.5, 2.5, 4] }
+      takeProfit: {
+        model: 'rr',
+        enableDynamicTp: false,
+        rrMultiples: [2, 3, 4],
+        manualRr: [1.5, 2.5, 4]
+      }
     });
     const risk = new RiskManager(config);
     const candles = [];
@@ -403,6 +408,349 @@ describe('RiskManager + TakeProfitEngine', () => {
     assert.ok(tp.take_profit_1 > 1.105);
     assert.ok(tp.take_profit_3 > tp.take_profit_2);
     assert.equal(tp.rr, 4);
+  });
+
+  it('smart scoring ranks by weight then nearer distance', () => {
+    const atrVal = 0.01; // wide ATR so pool distances stay under caps
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 100,
+        allowRrFallback: true,
+        minScore: 0,
+        scoreProximity: 5,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          internal_liquidity: 45,
+          equal_high_low: 40,
+          swing_high_low: 30,
+          pdh_pdl: 20,
+          atr_projection: 0,
+          rr_fallback: 0
+        }
+      }
+    });
+    const engine = new TakeProfitEngine(config);
+    const candles = Array.from({ length: 30 }, (_, i) =>
+      candle(i, 1.1, 1.1005, 1.0995, 1.1)
+    );
+    // Example BUY: Internal 24p (45), EQH 38p (40), Swing 52p (30), PDH 61p (20)
+    const pools = [
+      { type: 'london_high', price: 1.105 + 0.0024, side: 'buy_side' },
+      { type: 'equal_highs', price: 1.105 + 0.0038, side: 'buy_side' },
+      { type: 'previous_swing_high', price: 1.105 + 0.0052, side: 'buy_side' },
+      { type: 'pdh', price: 1.105 + 0.0061, side: 'buy_side' }
+    ];
+    const tps = engine.compute({
+      direction: 'long',
+      entry: 1.105,
+      risk: 0.0005,
+      candles,
+      pools,
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(Math.abs(tps.take_profit_1 - (1.105 + 0.0024)) < 1e-9);
+    assert.ok(Math.abs(tps.take_profit_2 - (1.105 + 0.0038)) < 1e-9);
+    assert.ok(Math.abs(tps.take_profit_3 - (1.105 + 0.0052)) < 1e-9);
+    assert.equal(tps.sources[0].source, 'internal_liquidity');
+    assert.equal(tps.sources[1].source, 'equal_high_low');
+    assert.equal(tps.sources[2].source, 'swing_high_low');
+  });
+
+  it('rejects far PDH (145p) for scalping max distance 30 and picks nearby internal/EQH', () => {
+    // BUY: Internal 22p, EQH 29p, Swing 46p, PDH 145p
+    // Max distance 30 → Swing + PDH rejected; TP1 Internal, TP2 EQH, TP3 RR fallback
+    const atrVal = 0.01;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 30,
+        allowRrFallback: true,
+        minScore: 0,
+        scoreProximity: 5,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          internal_liquidity: 45,
+          equal_high_low: 40,
+          swing_high_low: 30,
+          pdh_pdl: 20,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const entry = 1.105;
+    const pools = [
+      { type: 'london_high', price: entry + 0.0022, side: 'buy_side' }, // 22 pips
+      { type: 'equal_highs', price: entry + 0.0029, side: 'buy_side' }, // 29 pips
+      { type: 'previous_swing_high', price: entry + 0.0046, side: 'buy_side' }, // 46 pips
+      { type: 'pdh', price: entry + 0.0145, side: 'buy_side' } // 145 pips
+    ];
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry,
+      risk: 0.0005,
+      candles: Array.from({ length: 30 }, (_, i) => candle(i, 1.1, 1.1005, 1.0995, 1.1)),
+      pools,
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(Math.abs(tps.take_profit_1 - (entry + 0.0022)) < 1e-9);
+    assert.ok(Math.abs(tps.take_profit_2 - (entry + 0.0029)) < 1e-9);
+    assert.equal(tps.sources[0].source, 'internal_liquidity');
+    assert.equal(tps.sources[1].source, 'equal_high_low');
+    // Swing 46p and PDH 145p must not be selected
+    assert.ok(tps.sources.every(s => s.source !== 'pdh_pdl'));
+    assert.ok(tps.sources.every(s => s.source !== 'swing_high_low'));
+    // TP3 fills via RR (only two eligible liquidity targets within 30 pips)
+    assert.equal(tps.sources[2].source, 'rr_fallback');
+    assert.ok(tps.take_profit_3 > tps.take_profit_2);
+    // Hard pip ceiling: no TP beyond 30 pips
+    const pip = 0.0001;
+    assert.ok(Math.abs(tps.take_profit_1 - entry) <= 30 * pip + 1e-12);
+    assert.ok(Math.abs(tps.take_profit_2 - entry) <= 30 * pip + 1e-12);
+    assert.ok(Math.abs(tps.take_profit_3 - entry) <= 30 * pip + 1e-12);
+  });
+
+  it('rejects 180-pip PDH when only distant liquidity exists and uses RR fallback', () => {
+    const atrVal = 0.002;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 30,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          pdh_pdl: 20,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const entry = 1.105;
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry,
+      risk: 0.0005,
+      candles: Array.from({ length: 20 }, (_, i) => candle(i, 1.1, 1.101, 1.099, 1.1)),
+      pools: [{ type: 'pdh', price: entry + 0.018, side: 'buy_side' }], // 180 pips
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(tps.sources.every(s => s.source !== 'pdh_pdl'));
+    assert.ok(tps.sources.every(s => s.source === 'rr_fallback'));
+    assert.ok(Math.abs(tps.take_profit_1 - entry) <= 30 * 0.0001 + 1e-12);
+  });
+
+  it('filters targets beyond max ATR and fills from remaining ranked set', () => {
+    const atrVal = 0.001;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 100,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          equal_high_low: 40,
+          pdh_pdl: 20,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry: 1.105,
+      risk: 0.0005,
+      candles: Array.from({ length: 20 }, (_, i) => candle(i, 1.1, 1.101, 1.099, 1.1)),
+      pools: [
+        { type: 'equal_highs', price: 1.1055, side: 'buy_side' },
+        { type: 'pdh', price: 1.15, side: 'buy_side' }
+      ],
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(tps.take_profit_1 <= 1.105 + atrVal * 0.7 + 1e-12);
+    assert.ok(tps.take_profit_3 <= 1.105 + atrVal * 2.0 + 1e-12);
+  });
+
+  it('dynamic_liquidity model aliases smart scoring', () => {
+    const atrVal = 0.001;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'dynamic_liquidity',
+        enableDynamicTp: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxTpDistancePips: 100,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3]
+      }
+    });
+    const engine = new TakeProfitEngine(config);
+    const candles = Array.from({ length: 30 }, (_, i) =>
+      candle(i, 1.1, 1.1005, 1.0995, 1.1)
+    );
+    const pools = [
+      { type: 'equal_highs', price: 1.1055, side: 'buy_side' },
+      { type: 'pdh', price: 1.12, side: 'buy_side' },
+      { type: 'london_high', price: 1.1058, side: 'buy_side' }
+    ];
+    const tps = engine.compute({
+      direction: 'long',
+      entry: 1.105,
+      risk: 0.0005,
+      candles,
+      pools,
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(tps.take_profit_1 > 1.105);
+    assert.ok(tps.take_profit_1 <= 1.105 + atrVal * 0.7 + 1e-12);
+    assert.ok(tps.take_profit_2 <= 1.105 + atrVal * 1.3 + 1e-12);
+    assert.ok(tps.take_profit_3 <= 1.105 + atrVal * 2.0 + 1e-12);
+    assert.ok(tps.take_profit_3 >= tps.take_profit_2);
+  });
+
+  it('rejects distant liquidity and uses RR fallback instead of clamping PDH', () => {
+    const atrVal = 0.001;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 30,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          pdh_pdl: 20,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry: 1.105,
+      risk: 0.0005,
+      candles: Array.from({ length: 20 }, (_, i) => candle(i, 1.1, 1.101, 1.099, 1.1)),
+      pools: [{ type: 'pdh', price: 1.15, side: 'buy_side' }],
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.ok(tps.sources.every(s => s.source !== 'pdh_pdl'));
+    assert.ok(tps.sources.every(s => s.source === 'rr_fallback'));
+    assert.ok(tps.take_profit_1 <= 1.105 + atrVal * 0.7 + 1e-12);
+  });
+
+  it('defaults maxTpDistancePips to 30 and atr caps to 0.7/1.3/2.0 for scalping', () => {
+    const cfg = resolveScalpingConfig();
+    assert.equal(cfg.takeProfit.maxTpDistancePips, 30);
+    assert.deepEqual(cfg.takeProfit.atrCaps, [0.7, 1.3, 2.0]);
+    assert.equal(cfg.takeProfit.maxAtrMultiplier, 2.0);
+    assert.deepEqual(cfg.takeProfit.rrMultiples, [1.5, 2, 3]);
+    assert.equal(cfg.takeProfit.profileId, 'scalping');
+    assert.ok(cfg.takeProfit.deferredLiquidityCategories.includes('pwh_pwl'));
+    assert.ok(cfg.takeProfit.deferredLiquidityCategories.includes('pmh_pml'));
+  });
+
+  it('scalp profile rejects far weekly/monthly when nearby liquidity exists', () => {
+    const atrVal = 0.01;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 30,
+        allowRrFallback: true,
+        deferredLiquidityCategories: ['pwh_pwl', 'pmh_pml'],
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          internal_liquidity: 50,
+          equal_high_low: 45,
+          pwh_pwl: 80,
+          pmh_pml: 80,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const entry = 1.105;
+    // Nearby internal/EQH within 30p; PWH/PMH also within 30p but deferred
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry,
+      risk: 0.0005,
+      candles: Array.from({ length: 30 }, (_, i) => candle(i, 1.1, 1.1005, 1.0995, 1.1)),
+      pools: [
+        { type: 'london_high', price: entry + 0.0018, side: 'buy_side' }, // 18p
+        { type: 'equal_highs', price: entry + 0.0025, side: 'buy_side' }, // 25p
+        { type: 'pwh', price: entry + 0.0028, side: 'buy_side' }, // 28p — deferred
+        { type: 'pmh', price: entry + 0.0029, side: 'buy_side' } // 29p — deferred
+      ],
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(tps.sources.every(s => s.source !== 'pwh_pwl'));
+    assert.ok(tps.sources.every(s => s.source !== 'pmh_pml'));
+    assert.equal(tps.sources[0].source, 'internal_liquidity');
+    assert.equal(tps.sources[1].source, 'equal_high_low');
+  });
+
+  it('scalp profile allows weekly/monthly only when no nearby targets remain', () => {
+    const atrVal = 0.01;
+    const config = resolveScalpingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [0.7, 1.3, 2.0],
+        maxAtrMultiplier: 2.0,
+        maxTpDistancePips: 30,
+        allowRrFallback: true,
+        deferredLiquidityCategories: ['pwh_pwl', 'pmh_pml'],
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          pwh_pwl: 40,
+          pmh_pml: 30,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const entry = 1.105;
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry,
+      risk: 0.0005,
+      candles: Array.from({ length: 20 }, (_, i) => candle(i, 1.1, 1.1005, 1.0995, 1.1)),
+      pools: [
+        { type: 'pwh', price: entry + 0.002, side: 'buy_side' },
+        { type: 'pml', price: entry + 0.0025, side: 'buy_side' }
+      ],
+      atrValue: atrVal,
+      symbol: 'EURUSD'
+    });
+    assert.ok(tps.sources.some(s => s.source === 'pwh_pwl' || s.source === 'pmh_pml'));
   });
 });
 

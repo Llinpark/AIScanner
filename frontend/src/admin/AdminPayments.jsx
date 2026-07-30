@@ -11,6 +11,19 @@ function formatMoney(amount, currency) {
   return `${Number(amount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ${currency || ''}`.trim();
 }
 
+function formatBillingCycle(cycle) {
+  if (cycle === 'yearly') return 'yearly';
+  if (cycle === 'weekly') return 'weekly';
+  if (cycle === 'monthly') return 'monthly';
+  return cycle || 'monthly';
+}
+
+function billingCyclePillTone(cycle) {
+  if (cycle === 'yearly') return 'active';
+  if (cycle === 'weekly') return 'pending';
+  return 'inactive';
+}
+
 const SUMMARY_STATUSES = [
   { key: 'pending', label: 'Pending', tone: 'warning' },
   { key: 'completed', label: 'Completed', tone: 'success' },
@@ -157,6 +170,7 @@ export default function AdminPayments() {
                   <tr>
                     <th>User</th>
                     <th>Tier</th>
+                    <th>Billing</th>
                     <th>Provider</th>
                     <th>Amount</th>
                     <th>Status</th>
@@ -167,26 +181,34 @@ export default function AdminPayments() {
                 <tbody>
                   {payments.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="admin-table-empty">
+                      <td colSpan={8} className="admin-table-empty">
                         No payments found.
                       </td>
                     </tr>
                   ) : (
-                    payments.map(payment => (
-                      <tr key={payment.id}>
-                        <td data-label="User">{payment.userEmail || payment.userId || '—'}</td>
-                        <td data-label="Tier">{payment.tier}</td>
-                        <td data-label="Provider">{payment.provider}</td>
-                        <td data-label="Amount">{formatMoney(payment.amount, payment.currency)}</td>
-                        <td data-label="Status">
-                          <span className={`admin-pill status-${payment.status === 'completed' ? 'active' : payment.status === 'pending' ? 'pending' : 'inactive'}`}>
-                            {payment.status}
-                          </span>
-                        </td>
-                        <td data-label="Reference">{payment.providerReference || '—'}</td>
-                        <td data-label="Created">{formatDate(payment.createdAt)}</td>
-                      </tr>
-                    ))
+                    payments.map(payment => {
+                      const billingCycle = formatBillingCycle(payment.billingCycle);
+                      return (
+                        <tr key={payment.id}>
+                          <td data-label="User">{payment.userEmail || payment.userId || '—'}</td>
+                          <td data-label="Tier">{payment.tier}</td>
+                          <td data-label="Billing">
+                            <span className={`admin-pill status-${billingCyclePillTone(billingCycle)}`}>
+                              {billingCycle}
+                            </span>
+                          </td>
+                          <td data-label="Provider">{payment.provider}</td>
+                          <td data-label="Amount">{formatMoney(payment.amount, payment.currency)}</td>
+                          <td data-label="Status">
+                            <span className={`admin-pill status-${payment.status === 'completed' ? 'active' : payment.status === 'pending' ? 'pending' : 'inactive'}`}>
+                              {payment.status}
+                            </span>
+                          </td>
+                          <td data-label="Reference">{payment.providerReference || '—'}</td>
+                          <td data-label="Created">{formatDate(payment.createdAt)}</td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

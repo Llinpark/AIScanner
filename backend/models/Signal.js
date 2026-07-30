@@ -46,6 +46,9 @@ const SignalSchema = new mongoose.Schema({
   // Distribution metadata (TradingView webhook is the sole production signal source).
   signalSource: { type: String, default: 'tradingview' },
   strategyName: { type: String },
+  /** Additive Strategy Engine metadata (optional; does not replace pattern/strategyName). */
+  strategyId: { type: String },
+  strategyVersion: { type: Number },
   timeframe: { type: String },
   deliveryStatus: {
     type: String,

@@ -17,7 +17,7 @@ function getTierPrice(tier, billingCycle) {
   return {
     price: tier?.price || 0,
     priceCents: tier?.priceCents || 0,
-    periodLabel: billingCycle === 'weekly' ? 'week' : 'month'
+    periodLabel: billingCycle === 'yearly' ? 'year' : 'month'
   };
 }
 
@@ -30,8 +30,8 @@ export default function Pricing({
   const { isAuthenticated, user, subscription } = useAuth();
   const [tiers, setTiers] = useState({});
   const [paymentMethods, setPaymentMethods] = useState({});
-  const [billingCycle, setBillingCycle] = useState('monthly');
   const [loading, setLoading] = useState(true);
+  const [billingCycle, setBillingCycle] = useState('monthly');
   const [selectedTier, setSelectedTier] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
 
@@ -69,7 +69,7 @@ export default function Pricing({
 
   const currentTier = subscription?.tier || 'basic';
   const hasAccess = isAuthenticated && isActiveSubscription(subscription);
-  const periodLabel = billingCycle === 'weekly' ? 'week' : 'month';
+  const periodSuffix = billingCycle === 'yearly' ? '/year' : '/month';
 
   return (
     <div className="pricing-container">
@@ -92,23 +92,24 @@ export default function Pricing({
             <>Browse plans below. Login or register when you are ready to subscribe.</>
           )}
         </p>
-
-        <div className="billing-toggle" role="group" aria-label="Billing cycle">
-          <button
-            type="button"
-            className={`billing-toggle-btn ${billingCycle === 'weekly' ? 'active' : ''}`}
-            onClick={() => setBillingCycle('weekly')}
-          >
-            Weekly
-          </button>
-          <button
-            type="button"
-            className={`billing-toggle-btn ${billingCycle === 'monthly' ? 'active' : ''}`}
-            onClick={() => setBillingCycle('monthly')}
-          >
-            Monthly
-          </button>
-        </div>
+        {!showCheckout && (
+          <div className="billing-toggle" role="group" aria-label="Billing cycle">
+            <button
+              type="button"
+              className={`billing-toggle-btn ${billingCycle === 'monthly' ? 'active' : ''}`}
+              onClick={() => setBillingCycle('monthly')}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              className={`billing-toggle-btn ${billingCycle === 'yearly' ? 'active' : ''}`}
+              onClick={() => setBillingCycle('yearly')}
+            >
+              Yearly <span className="billing-save-badge">Save 5%</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {!showCheckout ? (
@@ -129,8 +130,13 @@ export default function Pricing({
                     <p className="description">{tier.description}</p>
                     <div className="price">
                       <span className="amount">KES {pricing.price.toLocaleString()}</span>
-                      <span className="period">/{periodLabel}</span>
+                      <span className="period">{periodSuffix}</span>
                     </div>
+                    {billingCycle === 'yearly' && tier.pricing?.monthly?.price ? (
+                      <p className="tier-meta">
+                        vs KES {(tier.pricing.monthly.price * 12).toLocaleString()}/year billed monthly
+                      </p>
+                    ) : null}
                     {limits.currencyPairs ? (
                       <p className="tier-meta">
                         {limits.currencyPairs.length} chart markets

@@ -2304,6 +2304,13 @@ h1, h2, h3, h4, h5, h6,
   color: var(--contrast-color);
 }
 
+.billing-save-badge {
+  margin-left: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  opacity: 0.92;
+}
+
 .username-input {
   margin-bottom: 30px;
   text-align: center;
@@ -3259,6 +3266,43 @@ h1, h2, h3, h4, h5, h6,
   border-radius: 12px;
   border: 2px solid #fcd34d;
   margin-top: 30px;
+}
+
+.tv-username-link {
+  margin: 0 0 20px;
+  padding: 14px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.tv-username-link label {
+  display: block;
+  margin-bottom: 8px;
+  color: #e2e8f0;
+}
+
+.tv-username-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.tv-username-link-row input {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(2, 6, 23, 0.55);
+  color: #e2e8f0;
+  font-size: 0.95rem;
+}
+
+.tv-username-link-row input:focus {
+  outline: 1px solid rgba(56, 189, 248, 0.55);
+  border-color: rgba(56, 189, 248, 0.55);
 }
 
 .pine-script-section h3 {
@@ -4568,6 +4612,57 @@ h1, h2, h3, h4, h5, h6,
   min-height: 320px;
   background: #131722;
   cursor: crosshair;
+}
+
+.kaching-smart-label-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.kaching-smart-label-leaders {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.kaching-smart-label {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 100px;
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: rgba(19, 23, 34, 0.92);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transition: transform 200ms ease, border-color 200ms ease, color 200ms ease, opacity 200ms ease;
+  will-change: transform;
+}
+
+.kaching-smart-label.is-historical {
+  opacity: 0.72;
+}
+
+.kaching-smart-label-leader {
+  transition: opacity 200ms ease;
+}
+
+.kaching-smart-label .smart-label-tag {
+  color: #f0f3fa;
+  font-weight: 700;
+}
+
+.kaching-smart-label .smart-label-price {
+  color: inherit;
+  opacity: 0.95;
 }
 
 .kaching-chart-ohlc {
@@ -6093,6 +6188,23 @@ h1, h2, h3, h4, h5, h6,
   border-color: var(--accent-color);
   background: var(--accent-soft);
   color: var(--heading-color);
+}
+
+.admin-strategy-chip.is-stub {
+  opacity: 0.72;
+  cursor: default;
+}
+
+.admin-strategy-tab.is-stub {
+  opacity: 0.75;
+  font-weight: 500;
+}
+
+.admin-strategy-panel-stub {
+  border: 1px dashed var(--border-color);
+  border-radius: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.4);
 }
 
 .admin-strategy-panel {

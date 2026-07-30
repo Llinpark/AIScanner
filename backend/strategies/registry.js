@@ -1,6 +1,6 @@
 /**
- * StrategyRegistry — DI container for pluggable strategies.
- * Registers: Sweep+FVG Day Trading, Sweep+FVG Scalping.
+ * StrategyRegistry — DI container for pluggable IStrategy runners.
+ * Instances are created from Strategy Profiles (engine); no hardcoded strategy list.
  */
 
 const { assertStrategy } = require('./interfaces/IStrategy');
@@ -81,13 +81,48 @@ class StrategyRegistry {
   }
 }
 
+/**
+ * Build IStrategy registry from Strategy Profile catalog.
+ * Config options keep BC keys: scalpingConfig / daytradingConfig.
+ * @param {Object} [options]
+ */
 function createDefaultRegistry(options = {}) {
-  const { DayTradingStrategy } = require('./DayTradingStrategy');
-  const { ScalpingStrategy } = require('./ScalpingStrategy');
+  const {
+    bootstrapStrategyProfiles,
+    getProfileRegistry,
+    bindScannerEngineToStrategyRegistry,
+    resetScannerEngine
+  } = require('./engine');
+
+  bootstrapStrategyProfiles(undefined, { force: true, includeStubs: true });
+  const profiles = getProfileRegistry().listExecutable();
 
   const registry = new StrategyRegistry();
-  registry.register(new DayTradingStrategy({ config: options.daytradingConfig }));
-  registry.register(new ScalpingStrategy({ config: options.scalpingConfig }));
+  for (const profile of profiles) {
+    // BC: options.scalpingConfig / options.daytradingConfig
+    const configKey = `${profile.key}Config`;
+    const config =
+      options[configKey] !== undefined
+        ? options[configKey]
+        : options.configs?.[profile.key] !== undefined
+          ? options.configs[profile.key]
+          : typeof profile.resolveConfig === 'function'
+            ? profile.resolveConfig(options.overrides?.[profile.key] || {})
+            : {};
+
+    // Respect runtime enabled flag from resolved config
+    const instance = profile.createInstance(config);
+    registry.register(instance);
+  }
+
+  // Keep ScannerEngine bound to the fresh IStrategy registry
+  try {
+    resetScannerEngine();
+    bindScannerEngineToStrategyRegistry(registry);
+  } catch (_) {
+    /* engine optional at boot */
+  }
+
   return registry;
 }
 
@@ -97,7 +132,6 @@ function getDefaultRegistry() {
   if (!_defaultRegistry) {
     let options = {};
     try {
-      // Prefer live admin/runtime overrides when available
       options = require('../utils/strategyRuntimeConfig').getRegistryOptions();
     } catch (_) {
       options = {};
@@ -109,10 +143,24 @@ function getDefaultRegistry() {
 
 function resetDefaultRegistry() {
   _defaultRegistry = null;
+  try {
+    require('./engine').resetScannerEngine();
+  } catch (_) {
+    /* ignore */
+  }
 }
 
 function setDefaultRegistry(registry) {
   _defaultRegistry = registry || null;
+  try {
+    if (_defaultRegistry) {
+      require('./engine').bindScannerEngineToStrategyRegistry(_defaultRegistry);
+    } else {
+      require('./engine').resetScannerEngine();
+    }
+  } catch (_) {
+    /* ignore */
+  }
   return _defaultRegistry;
 }
 

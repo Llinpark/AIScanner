@@ -75,12 +75,12 @@ const CLEAN_SUBSCRIPTION = {
   );
 
   // Re-affirm roles (do not wipe admin/super_admin).
-  await UserConfig.updateOne(
-    { email: 'collinspark1985@gmail.com' },
+  await UserConfig.updateMany(
+    { email: { $in: ['collinspark1985@gmail.com', 'barasajohn1985@gmail.com'] } },
     { $set: { role: 'super_admin' } }
   );
   await UserConfig.updateMany(
-    { email: { $in: ['barasajohn1985@gmail.com', 'lilianmonari15@gmail.com'] } },
+    { email: { $in: ['lilianmonari15@gmail.com'] } },
     { $set: { role: 'admin' } }
   );
 

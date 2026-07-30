@@ -6,7 +6,7 @@ const ReferralCommissionSchema = new mongoose.Schema({
   paymentTransactionId: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentTransaction', required: true, unique: true },
   commissionType: { type: String, enum: ['first_subscription', 'renewal'], required: true },
   tier: { type: String, enum: ['basic', 'professional', 'premium'], required: true },
-  billingCycle: { type: String, enum: ['weekly', 'monthly'], default: 'monthly' },
+  billingCycle: { type: String, enum: ['weekly', 'monthly', 'yearly'], default: 'monthly' },
   planAmount: { type: Number, required: true },
   currency: { type: String, required: true },
   commissionRate: { type: Number, required: true },

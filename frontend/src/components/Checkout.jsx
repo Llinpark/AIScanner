@@ -7,7 +7,20 @@ const PHONE_PROVIDERS = new Set(['mpesa', 'sasapay']);
 const LIVE_PROVIDERS = ['paystack', 'paypal'];
 const DEV_EXTRA_PROVIDERS = ['mpesa', 'sasapay', 'binance', 'mock'];
 
-export default function Checkout({ tier, tierData, billingCycle = 'monthly', paymentMethods = {}, onBack, onSubscriptionUpdated, onNavigateDashboard }) {
+function normalizeCheckoutBillingCycle(cycle) {
+  return cycle === 'yearly' ? 'yearly' : 'monthly';
+}
+
+export default function Checkout({
+  tier,
+  tierData,
+  billingCycle: billingCycleProp = 'monthly',
+  paymentMethods = {},
+  onBack,
+  onSubscriptionUpdated,
+  onNavigateDashboard
+}) {
+  const billingCycle = normalizeCheckoutBillingCycle(billingCycleProp);
   const { user, updateUser } = useAuth();
   const mockPaymentsAllowed = Boolean(paymentMethods?.mockPaymentsAllowed);
   const availableProviders = useMemo(() => {
@@ -49,9 +62,9 @@ export default function Checkout({ tier, tierData, billingCycle = 'monthly', pay
   const pricing = tierData?.pricing?.[billingCycle] || tierData?.pricing?.monthly || {
     price: tierData?.price || 0,
     priceCents: tierData?.priceCents || 0,
-    periodLabel: billingCycle === 'weekly' ? 'week' : 'month'
+    periodLabel: billingCycle === 'yearly' ? 'year' : 'month'
   };
-  const periodLabel = pricing.periodLabel || (billingCycle === 'weekly' ? 'week' : 'month');
+  const periodLabel = pricing.periodLabel || (billingCycle === 'yearly' ? 'year' : 'month');
   const binanceAmount = pricing.priceCents ? (pricing.priceCents / 100).toFixed(2) : '0.00';
   const binanceMerchantId = paymentMethods?.binance?.merchantId;
 

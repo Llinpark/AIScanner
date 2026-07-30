@@ -1,0 +1,139 @@
+// ===== TRADE DRAWING ENGINE (shared) =====
+// Smart label placement keeps price anchors exact while shifting label boxes in bar/tick space.
+var array<line> tradeLevelLines = array.new_line()
+var array<label> tradeLevelLabels = array.new_label()
+var array<line> tradeLeaderLines = array.new_line()
+var label lbBadge = na
+var box fvgZone = na
+var float activeSl = na
+var float activeTp3 = na
+var string activeDirection = na
+var bool tradeActive = false
+
+smartLabelGapPrice() =>
+    math.max(syminfo.mintick * smartLabelMinVerticalTicks, syminfo.mintick)
+
+smartLabelOffsetBars(int step) =>
+    math.max(minHorizontalGapBars * step, 1)
+
+clearPreviousTrade() =>
+    if array.size(tradeLevelLines) > 0
+        for i = 0 to array.size(tradeLevelLines) - 1
+            line.delete(array.get(tradeLevelLines, i))
+    if array.size(tradeLeaderLines) > 0
+        for i = 0 to array.size(tradeLeaderLines) - 1
+            line.delete(array.get(tradeLeaderLines, i))
+    if array.size(tradeLevelLabels) > 0
+        for i = 0 to array.size(tradeLevelLabels) - 1
+            label.delete(array.get(tradeLevelLabels, i))
+    array.clear(tradeLevelLines)
+    array.clear(tradeLeaderLines)
+    array.clear(tradeLevelLabels)
+    if not na(lbBadge)
+        label.delete(lbBadge)
+    if not na(fvgZone)
+        box.delete(fvgZone)
+    lbBadge := na
+    fvgZone := na
+
+drawSmartLevel(int x1, int x2, float anchorPrice, float labelPrice, string tag, color lineCol, color bgCol, color txtCol, bool placeRight, int stackStep) =>
+    levelLine = line.new(x1, anchorPrice, x2, anchorPrice, xloc=xloc.bar_index, extend=extend.none, color=lineCol, width=2, style=line.style_solid)
+    labelAnchorX = placeRight ? x2 + smartLabelOffsetBars(stackStep + 1) : x1 - smartLabelOffsetBars(stackStep + 1)
+    labelStyle = placeRight ? label.style_label_left : label.style_label_right
+    leaderStartX = placeRight ? x2 : x1
+    leaderLine = line.new(leaderStartX, anchorPrice, labelAnchorX, labelPrice, xloc=xloc.bar_index, extend=extend.none, color=color.new(lineCol, 20), width=1, style=line.style_dotted)
+    levelLabel = label.new(labelAnchorX, labelPrice, tag + "  " + formatPrice(anchorPrice), xloc=xloc.bar_index, yloc=yloc.price, style=labelStyle, color=bgCol, textcolor=txtCol, size=size.normal)
+    array.push(tradeLevelLines, levelLine)
+    array.push(tradeLeaderLines, leaderLine)
+    array.push(tradeLevelLabels, levelLabel)
+
+resolveLabelLayout(array<float> anchors) =>
+    count = array.size(anchors)
+    layoutY = array.new_float(count, na)
+    layoutSide = array.new_int(count, 1)
+    layoutStep = array.new_int(count, 0)
+    gapPrice = smartLabelGapPrice()
+    for idx = 0 to count - 1
+        anchor = array.get(anchors, idx)
+        y = anchor
+        rightConflicts = 0
+        if idx > 0
+            for prev = 0 to idx - 1
+                prevY = array.get(layoutY, prev)
+                if math.abs(y - prevY) < gapPrice
+                    moveUp = y >= prevY
+                    if not moveUp and anchor == prevY
+                        moveUp := true
+                    y := prevY + (moveUp ? gapPrice : -gapPrice)
+                    rightConflicts += 1
+        spillLeft = rightConflicts >= 2 and idx >= 2
+        if spillLeft
+            y := anchor
+            if idx > 0
+                for prev = 0 to idx - 1
+                    prevY = array.get(layoutY, prev)
+                    prevSide = array.get(layoutSide, prev)
+                    if prevSide == -1 and math.abs(y - prevY) < gapPrice
+                        moveUpLeft = y >= prevY
+                        if not moveUpLeft and anchor == prevY
+                            moveUpLeft := true
+                        y := prevY + (moveUpLeft ? gapPrice : -gapPrice)
+            array.set(layoutSide, idx, -1)
+        array.set(layoutY, idx, y)
+        array.set(layoutStep, idx, rightConflicts)
+    [layoutY, layoutSide, layoutStep]
+
+drawTradeSet(float entryPrice, float slPrice, float tp1Price, float tp2Price, float tp3Price, bool isLong) =>
+    x1 = bar_index
+    x2 = bar_index + levelExtendBars
+    anchorPrices = array.from(entryPrice, slPrice, tp1Price, tp2Price, tp3Price)
+    tags = array.from(isLong ? "Buy" : "Sell", "SL", "TP1", "TP2", "TP3")
+    lineColors = array.from(isLong ? colBuy : colSell, isLong ? colSlBuy : colSlSell, colTpNear, colTpNear, colTpFar)
+    bgColors = array.from(isLong ? colBuy : colSell, isLong ? colSlBuy : colSlSell, colTpNear, colTpNear, colTpFar)
+    textColors = array.from(color.white, color.white, color.white, color.white, color.white)
+    [layoutY, layoutSide, layoutStep] = resolveLabelLayout(anchorPrices)
+    for idx = 0 to array.size(anchorPrices) - 1
+        drawSmartLevel(
+             x1,
+             x2,
+             array.get(anchorPrices, idx),
+             array.get(layoutY, idx),
+             array.get(tags, idx),
+             array.get(lineColors, idx),
+             array.get(bgColors, idx),
+             array.get(textColors, idx),
+             array.get(layoutSide, idx) == 1,
+             array.get(layoutStep, idx)
+         )
+
+drawBuySignal(float ee, float ssl, float t1, float t2, float t3) =>
+    clearPreviousTrade()
+    lbBadge := label.new(bar_index, low, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.normal)
+    if SHOW_FVG_ZONE
+        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, bgcolor=colLongZoneBg)
+    if SHOW_TRADE_LINES
+        drawTradeSet(ee, ssl, t1, t2, t3, true)
+        activeDirection := "long"
+        activeSl := ssl
+        activeTp3 := t3
+        tradeActive := true
+
+drawSellSignal(float ee, float ssl, float t1, float t2, float t3) =>
+    clearPreviousTrade()
+    lbBadge := label.new(bar_index, high, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.normal)
+    if SHOW_FVG_ZONE
+        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, bgcolor=colShortZoneBg)
+    if SHOW_TRADE_LINES
+        drawTradeSet(ee, ssl, t1, t2, t3, false)
+        activeDirection := "short"
+        activeSl := ssl
+        activeTp3 := t3
+        tradeActive := true
+
+if tradeActive and barstate.isconfirmed
+    longTrade = activeDirection == "long"
+    hitSl = longTrade ? low <= activeSl : high >= activeSl
+    hitTp3 = longTrade ? high >= activeTp3 : low <= activeTp3
+    if hitSl or hitTp3
+        clearPreviousTrade()
+        tradeActive := false

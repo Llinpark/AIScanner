@@ -215,9 +215,22 @@ export function buildChartOverlay(signal, candles = [], interval = '1h', options
 
   const intervalSeconds = intervalToSeconds(interval);
   const zones = buildChartZones(signal, candles, intervalSeconds, options);
+  const direction = String(signal.direction || 'long').toLowerCase();
+  const anchorTime = toChartTime(
+    signal.activatedAtBarTime ??
+      signal.entryBarTime ??
+      signal.signalTime ??
+      signal.createdAt
+  );
+
+  const signalKey =
+    signal._id ||
+    signal.id ||
+    signal.signalId ||
+    `${direction}-${anchorTime ?? 'na'}-${entry}`;
 
   return {
-    direction: String(signal.direction || 'long').toLowerCase(),
+    direction,
     entry,
     stopLoss,
     tp1,
@@ -227,8 +240,103 @@ export function buildChartOverlay(signal, candles = [], interval = '1h', options
     patternLabel: signal.patternLabel || signal.pattern_label || null,
     alertType: signal.alertType || 'entry',
     createdAt: signal.createdAt || null,
+    signalKey: String(signalKey),
+    anchorTime,
+    labels: buildSignalLabels(signalKey, direction, { entry, stopLoss, tp1, tp2, tp3 }),
     zones
   };
+}
+
+export function buildSignalLabels(signalKey, direction, levels = {}) {
+  const prefix = signalKey != null ? `${signalKey}:` : '';
+  const isShort = String(direction || '').toLowerCase() === 'short' || String(direction || '').toLowerCase() === 'sell';
+  const sideKind = isShort ? 'sell' : 'buy';
+  const sideText = isShort ? 'Sell' : 'Buy';
+  const { entry, stopLoss, tp1, tp2, tp3 } = levels;
+
+  return [
+    Number.isFinite(entry) && {
+      id: `${prefix}entry`,
+      kind: sideKind,
+      shortText: sideText,
+      text: `${sideText} ${entry}`,
+      price: entry
+    },
+    Number.isFinite(stopLoss) && {
+      id: `${prefix}sl`,
+      kind: 'sl',
+      shortText: 'SL',
+      text: `SL ${stopLoss}`,
+      price: stopLoss
+    },
+    Number.isFinite(tp1) && {
+      id: `${prefix}tp1`,
+      kind: 'tp1',
+      shortText: 'TP1',
+      text: `TP1 ${tp1}`,
+      price: tp1
+    },
+    Number.isFinite(tp2) && {
+      id: `${prefix}tp2`,
+      kind: 'tp2',
+      shortText: 'TP2',
+      text: `TP2 ${tp2}`,
+      price: tp2
+    },
+    Number.isFinite(tp3) && {
+      id: `${prefix}tp3`,
+      kind: 'tp3',
+      shortText: 'TP3',
+      text: `TP3 ${tp3}`,
+      price: tp3
+    }
+  ].filter(Boolean);
+}
+
+/** Build label-ready overlays for many historical trades (no SMC zones). */
+export function buildHistoricalOverlays(signals = [], options = {}) {
+  const limit = Number.isFinite(options.limit) ? options.limit : 40;
+  const overlays = [];
+
+  for (const signal of signals) {
+    if (!signal || signal.entry == null) continue;
+    const entry = Number(signal.entry);
+    const stopLoss = Number(signal.stop_loss_1 ?? signal.stop_loss);
+    const tp1 = Number(signal.take_profit_1);
+    const tp2 = Number(signal.take_profit_2);
+    const tp3 = Number(signal.take_profit_3);
+    if (!Number.isFinite(entry)) continue;
+
+    const direction = String(signal.direction || 'long').toLowerCase();
+    const anchorTime = toChartTime(
+      signal.activatedAtBarTime ??
+        signal.entryBarTime ??
+        signal.signalTime ??
+        signal.createdAt
+    );
+    const signalKey =
+      signal._id ||
+      signal.id ||
+      signal.signalId ||
+      `hist-${direction}-${anchorTime ?? overlays.length}-${entry}`;
+
+    overlays.push({
+      direction,
+      entry,
+      stopLoss,
+      tp1,
+      tp2,
+      tp3,
+      signalKey: String(signalKey),
+      anchorTime,
+      historical: true,
+      labels: buildSignalLabels(signalKey, direction, { entry, stopLoss, tp1, tp2, tp3 })
+    });
+
+    if (overlays.length >= limit) break;
+  }
+
+  return overlays;
 }
 
 export function buildOverlayFromSignal(signal, candles = [], interval = '1h', options = {}) {

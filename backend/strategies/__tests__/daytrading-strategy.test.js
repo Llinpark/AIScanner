@@ -68,7 +68,7 @@ describe('NewsFilter', () => {
   });
 });
 
-describe('weekly + round liquidity helpers', () => {
+describe('weekly + monthly + round liquidity helpers', () => {
   it('computes PWH/PWL from daily map', () => {
     const byDay = {};
     for (let d = 1; d <= 20; d += 1) {
@@ -77,6 +77,21 @@ describe('weekly + round liquidity helpers', () => {
     }
     const weekly = computeWeeklyLevels(byDay);
     assert.ok(weekly.pwh != null || weekly.pwl != null || weekly.pwh === null);
+  });
+
+  it('computes PMH/PML from daily map spanning months', () => {
+    const byDay = {};
+    for (let d = 1; d <= 28; d += 1) {
+      byDay[`2026-05-${String(d).padStart(2, '0')}`] = { high: 1.2 + d * 0.001, low: 1.1 };
+    }
+    for (let d = 1; d <= 10; d += 1) {
+      byDay[`2026-06-${String(d).padStart(2, '0')}`] = { high: 1.15, low: 1.05 };
+    }
+    const { computeMonthlyLevels } = require('../utils/sessionLevels');
+    const monthly = computeMonthlyLevels(byDay);
+    assert.ok(monthly.pmh != null);
+    assert.ok(monthly.pml != null);
+    assert.ok(monthly.pmh > monthly.pml);
   });
 
   it('builds round psychological pools', () => {
@@ -88,7 +103,14 @@ describe('weekly + round liquidity helpers', () => {
 
 describe('TakeProfitEngine institutional model', () => {
   it('maps TP1–3 and keeps extra partials', () => {
-    const config = resolveDayTradingConfig({ takeProfit: { model: 'institutional', rrMultiples: [2, 3, 4], minRr: 2 } });
+    const config = resolveDayTradingConfig({
+      takeProfit: {
+        model: 'institutional',
+        enableDynamicTp: false,
+        rrMultiples: [2, 3, 4],
+        minRr: 2
+      }
+    });
     const engine = new TakeProfitEngine(config);
     const candles = Array.from({ length: 30 }, (_, i) =>
       candle(i, 1.1 + i * 0.0002, 1.101 + i * 0.0002, 1.099 + i * 0.0002, 1.1005 + i * 0.0002)
@@ -109,6 +131,136 @@ describe('TakeProfitEngine institutional model', () => {
     assert.ok(tps.take_profit_3 >= tps.take_profit_2);
     assert.equal(tps.model, 'institutional');
     assert.ok(tps.partials?.tp5_2r);
+  });
+});
+
+describe('TakeProfitEngine smart scoring (daytrading)', () => {
+  it('caps daytrading TPs at 1.5 / 2.5 / 3.5 ATR and respects max pip distance', () => {
+    const atrVal = 0.002;
+    const config = resolveDayTradingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [1.5, 2.5, 3.5],
+        maxAtrMultiplier: 3.5,
+        maxTpDistancePips: 100,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3],
+        minRr: 1.2,
+        scoreWeights: {
+          equal_high_low: 40,
+          pdh_pdl: 20,
+          pwh_pwl: 15,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry: 1.105,
+      risk: 0.001,
+      candles: Array.from({ length: 30 }, (_, i) =>
+        candle(i, 1.1, 1.101, 1.099, 1.1)
+      ),
+      pools: [
+        { type: 'equal_highs', price: 1.106, side: 'buy_side' },
+        { type: 'pdh', price: 1.13, side: 'buy_side' },
+        { type: 'pwh', price: 1.2, side: 'buy_side' }
+      ],
+      atrValue: atrVal,
+      symbol: 'EURUSD',
+      htfBias: 'bullish'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(tps.take_profit_1 <= 1.105 + atrVal * 1.5 + 1e-12);
+    assert.ok(tps.take_profit_2 <= 1.105 + atrVal * 2.5 + 1e-12);
+    assert.ok(tps.take_profit_3 <= 1.105 + atrVal * 3.5 + 1e-12);
+    // 100 pip ceiling (EURUSD pip=0.0001)
+    assert.ok(Math.abs(tps.take_profit_3 - 1.105) <= 100 * 0.0001 + 1e-12);
+    // Far PWH at 1.2 must not be selected
+    assert.ok(tps.sources.every(s => s.source !== 'pwh_pwl'));
+  });
+
+  it('drops structural targets when HTF bias opposes trade direction', () => {
+    const atrVal = 0.01;
+    const config = resolveDayTradingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [1.5, 2.5, 3.5],
+        maxAtrMultiplier: 3.5,
+        maxTpDistancePips: 100,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          equal_high_low: 40,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry: 1.105,
+      risk: 0.001,
+      candles: Array.from({ length: 20 }, (_, i) => candle(i, 1.1, 1.101, 1.099, 1.1)),
+      pools: [{ type: 'equal_highs', price: 1.108, side: 'buy_side' }],
+      atrValue: atrVal,
+      symbol: 'EURUSD',
+      htfBias: 'bearish'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    // Structural EQH filtered; RR fills
+    assert.ok(tps.sources.every(s => s.source === 'rr_fallback'));
+  });
+
+  it('defaults maxTpDistancePips to 100 for day trading', () => {
+    const cfg = resolveDayTradingConfig();
+    assert.equal(cfg.takeProfit.maxTpDistancePips, 100);
+    assert.deepEqual(cfg.takeProfit.atrCaps, [1.5, 2.5, 3.5]);
+    assert.equal(cfg.takeProfit.profileId, 'daytrading');
+  });
+
+  it('allows day-profile targets up to 100 pips (rejects beyond)', () => {
+    const atrVal = 0.02;
+    const config = resolveDayTradingConfig({
+      takeProfit: {
+        model: 'smart_scoring',
+        enableSmartTpScoring: true,
+        atrCaps: [1.5, 2.5, 3.5],
+        maxAtrMultiplier: 3.5,
+        maxTpDistancePips: 100,
+        allowRrFallback: true,
+        rrMultiples: [1.5, 2, 3],
+        scoreWeights: {
+          pdh_pdl: 48,
+          pwh_pwl: 44,
+          equal_high_low: 20,
+          atr_projection: 0,
+          rr_fallback: 5
+        }
+      }
+    });
+    const entry = 1.105;
+    const tps = new TakeProfitEngine(config).compute({
+      direction: 'long',
+      entry,
+      risk: 0.001,
+      candles: Array.from({ length: 30 }, (_, i) => candle(i, 1.1, 1.101, 1.099, 1.1)),
+      pools: [
+        { type: 'equal_highs', price: entry + 0.002, side: 'buy_side' }, // 20p
+        { type: 'pdh', price: entry + 0.0095, side: 'buy_side' }, // 95p — within 100
+        { type: 'pwh', price: entry + 0.012, side: 'buy_side' } // 120p — beyond 100
+      ],
+      atrValue: atrVal,
+      symbol: 'EURUSD',
+      htfBias: 'bullish'
+    });
+    assert.equal(tps.model, 'smart_scoring');
+    assert.ok(Math.abs(tps.take_profit_3 - entry) <= 100 * 0.0001 + 1e-12);
+    assert.ok(tps.sources.every(s => s.source !== 'pwh_pwl'));
+    assert.ok(tps.sources.some(s => s.source === 'pdh_pdl'));
   });
 });
 

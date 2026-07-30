@@ -103,6 +103,8 @@ export const tradingviewApi = {
     api.get('/api/tradingview/pine-script', {
       params: strategy ? { strategy } : {}
     }),
+  linkAccount: tradingviewUsername =>
+    api.post('/api/tradingview/link', { tradingviewUsername }),
   getHistory: (symbol, options = {}) => api.get(`/api/tradingview/history/${symbol}`, { params: options })
 };
 

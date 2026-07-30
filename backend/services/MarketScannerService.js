@@ -2,6 +2,7 @@ const TradingViewAlertService = require('./TradingViewAlertService');
 const TradingViewService = require('./TradingViewService');
 const SignalEnrichmentService = require('./SignalEnrichmentService');
 const PatternDetectionService = require('./PatternDetectionService');
+const MarketRegimeService = require('./MarketRegimeService');
 const { getMarketDataHub } = require('./MarketDataHubService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { normalizeSymbol } = require('../config/symbols');
@@ -12,6 +13,11 @@ const {
   attachActivation
 } = require('../utils/tradeLevelLifecycle');
 const { getDefaultRegistry, SCALPING_ID, DAYTRADING_ID } = require('../strategies');
+const {
+  getScannerEngine,
+  getProfileRegistry,
+  bootstrapStrategyProfiles
+} = require('../strategies/engine');
 
 const candleBuffers = new Map();
 const lastEmittedBar = new Map();
@@ -134,15 +140,31 @@ async function fetchHtfCandles(symbol, options = {}) {
   }
 }
 
-async function fetchScalpingHtfCandles(symbol, options = {}) {
+/**
+ * Fetch HTF candles for a Strategy Profile using profile.dataRequirements (no name branching).
+ */
+async function fetchProfileHtfCandles(profile, symbol, options = {}) {
+  if (!profile || profile.enabled === false) return [];
   const registry = getDefaultRegistry();
-  const scalp = registry.get(SCALPING_ID);
-  if (!scalp?.enabled) return [];
+  const runner = registry.get(profile.id);
+  if (runner && runner.enabled === false) return [];
+  const field = profile.dataRequirements?.htfTimeframeField || 'htfTimeframe';
+  const tf =
+    runner?.config?.[field] ||
+    profile.higherTimeframes?.[0] ||
+    profile.dataRequirements?.defaultTimeframe ||
+    '15m';
   return fetchHtfCandles(symbol, {
     ...options,
-    timeframe: scalp.config?.htfTimeframe || process.env.SCALPING_HTF_TF || '15m',
+    timeframe: tf,
     force: true
   });
+}
+
+async function fetchScalpingHtfCandles(symbol, options = {}) {
+  bootstrapStrategyProfiles();
+  const profile = getProfileRegistry().getById(SCALPING_ID);
+  return fetchProfileHtfCandles(profile, symbol, options);
 }
 
 async function processCandles(symbol, candles, io, options = {}) {
@@ -152,7 +174,31 @@ async function processCandles(symbol, candles, io, options = {}) {
 
   const key = bufferKey(symbol);
   const normalizedSymbol = normalizeSymbol(symbol);
+  const timeframe = options.timeframe || '3m';
   const c3 = candles[candles.length - 1];
+
+  // Pre-scan gate: Market Regime Filter (strategy-agnostic). Skip FVG/Entry/SL/TP when unsuitable.
+  if (options.skipMarketRegime !== true) {
+    const regime = await MarketRegimeService.evaluate(normalizedSymbol, timeframe, {
+      candles,
+      spread: options.spread,
+      spreadPips: options.spreadPips,
+      now: options.now,
+      allowProviderFetch: false,
+      skipCache: options.skipRegimeCache === true
+    });
+    if (!regime.shouldScan) {
+      MarketRegimeService.logSkip(normalizedSymbol, timeframe, regime);
+      return {
+        processed: false,
+        reason: 'market_regime_skip',
+        regime: regime.regime,
+        score: regime.score,
+        reasons: regime.reasons
+      };
+    }
+  }
+
   // processCandles is used by ingestCandle (TV bar inject) and scanSymbol (live hub).
   // Live HTF only when the caller already loaded primary bars via allowProviderFetch.
   const htfCandles = await fetchHtfCandles(normalizedSymbol, {
@@ -162,22 +208,36 @@ async function processCandles(symbol, candles, io, options = {}) {
     allowProviderFetch: Boolean(options.allowProviderFetch)
   });
 
+  const marketBag = {
+    symbol: normalizedSymbol,
+    candles,
+    htfCandles,
+    daytradingHtfCandles: htfCandles,
+    scalpingHtfCandles,
+    htf4hCandles: htfCandles,
+    timeframe
+  };
+
   const pending = pendingSetups.get(key);
   if (pending) {
-    const registry = getDefaultRegistry();
+    bootstrapStrategyProfiles();
     const strategyId = pending.strategyId || DAYTRADING_ID;
-    const strategy = registry.get(strategyId);
+    const engine = getScannerEngine({
+      strategyRegistry: getDefaultRegistry()
+    });
+    const profile =
+      getProfileRegistry().getById(strategyId) || getProfileRegistry().getByKey(strategyId);
 
-    if (
-      (strategyId === SCALPING_ID || strategyId === DAYTRADING_ID) &&
-      strategy?.continuePending
-    ) {
-      let pendingResult = strategy.continuePending(candles, pending, {
-        symbol: normalizedSymbol,
-        htfCandles: strategyId === SCALPING_ID ? scalpingHtfCandles : htfCandles,
-        htf4hCandles: htfCandles,
-        timeframe: options.timeframe || (strategyId === SCALPING_ID ? '3m' : '15m')
+    if (profile && profile.status === 'live') {
+      const defaultTf =
+        options.timeframe ||
+        engine.getDefaultTimeframe(profile) ||
+        profile.dataRequirements?.defaultTimeframe;
+
+      let pendingResult = engine.continuePending(strategyId, candles, pending, marketBag, {
+        contextOverrides: { timeframe: defaultTf, symbol: normalizedSymbol }
       });
+
       if (pendingResult.signal && pendingResult.entry) {
         pendingResult = {
           passed: true,
@@ -188,7 +248,11 @@ async function processCandles(symbol, candles, io, options = {}) {
         pendingResult = { stage: 'pending_retrace', pending: pendingResult.pending || pending };
       } else {
         pendingResult = {
-          expired: pendingResult.stage === 'rejected' || pendingResult.stage === 'filtered',
+          expired:
+            pendingResult.stage === 'rejected' ||
+            pendingResult.stage === 'filtered' ||
+            pendingResult.reason === 'no_continue_pending' ||
+            pendingResult.reason === 'unknown_or_stub_strategy',
           stage: pendingResult.stage,
           reason: pendingResult.reason
         };
@@ -202,7 +266,7 @@ async function processCandles(symbol, candles, io, options = {}) {
         return { processed: true, pattern: pendingResult.entry.pattern, stage: 'entry', via: 'pending_retrace' };
       }
     } else {
-      // Drop pending setups from removed classic / unknown strategies
+      // Drop pending setups from removed classic / unknown / stub strategies
       pendingSetups.delete(key);
     }
   }
@@ -210,7 +274,7 @@ async function processCandles(symbol, candles, io, options = {}) {
   const result = PatternDetectionService.scanLastCandles(candles, undefined, normalizedSymbol, {
     htfCandles,
     scalpingHtfCandles,
-    timeframe: options.timeframe || '3m',
+    timeframe,
     allowScalpingFallback: true
   });
 

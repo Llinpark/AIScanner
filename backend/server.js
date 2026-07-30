@@ -1685,20 +1685,25 @@ app.post('/api/webhook/payments', webhookLimiter, async (req, res) => {
 // ===== TRADINGVIEW SETUP (subscribers use TradingView as alert front-end) =====
 
 app.get('/api/tradingview/setup', requireAuth, requireSubscription, (req, res) => {
-  const { sampleWebhookPayload } = require('./services/PineScriptGeneratorService');
+  const { sampleWebhookPayload, resolveTradingViewUsername } = require('./services/PineScriptGeneratorService');
+  const tradingviewUsername = resolveTradingViewUsername(req.user);
   res.json({
     liveAlertsEnabled: true,
     architecture: 'tradingview_webhook_distribution',
     flow: 'TradingView → webhook → Kaching dashboard / Telegram / MT5',
     webhookUrl: WEBHOOK_TRADINGVIEW_URL,
+    tradingviewUsername: tradingviewUsername || null,
+    requiresTradingViewUsername: !tradingviewUsername,
     samplePayload: sampleWebhookPayload(),
     chartProvidersNote:
       'Charts are display-only. Chart feed issues do not affect alerts and never generate trades.',
     subscription: req.user.subscription,
     instructions: [
-      'Copy your personal script from the TradingView Setup tab and add it to a TradingView chart.',
+      'Link your TradingView username on the TradingView Setup tab (required before your personal script can be generated).',
+      'Copy your personal script from the TradingView Setup tab and add it to a TradingView chart. In script settings, confirm the same TradingView username.',
       `Create one alert for that script, enable webhook notifications, and paste: ${WEBHOOK_TRADINGVIEW_URL}`,
       'When TradingView fires, Kaching publishes Entry, stop loss, and take-profit levels to this dashboard, Telegram, and MT5.',
+      'Your script is licensed to your TradingView username — it will not send valid alerts from another TradingView account.',
       'Optional: turn on TradingView push or email so you also get notified on your phone.',
       'Charts are separate from alerts — chart feed outages never block trade delivery.'
     ]
@@ -1761,6 +1766,28 @@ app.post('/api/tradingview/link', requireAuth, requireSubscription, async (req, 
     }
 
     const normalizedTv = TradingViewAlertService.normalizeTradingViewUsername(tradingviewUsername);
+    if (!normalizedTv) {
+      return res.status(400).json({ message: 'Enter a valid TradingView username.' });
+    }
+
+    if (!isDbReady()) {
+      const store = require('./utils/devUserStore');
+      const taken = store.listActiveSubscribers().find(u => {
+        const otherId = String(u.id || u._id || '');
+        const otherTv = TradingViewAlertService.normalizeTradingViewUsername(u.tradingviewUsername);
+        return otherTv === normalizedTv && otherId && otherId !== String(req.userId);
+      });
+      if (taken) {
+        return res.status(409).json({ message: 'This TradingView username is already linked to another account.' });
+      }
+      const user = store.upsertUser(req.userId, { tradingviewUsername: normalizedTv });
+      return res.json({
+        success: true,
+        message: 'TradingView account linked. Re-copy your personal Pine script to refresh the license.',
+        tradingviewUsername: user.tradingviewUsername
+      });
+    }
+
     const existing = await UserConfig.findOne({
       tradingviewUsername: { $regex: new RegExp(`^${normalizedTv.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
       _id: { $ne: req.userId }
@@ -1781,7 +1808,7 @@ app.post('/api/tradingview/link', requireAuth, requireSubscription, async (req, 
 
     res.json({
       success: true,
-      message: 'TradingView account linked.',
+      message: 'TradingView account linked. Re-copy your personal Pine script to refresh the license.',
       tradingviewUsername: user.tradingviewUsername
     });
   } catch (error) {
@@ -1834,6 +1861,7 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
       tier: generated.tier,
       tierLabel: generated.tierLabel,
       subscriberLabel: generated.subscriberLabel,
+      tradingviewUsername: generated.tradingviewUsername,
       strategy: generated.strategy,
       strategyName: generated.strategyName,
       availableStrategies: generated.availableStrategies,
@@ -1845,6 +1873,13 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
       instructions: generated.instructions
     });
   } catch (error) {
+    if (error.code === 'tradingview_username_required') {
+      return res.status(400).json({
+        message: error.message,
+        code: error.code,
+        requiresTradingViewUsername: true
+      });
+    }
     console.error('Pine script error:', error);
     res.status(500).json({ message: 'Unable to generate Pine Script', error: error.message });
   }

@@ -92,8 +92,8 @@ const subscribeValidators = [
     .withMessage('A valid phone number is required for M-Pesa.'),
   body('billingCycle')
     .optional()
-    .isIn(['weekly', 'monthly'])
-    .withMessage('billingCycle must be weekly or monthly.')
+    .isIn(['monthly', 'yearly'])
+    .withMessage('billingCycle must be monthly or yearly.')
 ];
 
 module.exports = {

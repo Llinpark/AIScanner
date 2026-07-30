@@ -6,7 +6,7 @@ const PaymentTransactionSchema = new mongoose.Schema({
   provider: { type: String, enum: ['mpesa', 'paypal', 'mock', 'binance', 'sasapay', 'paystack'], required: true },
   amount: { type: Number, required: true },
   currency: { type: String, required: true },
-  billingCycle: { type: String, enum: ['weekly', 'monthly'], default: 'monthly' },
+  billingCycle: { type: String, enum: ['weekly', 'monthly', 'yearly'], default: 'monthly' },
   providerReference: { type: String, index: true },
   merchantRequestId: { type: String },
   status: { type: String, enum: ['pending', 'completed', 'failed', 'cancelled'], default: 'pending' },

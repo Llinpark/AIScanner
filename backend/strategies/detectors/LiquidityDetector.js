@@ -8,6 +8,7 @@ const { atr, findSwingPoints } = require('../utils/candleMath');
 const {
   computeSessionLevels,
   computeWeeklyLevels,
+  computeMonthlyLevels,
   sessionPoolsFromLevels,
   roundPsychologicalPools
 } = require('../utils/sessionLevels');
@@ -117,6 +118,10 @@ class LiquidityDetector {
     if (liqCfg.includeWeekly !== false && sessionLevels?._byDay) {
       const weekly = computeWeeklyLevels(sessionLevels._byDay);
       sessionLevels = { ...sessionLevels, ...weekly };
+    }
+    if (liqCfg.includeMonthly !== false && sessionLevels?._byDay) {
+      const monthly = computeMonthlyLevels(sessionLevels._byDay);
+      sessionLevels = { ...sessionLevels, ...monthly };
     }
     pools.push(...sessionPoolsFromLevels(sessionLevels));
 

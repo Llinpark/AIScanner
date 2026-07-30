@@ -237,12 +237,15 @@ class ScalpingStrategy extends IStrategy {
     }
 
     // STEP 10 — TPs
+    const atrVal = atr(ltf, this.config.displacement?.atrPeriod || 14);
     const tps = this.tpEngine.compute({
       direction: sweep.direction,
       entry: entryResolved.entry,
       risk: stop.risk,
       candles: ltf,
-      pools
+      pools,
+      atrValue: atrVal,
+      symbol
     });
 
     // Confidence
@@ -363,12 +366,15 @@ class ScalpingStrategy extends IStrategy {
     }
 
     const pools = context.pools || [];
+    const atrVal = atr(ltf, this.config.displacement?.atrPeriod || 14);
     const tps = this.tpEngine.compute({
       direction,
       entry: entryResolved.entry,
       risk: stop.risk,
       candles: ltf,
-      pools
+      pools,
+      atrValue: atrVal,
+      symbol: symbol || context.symbol || ''
     });
 
     const scoring = this.confidence.score({

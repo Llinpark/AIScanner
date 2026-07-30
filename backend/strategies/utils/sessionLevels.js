@@ -122,6 +122,33 @@ function computeWeeklyLevels(byDay = {}) {
   return { pwh: weeks[prev].high, pwl: weeks[prev].low };
 }
 
+/**
+ * Previous month high/low from daily aggregates (UTC calendar month).
+ * @param {Record<string, { high: number, low: number }>} byDay
+ * @returns {{ pmh: number|null, pml: number|null }}
+ */
+function computeMonthlyLevels(byDay = {}) {
+  const days = Object.keys(byDay).sort();
+  if (days.length < 2) return { pmh: null, pml: null };
+
+  /** @type {Record<string, { high: number, low: number }>} */
+  const months = {};
+  for (const day of days) {
+    const monthKey = day.slice(0, 7); // YYYY-MM
+    if (!months[monthKey]) {
+      months[monthKey] = { high: byDay[day].high, low: byDay[day].low };
+    } else {
+      months[monthKey].high = Math.max(months[monthKey].high, byDay[day].high);
+      months[monthKey].low = Math.min(months[monthKey].low, byDay[day].low);
+    }
+  }
+
+  const monthKeys = Object.keys(months).sort();
+  const prev = monthKeys.length >= 2 ? monthKeys[monthKeys.length - 2] : null;
+  if (!prev) return { pmh: null, pml: null };
+  return { pmh: months[prev].high, pml: months[prev].low };
+}
+
 function isoWeekKey(d) {
   const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   const dayNum = date.getUTCDay() || 7;
@@ -147,6 +174,8 @@ function sessionPoolsFromLevels(levels) {
   if (levels.pdl != null) push('pdl', levels.pdl, 'sell_side');
   if (levels.pwh != null) push('pwh', levels.pwh, 'buy_side');
   if (levels.pwl != null) push('pwl', levels.pwl, 'sell_side');
+  if (levels.pmh != null) push('pmh', levels.pmh, 'buy_side');
+  if (levels.pml != null) push('pml', levels.pml, 'sell_side');
   if (levels.asian) {
     push('asian_high', levels.asian.high, 'buy_side');
     push('asian_low', levels.asian.low, 'sell_side');
@@ -201,6 +230,7 @@ module.exports = {
   inSession,
   computeSessionLevels,
   computeWeeklyLevels,
+  computeMonthlyLevels,
   sessionPoolsFromLevels,
   roundPsychologicalPools,
   isoWeekKey

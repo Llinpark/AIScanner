@@ -1,5 +1,5 @@
 /**
- * Public API for the pluggable strategy layer.
+ * Public API for the pluggable strategy layer + Strategy Engine.
  */
 
 const { IStrategy, assertStrategy } = require('./interfaces/IStrategy');
@@ -10,6 +10,30 @@ const {
   resetDefaultRegistry,
   setDefaultRegistry
 } = require('./registry');
+const {
+  assertStrategyProfile,
+  normalizeStrategyProfile,
+  toCatalogEntry,
+  StrategyProfileRegistry,
+  getProfileRegistry,
+  setProfileRegistry,
+  resetProfileRegistry,
+  ScannerEngine,
+  getScannerEngine,
+  resetScannerEngine,
+  bindScannerEngineToStrategyRegistry,
+  buildStrategyContext,
+  resolveHtfCandles,
+  StubStrategy,
+  createStubProfile,
+  bootstrapStrategyProfiles,
+  resetBootstrapFlag,
+  resolvePreferStrategyId,
+  getLiveStrategyKeys,
+  createScalpingProfile,
+  createDayTradingProfile,
+  createStubProfiles
+} = require('./engine');
 const { ScalpingStrategy } = require('./ScalpingStrategy');
 const { DayTradingStrategy, DAYTRADING_ID, DAYTRADING_NAME } = require('./DayTradingStrategy');
 const {
@@ -33,7 +57,23 @@ const { FairValueGapDetector } = require('./detectors/FairValueGapDetector');
 const { RetracementDetector } = require('./detectors/RetracementDetector');
 const { EntryEngine } = require('./engines/EntryEngine');
 const { RiskManager } = require('./engines/RiskManager');
-const { TakeProfitEngine } = require('./engines/TakeProfitEngine');
+const {
+  TakeProfitEngine,
+  DEFAULT_LIQUIDITY_PRIORITY,
+  DEFAULT_SCORE_WEIGHTS,
+  DEFAULT_SCORE_PROXIMITY,
+  SCALP_ATR_CAPS,
+  DAY_ATR_CAPS
+} = require('./engines/TakeProfitEngine');
+const {
+  SCALPING_TP_PROFILE,
+  DAY_TRADING_TP_PROFILE,
+  SYSTEM_DEFAULT_TP_PROFILE,
+  TP_PROFILE_REGISTRY,
+  getTpProfile,
+  resolveTpProfile,
+  registerTpProfile
+} = require('./profiles');
 const { ConfidenceScoringService } = require('./engines/ConfidenceScoringService');
 const { TradeSignalGenerator } = require('./engines/TradeSignalGenerator');
 const { HTFBiasService } = require('./services/HTFBiasService');
@@ -50,6 +90,29 @@ module.exports = {
   getDefaultRegistry,
   resetDefaultRegistry,
   setDefaultRegistry,
+  // Strategy Engine
+  assertStrategyProfile,
+  normalizeStrategyProfile,
+  toCatalogEntry,
+  StrategyProfileRegistry,
+  getProfileRegistry,
+  setProfileRegistry,
+  resetProfileRegistry,
+  ScannerEngine,
+  getScannerEngine,
+  resetScannerEngine,
+  bindScannerEngineToStrategyRegistry,
+  buildStrategyContext,
+  resolveHtfCandles,
+  StubStrategy,
+  createStubProfile,
+  bootstrapStrategyProfiles,
+  resetBootstrapFlag,
+  resolvePreferStrategyId,
+  getLiveStrategyKeys,
+  createScalpingProfile,
+  createDayTradingProfile,
+  createStubProfiles,
   ScalpingStrategy,
   DayTradingStrategy,
   DAYTRADING_ID,
@@ -72,6 +135,18 @@ module.exports = {
   EntryEngine,
   RiskManager,
   TakeProfitEngine,
+  DEFAULT_LIQUIDITY_PRIORITY,
+  DEFAULT_SCORE_WEIGHTS,
+  DEFAULT_SCORE_PROXIMITY,
+  SCALP_ATR_CAPS,
+  DAY_ATR_CAPS,
+  SCALPING_TP_PROFILE,
+  DAY_TRADING_TP_PROFILE,
+  SYSTEM_DEFAULT_TP_PROFILE,
+  TP_PROFILE_REGISTRY,
+  getTpProfile,
+  resolveTpProfile,
+  registerTpProfile,
   ConfidenceScoringService,
   TradeSignalGenerator,
   HTFBiasService,

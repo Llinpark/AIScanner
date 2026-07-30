@@ -1,10 +1,16 @@
 /**
  * Liquidity Sweep + Fair Value Gap (Scalping) — all thresholds in one place.
  * Override via env: SCALPING_* keys (see resolveScalpingConfig).
+ * TP settings come from the Scalping Strategy TP Profile (independent of day trading).
  */
+
+const { resolveTpProfile, SCALPING_TP_PROFILE } = require('../profiles');
 
 const STRATEGY_ID = 'liquidity_sweep_fvg_scalp';
 const STRATEGY_NAME = 'Liquidity Sweep + Fair Value Gap (Scalping)';
+const STRATEGY_KEY = 'scalping';
+
+const _scalpTp = SCALPING_TP_PROFILE;
 
 const DEFAULT_SCALPING_CONFIG = Object.freeze({
   id: STRATEGY_ID,
@@ -75,15 +81,60 @@ const DEFAULT_SCALPING_CONFIG = Object.freeze({
     bufferAtrRatio: Number(process.env.SCALPING_SL_BUFFER_ATR || 0.05)
   },
 
-  // TP models — partials map to TP1/TP2/TP3
+  // TP — Scalping Strategy Profile (independent of day trading)
   takeProfit: {
-    // rr | previous_swing | nearest_liquidity | next_ob | manual_rr
-    model: process.env.SCALPING_TP_MODEL || 'rr',
-    rrMultiples: (process.env.SCALPING_TP_RR || '2,3,4')
+    profileId: _scalpTp.profileId,
+    // smart_scoring (default) | dynamic_liquidity (alias) | rr | previous_swing | nearest_liquidity | next_ob | manual_rr
+    model: process.env.SCALPING_TP_MODEL || _scalpTp.model,
+    enableSmartTpScoring: process.env.SCALPING_SMART_TP !== 'false',
+    enableDynamicTp: process.env.SCALPING_DYNAMIC_TP !== 'false',
+    atrCaps: (process.env.SCALPING_TP_ATR_CAPS || _scalpTp.atrCaps.join(','))
       .split(',')
       .map(Number)
       .filter(n => Number.isFinite(n) && n > 0),
-    manualRr: (process.env.SCALPING_MANUAL_RR || '1.5,2.5,4')
+    maxAtrMultiplier: Number(process.env.SCALPING_TP_MAX_ATR || _scalpTp.maxAtrMultiplier),
+    maxTpDistancePips:
+      process.env.SCALPING_TP_MAX_PIPS !== undefined && process.env.SCALPING_TP_MAX_PIPS !== ''
+        ? Number(process.env.SCALPING_TP_MAX_PIPS) || null
+        : _scalpTp.maxTpDistancePips,
+    minScore: Number(process.env.SCALPING_TP_MIN_SCORE || _scalpTp.minScore),
+    scoreProximity: Number(process.env.SCALPING_TP_SCORE_PROXIMITY || _scalpTp.scoreProximity),
+    allowRrFallback: process.env.SCALPING_TP_RR_FALLBACK !== 'false',
+    deferredLiquidityCategories: [..._scalpTp.deferredLiquidityCategories],
+    scoreWeights: {
+      internal_liquidity: Number(
+        process.env.SCALPING_TP_W_INTERNAL || _scalpTp.scoreWeights.internal_liquidity
+      ),
+      external_liquidity: Number(
+        process.env.SCALPING_TP_W_EXTERNAL || _scalpTp.scoreWeights.external_liquidity
+      ),
+      equal_high_low: Number(process.env.SCALPING_TP_W_EQH || _scalpTp.scoreWeights.equal_high_low),
+      untapped_fvg: Number(process.env.SCALPING_TP_W_FVG || _scalpTp.scoreWeights.untapped_fvg),
+      swing_high_low: Number(process.env.SCALPING_TP_W_SWING || _scalpTp.scoreWeights.swing_high_low),
+      order_block: Number(process.env.SCALPING_TP_W_OB || _scalpTp.scoreWeights.order_block),
+      breaker_block: Number(
+        process.env.SCALPING_TP_W_BREAKER || _scalpTp.scoreWeights.breaker_block
+      ),
+      mitigation_block: Number(
+        process.env.SCALPING_TP_W_MITIGATION || _scalpTp.scoreWeights.mitigation_block
+      ),
+      pdh_pdl: Number(process.env.SCALPING_TP_W_PD || _scalpTp.scoreWeights.pdh_pdl),
+      pwh_pwl: Number(process.env.SCALPING_TP_W_PW || _scalpTp.scoreWeights.pwh_pwl),
+      pmh_pml: Number(process.env.SCALPING_TP_W_PM || _scalpTp.scoreWeights.pmh_pml),
+      atr_projection: Number(process.env.SCALPING_TP_W_ATR || _scalpTp.scoreWeights.atr_projection),
+      rr_fallback: Number(process.env.SCALPING_TP_W_RR || _scalpTp.scoreWeights.rr_fallback)
+    },
+    liquidityPriority: (
+      process.env.SCALPING_TP_LIQUIDITY_PRIORITY || _scalpTp.liquidityPriority.join(',')
+    )
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean),
+    rrMultiples: (process.env.SCALPING_TP_RR || _scalpTp.rrMultiples.join(','))
+      .split(',')
+      .map(Number)
+      .filter(n => Number.isFinite(n) && n > 0),
+    manualRr: (process.env.SCALPING_MANUAL_RR || _scalpTp.manualRr.join(','))
       .split(',')
       .map(Number)
       .filter(n => Number.isFinite(n) && n > 0)
@@ -123,6 +174,10 @@ const DEFAULT_SCALPING_CONFIG = Object.freeze({
  * @param {Partial<typeof DEFAULT_SCALPING_CONFIG>} [overrides]
  */
 function resolveScalpingConfig(overrides = {}) {
+  const takeProfit = resolveTpProfile(STRATEGY_KEY, {
+    ...DEFAULT_SCALPING_CONFIG.takeProfit,
+    ...(overrides.takeProfit || {})
+  });
   return {
     ...DEFAULT_SCALPING_CONFIG,
     ...overrides,
@@ -134,13 +189,7 @@ function resolveScalpingConfig(overrides = {}) {
     fvg: { ...DEFAULT_SCALPING_CONFIG.fvg, ...(overrides.fvg || {}) },
     entry: { ...DEFAULT_SCALPING_CONFIG.entry, ...(overrides.entry || {}) },
     stop: { ...DEFAULT_SCALPING_CONFIG.stop, ...(overrides.stop || {}) },
-    takeProfit: {
-      ...DEFAULT_SCALPING_CONFIG.takeProfit,
-      ...(overrides.takeProfit || {}),
-      rrMultiples:
-        overrides.takeProfit?.rrMultiples || DEFAULT_SCALPING_CONFIG.takeProfit.rrMultiples,
-      manualRr: overrides.takeProfit?.manualRr || DEFAULT_SCALPING_CONFIG.takeProfit.manualRr
-    },
+    takeProfit,
     confidence: {
       ...DEFAULT_SCALPING_CONFIG.confidence,
       ...(overrides.confidence || {}),
@@ -157,6 +206,7 @@ function resolveScalpingConfig(overrides = {}) {
 module.exports = {
   STRATEGY_ID,
   STRATEGY_NAME,
+  STRATEGY_KEY,
   DEFAULT_SCALPING_CONFIG,
   resolveScalpingConfig
 };

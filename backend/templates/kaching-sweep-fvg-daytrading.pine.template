@@ -5,15 +5,21 @@ indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=
 // Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
 // Strategy: Liquidity Sweep + Fair Value Gap (Day Trading)
 // HTF 15m = context only. Entries only when this chart is 15m or 5m.
-// TradingView overlays show ONLY: Kaching Entry, Kaching SL, Kaching TP1–3.
+// TradingView overlays show ONLY: Kaching Buy/Sell, Entry, SL, TP1–3 (with prices).
 
 // ===== CONFIGURATION =====
-WEBHOOK_URL = input.string("{{WEBHOOK_URL}}", "Webhook URL (paste in TV alert)", group="KachingFx", display=display.none)
-WEBHOOK_SECRET = input.string("{{WEBHOOK_SECRET}}", "Webhook Secret (optional HMAC)", group="KachingFx", display=display.none)
-LICENSE_TOKEN = input.string("{{LICENSE_TOKEN}}", "License Token (required)", group="KachingFx", display=display.none)
-TV_USERNAME = input.string("{{TV_USERNAME}}", "TradingView Username (optional)", group="KachingFx", display=display.none)
+// License is HMAC-bound to this TradingView username (server-side). Pine cannot read the
+// current TV account at runtime, so the subscriber must confirm their username below.
+WEBHOOK_URL = "{{WEBHOOK_URL}}"
+WEBHOOK_SECRET = "{{WEBHOOK_SECRET}}"
+LICENSE_TOKEN = "{{LICENSE_TOKEN}}"
+LICENSED_TV_USERNAME = "{{TV_USERNAME}}"
+CONFIRM_TV_USERNAME = input.string("", "Confirm your TradingView username", group="KachingFx License", tooltip="Enter the exact TradingView username this script was licensed for. Signals and alerts stay locked until it matches.")
 SHOW_TRADE_LINES = true
 SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
+levelExtendBars = input.int(22, "Trade level length (bars)", minval=15, maxval=30, group="KachingFx Display", tooltip="How far Entry/SL/TP lines extend right from the signal candle. Keeps the chart clean — never full-width.")
+smartLabelMinVerticalTicks = input.int(12, "Smart label min vertical gap (ticks)", minval=2, maxval=250, group="KachingFx Display", tooltip="Minimum price-space gap between trade labels before lower-priority labels are shifted.")
+minHorizontalGapBars = input.int(2, "Smart label min horizontal gap (bars)", minval=1, maxval=8, group="KachingFx Display", tooltip="Horizontal spacing used for staggered smart labels and left/right spillover.")
 
 htfTf = input.timeframe("{{HTF_TF}}", "HTF context (never entries)", group="Scalp — Structure")
 swingLen = input.int({{SWING_SENSITIVITY}}, "Swing sensitivity", minval=1, maxval=5, group="Scalp — Structure")
@@ -29,19 +35,39 @@ stopModel = input.string("{{STOP_MODEL}}", "Stop model", options=["sweep", "fvg"
 tp1R = input.float({{TP1_R}}, "Kaching TP1 (R)", group="Scalp — Risk")
 tp2R = input.float({{TP2_R}}, "Kaching TP2 (R)", group="Scalp — Risk")
 tp3R = input.float({{TP3_R}}, "Kaching TP3 (R)", group="Scalp — Risk")
+enableDynamicTp = input.bool({{ENABLE_DYNAMIC_TP}}, "Enable dynamic TP (ATR caps)", group="Scalp — Risk")
+tp1AtrCap = input.float({{TP1_ATR_CAP}}, "TP1 max ATR", minval=0.1, group="Scalp — Risk")
+tp2AtrCap = input.float({{TP2_ATR_CAP}}, "TP2 max ATR", minval=0.1, group="Scalp — Risk")
+tp3AtrCap = input.float({{TP3_ATR_CAP}}, "TP3 max ATR", minval=0.1, group="Scalp — Risk")
 confThreshold = input.float({{CONFIDENCE_THRESHOLD}}, "Min confidence (0-100)", minval=50, maxval=100, group="Scalp — Filters")
 requireEngulf = input.bool({{REQUIRE_ENGULFING}}, "Require engulfing", group="Scalp — Filters")
 
-// ===== COLORS =====
-colEntry = #38bdf8
-colSl = #f87171
-colTp1 = #4ade80
-colTp2 = #22c55e
-colTp3 = #fbbf24
-colLongZoneBg = color.new(#4ade80, 85)
-colLongZoneBorder = color.new(#4ade80, 30)
-colShortZoneBg = color.new(#f87171, 85)
-colShortZoneBorder = color.new(#f87171, 30)
+normalizeTvUser(string s) =>
+    str.lower(str.replace_all(str.trim(s), "@", ""))
+
+licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_USERNAME) == LICENSED_TV_USERNAME
+var label licenseLockLabel = na
+if barstate.islast
+    if not licenseOk
+        if na(licenseLockLabel)
+            licenseLockLabel := label.new(bar_index, high, "KachingFx: enter licensed TradingView username to unlock", style=label.style_label_down, color=color.new(color.orange, 0), textcolor=color.white, size=size.normal)
+        else
+            label.set_xy(licenseLockLabel, bar_index, high)
+    else if not na(licenseLockLabel)
+        label.delete(licenseLockLabel)
+        licenseLockLabel := na
+
+// ===== COLORS (BUY vs SELL schemes) =====
+colBuy = #2563eb
+colSell = #dc2626
+colTpNear = #16a34a
+colTpFar = #d97706
+colSlBuy = #dc2626
+colSlSell = #2563eb
+colLongZoneBg = color.new(#16a34a, 85)
+colLongZoneBorder = color.new(#16a34a, 30)
+colShortZoneBg = color.new(#dc2626, 85)
+colShortZoneBorder = color.new(#dc2626, 30)
 
 atr14 = ta.atr(14)
 
@@ -55,6 +81,29 @@ pointSize() =>
      close >= 50 ? math.max(tick, 0.1) :
      math.max(tick * 10, 0.0001)
 
+// Display precision: Forex 5dp, JPY 3dp, Gold 2dp, else mintick-derived
+priceDecimals() =>
+    tick = math.max(nz(syminfo.mintick, 0.00001), 1e-8)
+    t = str.upper(syminfo.ticker)
+    str.contains(t, "JPY") ? 3 :
+     str.contains(t, "XAU") or str.contains(t, "GOLD") ? 2 :
+     str.contains(t, "XAG") or str.contains(t, "SILVER") ? 3 :
+     tick >= 1.0 ? 0 :
+     tick >= 0.1 ? 1 :
+     tick >= 0.01 ? 2 :
+     tick >= 0.001 ? 3 :
+     tick >= 0.0001 ? 4 :
+     5
+
+formatPrice(float px) =>
+    d = priceDecimals()
+    d == 0 ? str.tostring(math.round(px)) :
+     d == 1 ? str.tostring(px, "#.#") :
+     d == 2 ? str.tostring(px, "#.##") :
+     d == 3 ? str.tostring(px, "#.###") :
+     d == 4 ? str.tostring(px, "#.####") :
+     str.tostring(px, "#.#####")
+
 fmtPx(float px) =>
     str.tostring(px, format.mintick)
 
@@ -66,8 +115,14 @@ kachingAlertLabel(string alertType) =>
      alertType == "take_profit_3" ? "Kaching TP3" :
      "Kaching Signal"
 
+// Human-readable alert body (stored in JSON message; webhook still receives full JSON)
+buildHumanMessage(string direction, float entry, float sl, float tp1, float tp2, float tp3) =>
+    header = direction == "long" ? "🟦 Kaching BUY" : "🟥 Kaching SELL"
+    header + "\\nEntry: " + formatPrice(entry) + "\\nSL: " + formatPrice(sl) + "\\nTP1: " + formatPrice(tp1) + "\\nTP2: " + formatPrice(tp2) + "\\nTP3: " + formatPrice(tp3)
+
 buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf) =>
-    '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"message":"' + kachingAlertLabel(alertType) + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
+    msgText = alertType == "entry" ? buildHumanMessage(direction, entry, sl, tp1, tp2, tp3) : kachingAlertLabel(alertType)
+    '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"}'
 
 // ===== HTF LIQUIDITY SWEEP (15m context — never used for entry price) =====
 htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
@@ -215,9 +270,18 @@ confScore() =>
 // ===== LEVELS =====
 calcLevels(string direction, float entryPx, float slPx) =>
     risk = math.abs(entryPx - slPx)
-    tp1 = direction == "long" ? entryPx + risk * tp1R : entryPx - risk * tp1R
-    tp2 = direction == "long" ? entryPx + risk * tp2R : entryPx - risk * tp2R
-    tp3 = direction == "long" ? entryPx + risk * tp3R : entryPx - risk * tp3R
+    float tp1 = direction == "long" ? entryPx + risk * tp1R : entryPx - risk * tp1R
+    float tp2 = direction == "long" ? entryPx + risk * tp2R : entryPx - risk * tp2R
+    float tp3 = direction == "long" ? entryPx + risk * tp3R : entryPx - risk * tp3R
+    // ATR distance caps (Pine approximates backend dynamic TP caps; full SMC ranking is backend)
+    if enableDynamicTp
+        atrNow = nz(atr14, pointSize())
+        cap1 = atrNow * tp1AtrCap
+        cap2 = atrNow * tp2AtrCap
+        cap3 = atrNow * tp3AtrCap
+        tp1 := direction == "long" ? math.min(tp1, entryPx + cap1) : math.max(tp1, entryPx - cap1)
+        tp2 := direction == "long" ? math.min(tp2, entryPx + cap2) : math.max(tp2, entryPx - cap2)
+        tp3 := direction == "long" ? math.min(tp3, entryPx + cap3) : math.max(tp3, entryPx - cap3)
     [entryPx, slPx, tp1, tp2, tp3, risk]
 
 resolveStop(string direction, float entryPx) =>
@@ -229,74 +293,13 @@ resolveStop(string direction, float entryPx) =>
 resolveEntry(string direction) =>
     entryModel == "ce" ? fvgCe : close
 
-// Chart TF guard — entries only on 1 / 3 minute charts
+// Chart TF guard — entries only on 15 / 5 minute charts
 entryTfOk = timeframe.isminutes and (timeframe.multiplier == 15 or timeframe.multiplier == 5)
 
-var line lnEntry = na
-var line lnSl = na
-var line lnTp1 = na
-var line lnTp2 = na
-var line lnTp3 = na
-var label lbEntryTag = na
-var label lbSlTag = na
-var label lbTp1Tag = na
-var label lbTp2Tag = na
-var label lbTp3Tag = na
-var label lbBadge = na
-var box fvgZone = na
-var float activeSl = na
-var float activeTp3 = na
-var string activeDirection = na
-var bool tradeActive = false
+{{DRAWING_ENGINE}}
 
-clearPreviousDrawings() =>
-    if not na(lnEntry)
-        line.delete(lnEntry)
-    if not na(lnSl)
-        line.delete(lnSl)
-    if not na(lnTp1)
-        line.delete(lnTp1)
-    if not na(lnTp2)
-        line.delete(lnTp2)
-    if not na(lnTp3)
-        line.delete(lnTp3)
-    if not na(lbEntryTag)
-        label.delete(lbEntryTag)
-    if not na(lbSlTag)
-        label.delete(lbSlTag)
-    if not na(lbTp1Tag)
-        label.delete(lbTp1Tag)
-    if not na(lbTp2Tag)
-        label.delete(lbTp2Tag)
-    if not na(lbTp3Tag)
-        label.delete(lbTp3Tag)
-    if not na(lbBadge)
-        label.delete(lbBadge)
-    if not na(fvgZone)
-        box.delete(fvgZone)
-
-if tradeActive and barstate.isconfirmed
-    longTrade = activeDirection == "long"
-    hitSl = longTrade ? low <= activeSl : high >= activeSl
-    hitTp3 = longTrade ? high >= activeTp3 : low <= activeTp3
-    if hitSl or hitTp3
-        clearPreviousDrawings()
-        lnEntry := na
-        lnSl := na
-        lnTp1 := na
-        lnTp2 := na
-        lnTp3 := na
-        lbEntryTag := na
-        lbSlTag := na
-        lbTp1Tag := na
-        lbTp2Tag := na
-        lbTp3Tag := na
-        lbBadge := na
-        fvgZone := na
-        tradeActive := false
-
-fireLong = entryTfOk and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
-fireShort = entryTfOk and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
+fireLong = licenseOk and entryTfOk and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
+fireShort = licenseOk and entryTfOk and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
 
 if fireLong
     e = resolveEntry("long")
@@ -305,27 +308,7 @@ if fireLong
     conf = confScore() / 100.0
     msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf)
     alert(msg, alert.freq_once_per_bar)
-    clearPreviousDrawings()
-    // Overlay labels: Kaching Entry / SL / TP only — no liquidity/FVG/confidence text on chart
-    lbBadge := label.new(bar_index, low, "Kaching Entry", style=label.style_label_up, color=color.new(color.green, 0), textcolor=color.white, size=size.normal)
-    if SHOW_FVG_ZONE
-        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, bgcolor=colLongZoneBg)
-    if SHOW_TRADE_LINES
-        lnEntry := line.new(bar_index, ee, bar_index + 1, ee, extend=extend.right, color=color.new(colEntry, 0), width=2)
-        lnSl := line.new(bar_index, ssl, bar_index + 1, ssl, extend=extend.right, color=color.new(colSl, 0), width=2)
-        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(colTp1, 0), width=2, style=line.style_dashed)
-        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(colTp2, 0), width=2, style=line.style_dashed)
-        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(colTp3, 0), width=2, style=line.style_dashed)
-        lbEntryTag := label.new(bar_index + 1, ee, "Kaching Entry", style=label.style_label_left, color=color.new(colEntry, 0), textcolor=color.white, size=size.small)
-        lbSlTag := label.new(bar_index + 1, ssl, "Kaching SL", style=label.style_label_left, color=color.new(colSl, 0), textcolor=color.white, size=size.small)
-        lbTp1Tag := label.new(bar_index + 1, t1, "Kaching TP1", style=label.style_label_left, color=color.new(colTp1, 0), textcolor=color.black, size=size.small)
-        lbTp2Tag := label.new(bar_index + 1, t2, "Kaching TP2", style=label.style_label_left, color=color.new(colTp2, 0), textcolor=color.white, size=size.small)
-        lbTp3Tag := label.new(bar_index + 1, t3, "Kaching TP3", style=label.style_label_left, color=color.new(colTp3, 0), textcolor=color.black, size=size.small)
-        activeDirection := "long"
-        activeSl := ssl
-        activeTp3 := t3
-        tradeActive := true
-    // Reset sequence after fill
+    drawBuySignal(ee, ssl, t1, t2, t3)
     fvgBar := na
     dispBar := na
 
@@ -336,24 +319,6 @@ if fireShort
     conf = confScore() / 100.0
     msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf)
     alert(msg, alert.freq_once_per_bar)
-    clearPreviousDrawings()
-    lbBadge := label.new(bar_index, high, "Kaching Entry", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
-    if SHOW_FVG_ZONE
-        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, bgcolor=colShortZoneBg)
-    if SHOW_TRADE_LINES
-        lnEntry := line.new(bar_index, ee, bar_index + 1, ee, extend=extend.right, color=color.new(colEntry, 0), width=2)
-        lnSl := line.new(bar_index, ssl, bar_index + 1, ssl, extend=extend.right, color=color.new(colSl, 0), width=2)
-        lnTp1 := line.new(bar_index, t1, bar_index + 1, t1, extend=extend.right, color=color.new(colTp1, 0), width=2, style=line.style_dashed)
-        lnTp2 := line.new(bar_index, t2, bar_index + 1, t2, extend=extend.right, color=color.new(colTp2, 0), width=2, style=line.style_dashed)
-        lnTp3 := line.new(bar_index, t3, bar_index + 1, t3, extend=extend.right, color=color.new(colTp3, 0), width=2, style=line.style_dashed)
-        lbEntryTag := label.new(bar_index + 1, ee, "Kaching Entry", style=label.style_label_left, color=color.new(colEntry, 0), textcolor=color.white, size=size.small)
-        lbSlTag := label.new(bar_index + 1, ssl, "Kaching SL", style=label.style_label_left, color=color.new(colSl, 0), textcolor=color.white, size=size.small)
-        lbTp1Tag := label.new(bar_index + 1, t1, "Kaching TP1", style=label.style_label_left, color=color.new(colTp1, 0), textcolor=color.black, size=size.small)
-        lbTp2Tag := label.new(bar_index + 1, t2, "Kaching TP2", style=label.style_label_left, color=color.new(colTp2, 0), textcolor=color.white, size=size.small)
-        lbTp3Tag := label.new(bar_index + 1, t3, "Kaching TP3", style=label.style_label_left, color=color.new(colTp3, 0), textcolor=color.black, size=size.small)
-        activeDirection := "short"
-        activeSl := ssl
-        activeTp3 := t3
-        tradeActive := true
+    drawSellSignal(ee, ssl, t1, t2, t3)
     fvgBar := na
     dispBar := na

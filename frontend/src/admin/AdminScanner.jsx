@@ -2,9 +2,23 @@ import { useEffect, useState } from 'react';
 import { adminApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
-const STRATEGY_TABS = [
-  { id: 'daytrading', label: 'Day Trading' },
-  { id: 'scalping', label: 'Scalping' }
+const LIVE_STRATEGY_KEYS = new Set(['daytrading', 'scalping']);
+
+const FALLBACK_STRATEGY_CATALOG = [
+  {
+    key: 'daytrading',
+    name: 'Liquidity Sweep + Fair Value Gap (Day Trading)',
+    status: 'live',
+    configurable: true,
+    enabled: true
+  },
+  {
+    key: 'scalping',
+    name: 'Liquidity Sweep + Fair Value Gap (Scalping)',
+    status: 'live',
+    configurable: true,
+    enabled: true
+  }
 ];
 
 const SCALPING_WEIGHT_FIELDS = [
@@ -41,6 +55,7 @@ const STOP_MODELS = [
 ];
 
 const SCALP_TP_MODELS = [
+  { value: 'smart_scoring', label: 'Smart liquidity scoring (default)' },
   { value: 'rr', label: 'Risk/reward multiples' },
   { value: 'previous_swing', label: 'Previous swing' },
   { value: 'nearest_liquidity', label: 'Nearest liquidity' },
@@ -48,12 +63,90 @@ const SCALP_TP_MODELS = [
 ];
 
 const DAY_TP_MODELS = [
+  { value: 'smart_scoring', label: 'Smart liquidity scoring (default)' },
   { value: 'institutional', label: 'Institutional (swing / PDH / PWH)' },
   { value: 'rr', label: 'Risk/reward multiples' },
   { value: 'manual_rr', label: 'Manual RR' },
   { value: 'previous_swing', label: 'Previous swing' },
   { value: 'nearest_liquidity', label: 'Nearest liquidity' }
 ];
+
+const DEFAULT_TP_SCORE_WEIGHTS = {
+  internal_liquidity: 45,
+  external_liquidity: 38,
+  equal_high_low: 40,
+  untapped_fvg: 35,
+  swing_high_low: 30,
+  order_block: 25,
+  breaker_block: 22,
+  mitigation_block: 22,
+  pdh_pdl: 20,
+  pwh_pwl: 15,
+  pmh_pml: 10,
+  atr_projection: 8,
+  rr_fallback: 5
+};
+
+/** Scalping Strategy TP Profile weight defaults (admin UI fallback). */
+const SCALPING_TP_SCORE_WEIGHTS = {
+  internal_liquidity: 50,
+  equal_high_low: 45,
+  untapped_fvg: 40,
+  swing_high_low: 35,
+  external_liquidity: 25,
+  order_block: 25,
+  breaker_block: 22,
+  mitigation_block: 22,
+  pdh_pdl: 18,
+  pwh_pwl: 8,
+  pmh_pml: 5,
+  atr_projection: 8,
+  rr_fallback: 5
+};
+
+/** Day Trading Strategy TP Profile weight defaults (admin UI fallback). */
+const DAYTRADING_TP_SCORE_WEIGHTS = {
+  pdh_pdl: 48,
+  pwh_pwl: 44,
+  external_liquidity: 42,
+  swing_high_low: 40,
+  equal_high_low: 32,
+  untapped_fvg: 30,
+  internal_liquidity: 28,
+  order_block: 25,
+  breaker_block: 22,
+  mitigation_block: 22,
+  pmh_pml: 28,
+  atr_projection: 8,
+  rr_fallback: 5
+};
+
+const TP_SCORE_WEIGHT_FIELDS = [
+  { key: 'internal_liquidity', label: 'Weight for Internal Liquidity' },
+  { key: 'external_liquidity', label: 'Weight for External Liquidity' },
+  { key: 'equal_high_low', label: 'Weight for Equal High/Low' },
+  { key: 'swing_high_low', label: 'Weight for Swing High/Low' },
+  { key: 'untapped_fvg', label: 'Weight for FVG' },
+  { key: 'order_block', label: 'Weight for Order Blocks' },
+  { key: 'breaker_block', label: 'Weight for Breaker Blocks' },
+  { key: 'mitigation_block', label: 'Weight for Mitigation Blocks' },
+  { key: 'pdh_pdl', label: 'Weight for PDH/PDL' },
+  { key: 'pwh_pwl', label: 'Weight for PWH/PWL' },
+  { key: 'pmh_pml', label: 'Weight for PMH/PML' },
+  { key: 'atr_projection', label: 'Weight for ATR Projection' },
+  { key: 'rr_fallback', label: 'Weight for Risk:Reward fallback' }
+];
+
+function isSmartTpEnabled(tp) {
+  if (tp?.enableSmartTpScoring === false) return false;
+  if (tp?.enableDynamicTp === false) return false;
+  return true;
+}
+
+function isSmartTpModel(model) {
+  const m = String(model || '').toLowerCase();
+  return m === 'smart_scoring' || m === 'smart_tp' || m === 'dynamic_liquidity' || m === 'dynamic';
+}
 
 function listToCsv(value) {
   if (Array.isArray(value)) return value.join(',');
@@ -108,6 +201,163 @@ function WeightGrid({ legend, fields, weights, onChange, min = 0, max = 100, ste
   );
 }
 
+function LiquidityTargetScoringSection({
+  strategyKey,
+  takeProfit,
+  atrCapsDefault,
+  maxAtrDefault,
+  tpModels,
+  showMinRr = false,
+  scoreWeightDefaults = DEFAULT_TP_SCORE_WEIGHTS,
+  patchNested,
+  updateStrategy
+}) {
+  const smartOn = isSmartTpEnabled(takeProfit);
+  const weights = {
+    ...scoreWeightDefaults,
+    ...(takeProfit?.scoreWeights || {})
+  };
+  const setTp = (key, value) => patchNested(strategyKey, 'takeProfit', key, value);
+  const patchTp = patch => {
+    if (typeof updateStrategy === 'function') {
+      updateStrategy(strategyKey, current => ({
+        ...current,
+        takeProfit: {
+          ...(current.takeProfit || {}),
+          ...patch
+        }
+      }));
+      return;
+    }
+    Object.entries(patch).forEach(([key, value]) => setTp(key, value));
+  };
+  const setWeight = (key, value) =>
+    setTp('scoreWeights', {
+      ...weights,
+      [key]: value
+    });
+
+  return (
+    <>
+      <h5 className="admin-form-subsection-title">Liquidity Target Scoring</h5>
+      <Field label="Enable Smart TP Scoring" className="admin-checkbox">
+        <input
+          type="checkbox"
+          checked={smartOn}
+          onChange={e => {
+            const on = e.target.checked;
+            patchTp({
+              enableSmartTpScoring: on,
+              enableDynamicTp: on,
+              ...(on ? { model: 'smart_scoring' } : {})
+            });
+          }}
+        />
+      </Field>
+      <Field label="TP model (legacy selectable when scoring off)">
+        <select
+          className="admin-input admin-select"
+          value={
+            smartOn
+              ? takeProfit?.model && isSmartTpModel(takeProfit.model)
+                ? takeProfit.model
+                : 'smart_scoring'
+              : takeProfit?.model && !isSmartTpModel(takeProfit.model)
+                ? takeProfit.model
+                : tpModels.find(m => !isSmartTpModel(m.value))?.value || 'rr'
+          }
+          onChange={e => {
+            const model = e.target.value;
+            const smart = isSmartTpModel(model);
+            patchTp({
+              model,
+              enableSmartTpScoring: smart,
+              enableDynamicTp: smart
+            });
+          }}
+        >
+          {tpModels.map(opt => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Maximum ATR multiplier">
+        <input
+          type="number"
+          min={0}
+          step={0.1}
+          value={takeProfit?.maxAtrMultiplier ?? maxAtrDefault}
+          onChange={e => setTp('maxAtrMultiplier', Number(e.target.value))}
+        />
+      </Field>
+      <Field label="ATR caps TP1,TP2,TP3">
+        <input
+          type="text"
+          value={listToCsv(takeProfit?.atrCaps || atrCapsDefault)}
+          onChange={e => setTp('atrCaps', csvToList(e.target.value).map(Number))}
+        />
+      </Field>
+      <Field label="Maximum TP distance (pips)">
+        <input
+          type="number"
+          min={0}
+          step={1}
+          placeholder="Unlimited"
+          value={takeProfit?.maxTpDistancePips ?? ''}
+          onChange={e =>
+            setTp('maxTpDistancePips', e.target.value === '' ? null : Number(e.target.value))
+          }
+        />
+      </Field>
+      <Field label="Minimum score required">
+        <input
+          type="number"
+          min={0}
+          step={1}
+          value={takeProfit?.minScore ?? 0}
+          onChange={e => setTp('minScore', Number(e.target.value))}
+        />
+      </Field>
+      <Field label="Allow RR fallback" className="admin-checkbox">
+        <input
+          type="checkbox"
+          checked={takeProfit?.allowRrFallback !== false}
+          onChange={e => setTp('allowRrFallback', e.target.checked)}
+        />
+      </Field>
+      {showMinRr ? (
+        <Field label="Min RR">
+          <input
+            type="number"
+            min={0}
+            step={0.1}
+            value={takeProfit?.minRr ?? 1.2}
+            onChange={e => setTp('minRr', Number(e.target.value))}
+          />
+        </Field>
+      ) : null}
+      <Field label="RR multiples (comma-separated)">
+        <input
+          type="text"
+          value={listToCsv(takeProfit?.rrMultiples)}
+          onChange={e => setTp('rrMultiples', csvToList(e.target.value).map(Number))}
+        />
+      </Field>
+      <WeightGrid
+        legend="Probability weights used to rank liquidity objectives (higher = preferred)."
+        fields={TP_SCORE_WEIGHT_FIELDS}
+        weights={weights}
+        onChange={setWeight}
+        min={0}
+        max={100}
+        step={1}
+      />
+    </>
+  );
+}
+
 export default function AdminScanner() {
   const { user } = useAuth();
   const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
@@ -118,6 +368,13 @@ export default function AdminScanner() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
+  const syncActiveStrategyFromConfig = config => {
+    const next = config?.activeStrategy;
+    if (LIVE_STRATEGY_KEYS.has(next)) {
+      setActiveStrategy(next);
+    }
+  };
+
   useEffect(() => {
     if (!canManageScanner) {
       setLoading(false);
@@ -126,13 +383,35 @@ export default function AdminScanner() {
     }
     adminApi
       .getScannerConfig()
-      .then(res => setForm(res.data.config))
+      .then(res => {
+        const config = res.data.config;
+        setForm(config);
+        syncActiveStrategyFromConfig(config);
+      })
       .catch(err => setError(err.response?.data?.message || 'Unable to load scanner config.'))
       .finally(() => setLoading(false));
   }, [canManageScanner]);
 
   const updateCore = (key, value) => {
     setForm(prev => ({ ...prev, [key]: value }));
+  };
+
+  const updateMarketRegime = (key, value) => {
+    setForm(prev => ({
+      ...prev,
+      marketRegime: {
+        ...(prev.marketRegime || {}),
+        [key]: value
+      }
+    }));
+  };
+
+  const selectStrategyTab = strategyKey => {
+    setActiveStrategy(strategyKey);
+    // Only live strategies drive analyze prefer / persisted activeStrategy
+    if (LIVE_STRATEGY_KEYS.has(strategyKey)) {
+      setForm(prev => (prev ? { ...prev, activeStrategy: strategyKey } : prev));
+    }
   };
 
   const updateStrategy = (strategyKey, updater) => {
@@ -167,8 +446,12 @@ export default function AdminScanner() {
     setMessage('');
     setError('');
     try {
-      const response = await adminApi.updateScannerConfig(form);
-      setForm(response.data.config);
+      // Persist the currently selected strategy tab alongside independent profiles
+      const payload = { ...form, activeStrategy };
+      const response = await adminApi.updateScannerConfig(payload);
+      const config = response.data.config;
+      setForm(config);
+      syncActiveStrategyFromConfig(config);
       setMessage(response.data.message || 'Scanner configuration saved.');
     } catch (err) {
       setError(err.response?.data?.message || 'Unable to save scanner config.');
@@ -188,6 +471,15 @@ export default function AdminScanner() {
   const strategies = form.strategies || {};
   const scalping = strategies.scalping || {};
   const daytrading = strategies.daytrading || {};
+  const strategyCatalog =
+    Array.isArray(form.strategyCatalog) && form.strategyCatalog.length
+      ? form.strategyCatalog
+      : FALLBACK_STRATEGY_CATALOG;
+  const selectedCatalogEntry =
+    strategyCatalog.find(s => s.key === activeStrategy) || strategyCatalog[0] || null;
+  const selectedIsLive =
+    selectedCatalogEntry &&
+    (selectedCatalogEntry.status === 'live' || LIVE_STRATEGY_KEYS.has(selectedCatalogEntry.key));
 
   return (
     <form className="admin-scanner-form admin-panel" onSubmit={handleSave}>
@@ -195,10 +487,10 @@ export default function AdminScanner() {
         <div>
           <h3>Scanner configuration</h3>
           <p className="admin-form-note">
-            Configure pluggable strategies used by the Liquidity Sweep + FVG pipeline. Strategy
-            overrides are saved to the database. Core scan interval / batch settings apply at
-            runtime (mirror in <code>backend/.env</code> to survive restarts). TradingView webhook →
-            TradeDelivery is unchanged.
+            Strategy Engine profiles plug into a shared scanner. Each strategy has independent
+            settings — changing one never affects another. Live strategies (Liquidity Sweep Scalping
+            / Day Trading) are fully configurable; others show as coming soon. Selected live strategy
+            and overrides persist to the database. TradingView webhook → TradeDelivery is unchanged.
           </p>
         </div>
       </div>
@@ -235,42 +527,170 @@ export default function AdminScanner() {
       </section>
 
       <section className="admin-form-section">
+        <h4 className="admin-form-section-title">Market Regime Filter</h4>
+        <p className="admin-form-note">
+          Pre-scan gate (independent of strategy). When enabled, symbols with unsuitable conditions
+          are skipped before Liquidity Sweep / FVG analysis. Default: enabled with conservative
+          thresholds (weekend FX close, high-impact news, very low ATR). Persist with Save.
+        </p>
+        <div className="admin-form-grid">
+          <Field label="Enable Market Regime Filter" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={Boolean(form.marketRegime?.enabled)}
+              onChange={e => updateMarketRegime('enabled', e.target.checked)}
+            />
+          </Field>
+          <Field label="Minimum ATR (pips)">
+            <input
+              type="number"
+              min={0}
+              step={0.5}
+              value={form.marketRegime?.minAtrPips ?? 3}
+              onChange={e => updateMarketRegime('minAtrPips', Number(e.target.value))}
+            />
+          </Field>
+          <Field label="Maximum Spread (pips)">
+            <input
+              type="number"
+              min={0.1}
+              step={0.5}
+              value={form.marketRegime?.maxSpreadPips ?? 25}
+              onChange={e => updateMarketRegime('maxSpreadPips', Number(e.target.value))}
+            />
+          </Field>
+          <Field label="Minimum Volatility Score">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={form.marketRegime?.minVolatilityScore ?? 20}
+              onChange={e => updateMarketRegime('minVolatilityScore', Number(e.target.value))}
+            />
+          </Field>
+          <Field label="Minimum Regime Score">
+            <input
+              type="number"
+              min={0}
+              max={100}
+              value={form.marketRegime?.minRegimeScore ?? 40}
+              onChange={e => updateMarketRegime('minRegimeScore', Number(e.target.value))}
+            />
+          </Field>
+          <Field label="Avoid High Impact News" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={Boolean(form.marketRegime?.avoidHighImpactNews)}
+              onChange={e => updateMarketRegime('avoidHighImpactNews', e.target.checked)}
+            />
+          </Field>
+          <Field label="Avoid Low Liquidity Sessions" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={Boolean(form.marketRegime?.avoidLowLiquiditySessions)}
+              onChange={e => updateMarketRegime('avoidLowLiquiditySessions', e.target.checked)}
+            />
+          </Field>
+          <Field label="Allow Asian Session" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={form.marketRegime?.allowAsianSession !== false}
+              onChange={e => updateMarketRegime('allowAsianSession', e.target.checked)}
+            />
+          </Field>
+          <Field label="Allow London Session" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={form.marketRegime?.allowLondonSession !== false}
+              onChange={e => updateMarketRegime('allowLondonSession', e.target.checked)}
+            />
+          </Field>
+          <Field label="Allow New York Session" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={form.marketRegime?.allowNewYorkSession !== false}
+              onChange={e => updateMarketRegime('allowNewYorkSession', e.target.checked)}
+            />
+          </Field>
+          <Field label="Allow Session Overlap" className="admin-checkbox">
+            <input
+              type="checkbox"
+              checked={form.marketRegime?.allowSessionOverlap !== false}
+              onChange={e => updateMarketRegime('allowSessionOverlap', e.target.checked)}
+            />
+          </Field>
+        </div>
+      </section>
+
+      <section className="admin-form-section">
         <h4 className="admin-form-section-title">Strategies</h4>
+        <p className="admin-form-note">
+          Strategies → select a profile → configure settings. Enable toggles apply only to live
+          profiles. Prefer / active strategy for analysis:{' '}
+          <strong>{LIVE_STRATEGY_KEYS.has(form.activeStrategy) ? form.activeStrategy : activeStrategy}</strong>
+        </p>
+
         <div className="admin-strategy-toggle-row">
-          <label className="admin-strategy-chip">
-            <input
-              type="checkbox"
-              checked={Boolean(daytrading.enabled)}
-              onChange={e => updateStrategy('daytrading', { enabled: e.target.checked })}
-            />
-            <span>Day Trading</span>
-            <em>{daytrading.enabled ? 'On' : 'Off'}</em>
-          </label>
-          <label className="admin-strategy-chip">
-            <input
-              type="checkbox"
-              checked={Boolean(scalping.enabled)}
-              onChange={e => updateStrategy('scalping', { enabled: e.target.checked })}
-            />
-            <span>Scalping</span>
-            <em>{scalping.enabled ? 'On' : 'Off'}</em>
-          </label>
+          {strategyCatalog.map(entry => {
+            const isLive = entry.status === 'live' || LIVE_STRATEGY_KEYS.has(entry.key);
+            const enabled = isLive
+              ? Boolean(strategies[entry.key]?.enabled)
+              : false;
+            return (
+              <label
+                key={entry.key}
+                className={`admin-strategy-chip${isLive ? '' : ' is-stub'}`}
+                title={entry.description || entry.name}
+              >
+                {isLive ? (
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={e => updateStrategy(entry.key, { enabled: e.target.checked })}
+                  />
+                ) : (
+                  <input type="checkbox" checked={false} disabled readOnly />
+                )}
+                <span>{entry.name?.replace(/^Liquidity Sweep \+ Fair Value Gap \(/, '').replace(/\)$/, '') || entry.key}</span>
+                <em>{isLive ? (enabled ? 'On' : 'Off') : 'Soon'}</em>
+              </label>
+            );
+          })}
         </div>
 
         <div className="admin-strategy-tabs" role="tablist" aria-label="Strategy settings">
-          {STRATEGY_TABS.map(tab => (
+          {strategyCatalog.map(entry => (
             <button
-              key={tab.id}
+              key={entry.key}
               type="button"
               role="tab"
-              aria-selected={activeStrategy === tab.id}
-              className={`admin-strategy-tab${activeStrategy === tab.id ? ' is-active' : ''}`}
-              onClick={() => setActiveStrategy(tab.id)}
+              aria-selected={activeStrategy === entry.key}
+              className={`admin-strategy-tab${activeStrategy === entry.key ? ' is-active' : ''}${
+                entry.status === 'stub' ? ' is-stub' : ''
+              }`}
+              onClick={() => selectStrategyTab(entry.key)}
             >
-              {tab.label}
+              {entry.name?.includes('Scalping')
+                ? 'Scalping'
+                : entry.name?.includes('Day Trading')
+                  ? 'Day Trading'
+                  : entry.name?.replace(/ Strategy$/, '') || entry.key}
             </button>
           ))}
         </div>
+
+        {!selectedIsLive && selectedCatalogEntry && (
+          <div className="admin-strategy-panel admin-strategy-panel-stub" role="tabpanel">
+            <h5 className="admin-form-subsection-title">{selectedCatalogEntry.name}</h5>
+            <p className="admin-form-note">
+              {selectedCatalogEntry.description ||
+                'Coming soon — this Strategy Profile is registered but not yet implemented. Adding it later only requires a profile + registration; the Scanner Engine stays unchanged.'}
+            </p>
+            <div className="info-box admin-alert">
+              Status: disabled stub · version {selectedCatalogEntry.version || 1}
+            </div>
+          </div>
+        )}
 
         {activeStrategy === 'daytrading' && (
           <div className="admin-strategy-panel" role="tabpanel">
@@ -389,44 +809,17 @@ export default function AdminScanner() {
                   }
                 />
               </Field>
-              <Field label="TP model">
-                <select
-                  className="admin-input admin-select"
-                  value={daytrading.takeProfit?.model || 'institutional'}
-                  onChange={e => patchNested('daytrading', 'takeProfit', 'model', e.target.value)}
-                >
-                  {DAY_TP_MODELS.map(opt => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Min RR">
-                <input
-                  type="number"
-                  min={0}
-                  step={0.1}
-                  value={daytrading.takeProfit?.minRr ?? 2}
-                  onChange={e =>
-                    patchNested('daytrading', 'takeProfit', 'minRr', Number(e.target.value))
-                  }
-                />
-              </Field>
-              <Field label="RR multiples (comma-separated)">
-                <input
-                  type="text"
-                  value={listToCsv(daytrading.takeProfit?.rrMultiples)}
-                  onChange={e =>
-                    patchNested(
-                      'daytrading',
-                      'takeProfit',
-                      'rrMultiples',
-                      csvToList(e.target.value).map(Number)
-                    )
-                  }
-                />
-              </Field>
+              <LiquidityTargetScoringSection
+                strategyKey="daytrading"
+                takeProfit={daytrading.takeProfit}
+                atrCapsDefault={[1.5, 2.5, 3.5]}
+                maxAtrDefault={3.5}
+                tpModels={DAY_TP_MODELS}
+                showMinRr
+                scoreWeightDefaults={DAYTRADING_TP_SCORE_WEIGHTS}
+                patchNested={patchNested}
+                updateStrategy={updateStrategy}
+              />
               <Field label="Min FVG / ATR">
                 <input
                   type="number"
@@ -601,33 +994,16 @@ export default function AdminScanner() {
                   }
                 />
               </Field>
-              <Field label="TP model">
-                <select
-                  className="admin-input admin-select"
-                  value={scalping.takeProfit?.model || 'rr'}
-                  onChange={e => patchNested('scalping', 'takeProfit', 'model', e.target.value)}
-                >
-                  {SCALP_TP_MODELS.map(opt => (
-                    <option key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="RR multiples (comma-separated)">
-                <input
-                  type="text"
-                  value={listToCsv(scalping.takeProfit?.rrMultiples)}
-                  onChange={e =>
-                    patchNested(
-                      'scalping',
-                      'takeProfit',
-                      'rrMultiples',
-                      csvToList(e.target.value).map(Number)
-                    )
-                  }
-                />
-              </Field>
+              <LiquidityTargetScoringSection
+                strategyKey="scalping"
+                takeProfit={scalping.takeProfit}
+                atrCapsDefault={[0.7, 1.3, 2.0]}
+                maxAtrDefault={2.0}
+                tpModels={SCALP_TP_MODELS}
+                scoreWeightDefaults={SCALPING_TP_SCORE_WEIGHTS}
+                patchNested={patchNested}
+                updateStrategy={updateStrategy}
+              />
               <Field label="Min FVG / ATR">
                 <input
                   type="number"

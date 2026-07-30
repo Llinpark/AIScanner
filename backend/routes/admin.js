@@ -29,7 +29,7 @@ const { canManageScannerConfig } = require('../utils/adminAccess');
 
 const SUBSCRIPTION_TIERS = new Set(['basic', 'professional', 'premium']);
 const SUBSCRIPTION_STATUSES = new Set(['inactive', 'pending', 'active', 'cancelled']);
-const SUBSCRIPTION_BILLING_CYCLES = new Set(['weekly', 'monthly']);
+const SUBSCRIPTION_BILLING_CYCLES = new Set(['monthly', 'yearly']);
 
 function createAdminRouter({ io } = {}) {
   const router = express.Router();
@@ -442,6 +442,7 @@ function createAdminRouter({ io } = {}) {
           provider: payment.provider,
           amount: payment.amount,
           currency: payment.currency,
+          billingCycle: payment.billingCycle || 'monthly',
           status: payment.status,
           providerReference: payment.providerReference,
           failureReason: payment.failureReason,
@@ -556,7 +557,11 @@ function createAdminRouter({ io } = {}) {
       }
 
       let persisted = null;
-      if (req.body?.strategies) {
+      const shouldPersistStrategies =
+        Boolean(req.body?.strategies) ||
+        req.body?.activeStrategy !== undefined ||
+        Boolean(req.body?.marketRegime);
+      if (shouldPersistStrategies) {
         persisted = await persistStrategyConfig({
           updatedBy: req.user?.email || req.user?.id || null
         });
@@ -565,11 +570,13 @@ function createAdminRouter({ io } = {}) {
       await logAdminAction(req, {
         action: 'scanner.config.update',
         targetType: 'scanner',
-        summary: req.body?.strategies
-          ? 'Updated scanner + strategy runtime configuration'
+        summary: shouldPersistStrategies
+          ? 'Updated scanner + strategy/regime runtime configuration'
           : 'Updated scanner runtime configuration',
         metadata: {
           autoScanEnabled: updated.autoScanEnabled,
+          activeStrategy: updated.activeStrategy,
+          marketRegimeEnabled: updated.marketRegime?.enabled,
           strategies: updated.strategies
             ? {
                 scalpingEnabled: updated.strategies.scalping?.enabled,
@@ -582,12 +589,12 @@ function createAdminRouter({ io } = {}) {
 
       res.json({
         message: persisted
-          ? 'Scanner and strategy configuration saved.'
+          ? 'Scanner, strategy, and market regime configuration saved.'
           : 'Scanner configuration updated.',
         config: updated,
         status: MarketScannerService.getScannerStatus(),
         note: persisted
-          ? 'Strategy overrides are persisted in the database and survive restarts. Core scan settings still need backend/.env if you want them durable.'
+          ? 'Strategy and market regime overrides are persisted in the database and survive restarts. Core scan settings still need backend/.env if you want them durable.'
           : 'Runtime changes apply until backend restart unless mirrored in backend/.env.'
       });
     } catch (error) {

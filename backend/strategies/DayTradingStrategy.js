@@ -281,10 +281,13 @@ class DayTradingStrategy extends IStrategy {
       entry: entryResolved.entry,
       risk: stop.risk,
       candles: ltf,
-      pools
+      pools,
+      atrValue: atrVal,
+      symbol,
+      htfBias: biasResult?.bias || null
     });
 
-    const minRr = this.config.takeProfit?.minRr || 2;
+    const minRr = this.config.takeProfit?.minRr ?? 1.2;
     if (!(tps.rr >= minRr)) {
       return {
         signal: false,
@@ -415,10 +418,13 @@ class DayTradingStrategy extends IStrategy {
       entry: entryResolved.entry,
       risk: stop.risk,
       candles: ltf,
-      pools: pools || context.pools || []
+      pools: pools || context.pools || [],
+      atrValue: atr(ltf, this.config.displacement?.atrPeriod || 14),
+      symbol: symbol || context.symbol || '',
+      htfBias: biasResult?.bias || context.htfBias || null
     });
 
-    const minRr = this.config.takeProfit?.minRr || 2;
+    const minRr = this.config.takeProfit?.minRr ?? 1.2;
     if (!(tps.rr >= minRr)) {
       return { signal: false, stage: 'filtered', reason: 'insufficient_rr', pending: null };
     }

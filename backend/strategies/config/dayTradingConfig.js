@@ -1,10 +1,16 @@
 /**
  * Liquidity Sweep + Fair Value Gap (Day Trading) — all thresholds.
  * Override via DAYTRADING_* env keys.
+ * TP settings come from the Day Trading Strategy TP Profile (independent of scalping).
  */
+
+const { resolveTpProfile, DAY_TRADING_TP_PROFILE } = require('../profiles');
 
 const STRATEGY_ID = 'liquidity_sweep_fvg_daytrading';
 const STRATEGY_NAME = 'Liquidity Sweep + Fair Value Gap (Day Trading)';
+const STRATEGY_KEY = 'daytrading';
+
+const _dayTp = DAY_TRADING_TP_PROFILE;
 
 const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
   id: STRATEGY_ID,
@@ -86,18 +92,64 @@ const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
   },
 
   takeProfit: {
-    // institutional: TP1 nearest swing, TP2 PDH/PDL, TP3 PWH/PWL (TV maps 1–3)
-    // extras stay in diagnostics (TP4 liquidity, TP5–7 RR)
-    model: process.env.DAYTRADING_TP_MODEL || 'institutional',
-    rrMultiples: (process.env.DAYTRADING_TP_RR || '2,3,4')
+    profileId: _dayTp.profileId,
+    // smart_scoring (default) | dynamic_liquidity (alias) | institutional | rr | previous_swing | nearest_liquidity | manual_rr
+    model: process.env.DAYTRADING_TP_MODEL || _dayTp.model,
+    enableSmartTpScoring: process.env.DAYTRADING_SMART_TP !== 'false',
+    enableDynamicTp: process.env.DAYTRADING_DYNAMIC_TP !== 'false',
+    atrCaps: (process.env.DAYTRADING_TP_ATR_CAPS || _dayTp.atrCaps.join(','))
       .split(',')
       .map(Number)
       .filter(n => Number.isFinite(n) && n > 0),
-    manualRr: (process.env.DAYTRADING_MANUAL_RR || '2,3,4')
+    maxAtrMultiplier: Number(process.env.DAYTRADING_TP_MAX_ATR || _dayTp.maxAtrMultiplier),
+    maxTpDistancePips:
+      process.env.DAYTRADING_TP_MAX_PIPS !== undefined && process.env.DAYTRADING_TP_MAX_PIPS !== ''
+        ? Number(process.env.DAYTRADING_TP_MAX_PIPS) || null
+        : _dayTp.maxTpDistancePips,
+    minScore: Number(process.env.DAYTRADING_TP_MIN_SCORE || _dayTp.minScore),
+    scoreProximity: Number(process.env.DAYTRADING_TP_SCORE_PROXIMITY || _dayTp.scoreProximity),
+    allowRrFallback: process.env.DAYTRADING_TP_RR_FALLBACK !== 'false',
+    deferredLiquidityCategories: [..._dayTp.deferredLiquidityCategories],
+    scoreWeights: {
+      internal_liquidity: Number(
+        process.env.DAYTRADING_TP_W_INTERNAL || _dayTp.scoreWeights.internal_liquidity
+      ),
+      external_liquidity: Number(
+        process.env.DAYTRADING_TP_W_EXTERNAL || _dayTp.scoreWeights.external_liquidity
+      ),
+      equal_high_low: Number(process.env.DAYTRADING_TP_W_EQH || _dayTp.scoreWeights.equal_high_low),
+      untapped_fvg: Number(process.env.DAYTRADING_TP_W_FVG || _dayTp.scoreWeights.untapped_fvg),
+      swing_high_low: Number(
+        process.env.DAYTRADING_TP_W_SWING || _dayTp.scoreWeights.swing_high_low
+      ),
+      order_block: Number(process.env.DAYTRADING_TP_W_OB || _dayTp.scoreWeights.order_block),
+      breaker_block: Number(
+        process.env.DAYTRADING_TP_W_BREAKER || _dayTp.scoreWeights.breaker_block
+      ),
+      mitigation_block: Number(
+        process.env.DAYTRADING_TP_W_MITIGATION || _dayTp.scoreWeights.mitigation_block
+      ),
+      pdh_pdl: Number(process.env.DAYTRADING_TP_W_PD || _dayTp.scoreWeights.pdh_pdl),
+      pwh_pwl: Number(process.env.DAYTRADING_TP_W_PW || _dayTp.scoreWeights.pwh_pwl),
+      pmh_pml: Number(process.env.DAYTRADING_TP_W_PM || _dayTp.scoreWeights.pmh_pml),
+      atr_projection: Number(process.env.DAYTRADING_TP_W_ATR || _dayTp.scoreWeights.atr_projection),
+      rr_fallback: Number(process.env.DAYTRADING_TP_W_RR || _dayTp.scoreWeights.rr_fallback)
+    },
+    liquidityPriority: (
+      process.env.DAYTRADING_TP_LIQUIDITY_PRIORITY || _dayTp.liquidityPriority.join(',')
+    )
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean),
+    rrMultiples: (process.env.DAYTRADING_TP_RR || _dayTp.rrMultiples.join(','))
       .split(',')
       .map(Number)
       .filter(n => Number.isFinite(n) && n > 0),
-    minRr: Number(process.env.DAYTRADING_MIN_RR || 2)
+    manualRr: (process.env.DAYTRADING_MANUAL_RR || _dayTp.manualRr.join(','))
+      .split(',')
+      .map(Number)
+      .filter(n => Number.isFinite(n) && n > 0),
+    minRr: Number(process.env.DAYTRADING_MIN_RR || _dayTp.minRr)
   },
 
   confidence: {
@@ -137,6 +189,10 @@ const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
  * @param {Partial<typeof DEFAULT_DAYTRADING_CONFIG>} [overrides]
  */
 function resolveDayTradingConfig(overrides = {}) {
+  const takeProfit = resolveTpProfile(STRATEGY_KEY, {
+    ...DEFAULT_DAYTRADING_CONFIG.takeProfit,
+    ...(overrides.takeProfit || {})
+  });
   return {
     ...DEFAULT_DAYTRADING_CONFIG,
     ...overrides,
@@ -150,13 +206,7 @@ function resolveDayTradingConfig(overrides = {}) {
     fvg: { ...DEFAULT_DAYTRADING_CONFIG.fvg, ...(overrides.fvg || {}) },
     entry: { ...DEFAULT_DAYTRADING_CONFIG.entry, ...(overrides.entry || {}) },
     stop: { ...DEFAULT_DAYTRADING_CONFIG.stop, ...(overrides.stop || {}) },
-    takeProfit: {
-      ...DEFAULT_DAYTRADING_CONFIG.takeProfit,
-      ...(overrides.takeProfit || {}),
-      rrMultiples:
-        overrides.takeProfit?.rrMultiples || DEFAULT_DAYTRADING_CONFIG.takeProfit.rrMultiples,
-      manualRr: overrides.takeProfit?.manualRr || DEFAULT_DAYTRADING_CONFIG.takeProfit.manualRr
-    },
+    takeProfit,
     confidence: {
       ...DEFAULT_DAYTRADING_CONFIG.confidence,
       ...(overrides.confidence || {}),
@@ -173,6 +223,7 @@ function resolveDayTradingConfig(overrides = {}) {
 module.exports = {
   STRATEGY_ID,
   STRATEGY_NAME,
+  STRATEGY_KEY,
   DEFAULT_DAYTRADING_CONFIG,
   resolveDayTradingConfig
 };
