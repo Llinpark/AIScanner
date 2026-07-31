@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getSharedSocket } from '../services/marketDataSocket';
 import { normalizeInterval, symbolsMatch } from '../utils/chartLevels';
-import { attachActivation, detectTradeOutcome } from '../utils/tradeLevelLifecycle';
+import {
+  attachActivation,
+  detectTradeClose,
+  detectTradeOutcome,
+  isTerminalOutcome
+} from '../utils/tradeLevelLifecycle';
 
 /**
  * Chart overlays come from TradingView webhook signals (props + socket), never from
  * live-provider recalculation /scanner/analyze.
+ * Overlays stay until TP3 / SL / expired / cancelled — never clear on TP1/TP2 alone.
  */
 export default function useLiveChartLevels({
   symbol,
@@ -40,7 +46,7 @@ export default function useLiveChartLevels({
     if (!matchingSignals.length) return null;
 
     const open = matchingSignals.find(s => {
-      if (s.outcome && s.outcome !== 'pending') return false;
+      if (isTerminalOutcome(s.outcome)) return false;
       if (s.tradeStatus && !['open', 'partial'].includes(s.tradeStatus)) return false;
       return true;
     });
@@ -57,7 +63,13 @@ export default function useLiveChartLevels({
     if (!symbol || !overlaySignals?.length) return [];
     const normalizedInterval = normalizeInterval(interval);
     const primaryId = matchingOverlay
-      ? String(matchingOverlay._id || matchingOverlay.id || matchingOverlay.signalId || '')
+      ? String(
+          matchingOverlay.signalUuid ||
+            matchingOverlay._id ||
+            matchingOverlay.id ||
+            matchingOverlay.signalId ||
+            ''
+        )
       : '';
 
     return overlaySignals
@@ -67,7 +79,7 @@ export default function useLiveChartLevels({
         if (alertType !== 'entry' && alertType !== 'signal') return false;
         if (s.timeframe && normalizeInterval(s.timeframe) !== normalizedInterval) return false;
         if (s.entry == null || (s.stop_loss == null && s.stop_loss_1 == null)) return false;
-        const id = String(s._id || s.id || s.signalId || '');
+        const id = String(s.signalUuid || s._id || s.id || s.signalId || '');
         if (primaryId && id && id === primaryId) return false;
         return true;
       })
@@ -86,23 +98,54 @@ export default function useLiveChartLevels({
       setStage(null);
       return;
     }
+    if (isTerminalOutcome(matchingOverlay.outcome)) {
+      setLiveSignal(null);
+      setStage('closed');
+      setClosedOutcome(matchingOverlay.outcome);
+      return;
+    }
     setLiveSignal(
       matchingOverlay.activatedAtBarTime
         ? matchingOverlay
         : attachActivation(matchingOverlay, Date.now())
     );
-    setStage(matchingOverlay.tradeStatus === 'open' || !matchingOverlay.outcome ? 'active_trade' : 'entry');
+    const stageFromOutcome =
+      matchingOverlay.outcome === 'tp2'
+        ? 'tp2'
+        : matchingOverlay.outcome === 'tp1'
+          ? 'tp1'
+          : matchingOverlay.tradeStatus === 'open' || !matchingOverlay.outcome
+            ? 'active_trade'
+            : 'entry';
+    setStage(stageFromOutcome);
   }, [subscribed, matchingOverlay, symbol, interval]);
 
   useEffect(() => {
     if (!subscribed || !symbol || !candles.length || !liveSignalRef.current) return undefined;
 
-    const hit = detectTradeOutcome(liveSignalRef.current, candles);
-    if (!hit) return undefined;
+    const closeHit = detectTradeClose(liveSignalRef.current, candles);
+    if (closeHit) {
+      setLiveSignal(null);
+      setStage('closed');
+      setClosedOutcome(closeHit.outcome);
+      return undefined;
+    }
 
-    setLiveSignal(null);
-    setStage('closed');
-    setClosedOutcome(hit.outcome);
+    const partial = detectTradeOutcome(liveSignalRef.current, candles);
+    if (partial && !partial.terminal) {
+      setLiveSignal(prev =>
+        prev
+          ? {
+              ...prev,
+              outcome: partial.outcome,
+              outcomeR: partial.outcomeR,
+              tradeStatus: 'partial',
+              lifecycleStage: partial.outcome === 'tp2' ? 'TP2' : 'TP1'
+            }
+          : prev
+      );
+      setStage(partial.outcome);
+    }
     return undefined;
   }, [subscribed, symbol, candles]);
 
@@ -123,11 +166,28 @@ export default function useLiveChartLevels({
 
     const handleOutcome = payload => {
       if (!payload || !symbolsMatch(payload.symbol, symbol)) return;
-      if (payload.outcome && payload.outcome !== 'pending') {
+      if (!payload.outcome || payload.outcome === 'pending') return;
+
+      if (isTerminalOutcome(payload.outcome)) {
         setLiveSignal(null);
         setStage('closed');
         setClosedOutcome(payload.outcome);
+        return;
       }
+
+      // TP1 / TP2 — keep overlay, advance stage only.
+      setLiveSignal(prev =>
+        prev
+          ? {
+              ...prev,
+              outcome: payload.outcome,
+              outcomeR: payload.outcomeR,
+              tradeStatus: payload.tradeStatus || 'partial',
+              lifecycleStage: payload.lifecycleStage
+            }
+          : prev
+      );
+      setStage(payload.outcome);
     };
 
     socket.on('signal:update', handleSignalUpdate);

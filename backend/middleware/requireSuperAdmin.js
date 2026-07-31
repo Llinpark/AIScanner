@@ -5,7 +5,7 @@ function requireSuperAdmin(req, res, next) {
     return res.status(401).json({ message: 'Authentication required.' });
   }
   if (!canManageScannerConfig(req.user)) {
-    return res.status(403).json({ message: 'Super admin access required for scanner configuration.' });
+    return res.status(403).json({ message: 'Super admin access required.' });
   }
   next();
 }

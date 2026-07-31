@@ -29,9 +29,11 @@ describe('TP Profile registry', () => {
     assert.equal(scalp.profileId, 'scalping');
     assert.equal(day.profileId, 'daytrading');
     assert.equal(scalp.maxTpDistancePips, 30);
-    assert.equal(day.maxTpDistancePips, 100);
-    assert.deepEqual([...scalp.atrCaps], [0.7, 1.3, 2.0]);
-    assert.deepEqual([...day.atrCaps], [1.5, 2.5, 3.5]);
+    assert.equal(day.maxTpDistancePips, 150);
+    assert.deepEqual([...scalp.atrCaps], [0.8, 1.4, 2.0]);
+    assert.deepEqual([...day.atrCaps], [1.0, 2.0, 3.5]);
+    assert.equal(scalp.minScore, 60);
+    assert.equal(day.minScore, 70);
     assert.notDeepEqual(scalp.scoreWeights, day.scoreWeights);
     assert.ok(scalp.deferredLiquidityCategories.includes('pwh_pwl'));
     assert.equal(day.deferredLiquidityCategories.length, 0);
@@ -91,7 +93,7 @@ describe('Strategy config independence via TP profiles', () => {
     const day = getResolvedDaytradingConfig();
     assert.equal(scalp.takeProfit.maxTpDistancePips, 15);
     assert.equal(day.takeProfit.maxTpDistancePips, 100);
-    assert.deepEqual(day.takeProfit.atrCaps, [1.5, 2.5, 3.5]);
+    assert.deepEqual(day.takeProfit.atrCaps, [1.0, 2.0, 3.5]);
     assert.notEqual(scalp.takeProfit.profileId, day.takeProfit.profileId);
   });
 

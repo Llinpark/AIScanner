@@ -19,6 +19,7 @@ import AdminHub from './admin/AdminHub';
 import SeoHead from './components/SeoHead';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchSignals } from './services/api';
+import { getSharedSocket } from './services/marketDataSocket';
 import { isInsightsSignal } from './utils/insightsSignal';
 import { storeReferralCode } from './utils/referralStorage';
 import { pageFromPath, pathForPage } from './seo/routes';
@@ -56,17 +57,40 @@ function AppContent() {
   }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    const socket = getSharedSocket();
+    const onNotification = payload => {
+      if (!payload) return;
+      if (payload.type === 'subscription_activated') {
+        setPaymentNotice(payload.message || 'Subscription Activated');
+        refreshSubscription().catch(() => {});
+      } else if (payload.type === 'subscription_expired' || payload.type === 'payment_rejected') {
+        setPaymentNotice(payload.message || payload.title || 'Subscription update');
+        refreshSubscription().catch(() => {});
+      }
+    };
+    const onSubscriptionUpdated = () => {
+      refreshSubscription().catch(() => {});
+    };
+    socket.on('notification', onNotification);
+    socket.on('subscription:updated', onSubscriptionUpdated);
+    return () => {
+      socket.off('notification', onNotification);
+      socket.off('subscription:updated', onSubscriptionUpdated);
+    };
+  }, [isAuthenticated, refreshSubscription]);
+
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const verifyToken = params.get('verify');
     const resetToken = params.get('reset');
     const refCode = params.get('ref');
     const paypalStatus = params.get('paypal');
     const binanceStatus = params.get('binance');
-    const paystackStatus = params.get('paystack');
 
     if (refCode) {
       storeReferralCode(refCode);
-      if (!verifyToken && !resetToken && !paypalStatus && !binanceStatus && !paystackStatus) {
+      if (!verifyToken && !resetToken && !paypalStatus && !binanceStatus) {
         navigateTo('signup', {}, { replace: true });
       } else {
         window.history.replaceState(
@@ -84,24 +108,6 @@ function AppContent() {
 
     if (resetToken) {
       navigateTo('reset-password', { token: resetToken }, { replace: true });
-      return;
-    }
-
-    if (paystackStatus) {
-      if (paystackStatus === 'success') {
-        refreshSubscription().then(() => {
-          setPaymentNotice('Paystack payment successful! Your subscription is now active.');
-          navigateTo('pricing', {}, { replace: true });
-        });
-      } else if (paystackStatus === 'cancelled') {
-        setPaymentNotice('Paystack payment was cancelled.');
-        navigateTo('pricing', {}, { replace: true });
-      } else if (paystackStatus === 'mock') {
-        navigateTo('pricing', {}, { replace: true });
-      } else if (paystackStatus === 'error') {
-        setPaymentNotice(`Paystack payment failed: ${params.get('message') || 'Unknown error'}`);
-        navigateTo('pricing', {}, { replace: true });
-      }
       return;
     }
 

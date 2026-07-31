@@ -59,9 +59,9 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const applySession = (_token, nextUser) => {
+  const applySession = useCallback((_token, nextUser) => {
     setUser(nextUser || null);
-  };
+  }, []);
 
   const updateUser = nextUser => {
     setUser(nextUser);

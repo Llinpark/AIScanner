@@ -5,6 +5,7 @@ const ALL_TABS = [
   { id: 'users', label: 'Users' },
   { id: 'signals', label: 'Signals' },
   { id: 'scanner', label: 'Scanner', superAdminOnly: true },
+  { id: 'activations', label: 'Activations', superAdminOnly: true },
   { id: 'payments', label: 'Payments' },
   { id: 'referrals', label: 'Referrals' },
   { id: 'audit', label: 'Audit' }

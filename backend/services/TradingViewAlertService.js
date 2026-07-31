@@ -14,9 +14,9 @@ const {
   validateKachingEntrySignal,
   formatKachingAlertMessage
 } = require('../utils/kachingSignalLevels');
-const SignalOutcomeService = require('../services/SignalOutcomeService');
 const SignalEnrichmentService = require('../services/SignalEnrichmentService');
 const TradeDeliveryService = require('../services/TradeDeliveryService');
+const TradeLifecycleService = require('../services/TradeLifecycleService');
 const { normalizeSymbol } = require('../config/symbols');
 
 function isDbConnected() {
@@ -33,6 +33,8 @@ const ALERT_TYPES = new Set([
   'take_profit_1',
   'take_profit_2',
   'take_profit_3',
+  'expired',
+  'cancelled',
   'signal'
 ]);
 
@@ -42,8 +44,13 @@ function normalizeAlertType(value) {
   if (raw === 'tp' || raw === 'tp1') return 'take_profit_1';
   if (raw === 'tp2') return 'take_profit_2';
   if (raw === 'tp3') return 'take_profit_3';
+  if (raw === 'expire' || raw === 'expiry' || raw === 'candle_expiry') return 'expired';
+  if (raw === 'cancel' || raw === 'canceled') return 'cancelled';
   return ALERT_TYPES.has(raw) ? raw : 'signal';
 }
+
+const isForbiddenResetPayload = TradeLifecycleService.isForbiddenResetPayload;
+const logSignalEvent = TradeLifecycleService.logLifecycleEvent;
 
 function normalizeTradingViewUsername(value) {
   return String(value || '')
@@ -189,10 +196,15 @@ async function saveSignal(signalData, inMemorySignals) {
 
   try {
     const signal = new Signal(signalData);
-    return signal.save();
+    // Must await — otherwise ValidationError rejects escape the try/catch.
+    const saved = await signal.save();
+    if (Array.isArray(inMemorySignals)) {
+      inMemorySignals.unshift(saved.toObject ? saved.toObject() : saved);
+    }
+    return saved;
   } catch (error) {
-    console.warn('[Alerts] saveSignal fallback:', error.message);
-    return { ...signalData, createdAt: new Date(), _id: null };
+    console.error('[Alerts] saveSignal failed:', error.message);
+    throw error;
   }
 }
 
@@ -294,7 +306,23 @@ function buildSignalData(body) {
     body.patternLabel ||
     body.pattern_label ||
     null;
-  const timeframe = body.timeframe || body.interval || body.tf || '1h';
+  const timeframe = TradeLifecycleService.normalizeTradeTimeframe(
+    body.timeframe || body.interval || body.tf || '1h'
+  );
+  const permanentId =
+    body.signalUuid || body.signalId || body.signal_id || body.signalGroupId || undefined;
+  const expiryBars = Number.isFinite(Number(body.expiryBars ?? body.expiry_bars))
+    ? Math.floor(Number(body.expiryBars ?? body.expiry_bars))
+    : undefined;
+  const enableTradeExpiry =
+    body.enableTradeExpiry === false ||
+    body.enableTradeExpiry === 'false' ||
+    body.enable_trade_expiry === false ||
+    body.enable_trade_expiry === 'false'
+      ? false
+      : body.enableTradeExpiry != null || body.enable_trade_expiry != null
+        ? true
+        : undefined;
 
   const signalData = {
     symbol: normalizeSymbol(body.symbol || body.ticker || 'UNKNOWN'),
@@ -310,6 +338,12 @@ function buildSignalData(body) {
     strategy: strategyName,
     strategyName,
     timeframe,
+    signalUuid: permanentId,
+    signalId: permanentId,
+    expiryBars,
+    enableTradeExpiry,
+    expiresAt: body.expiresAt || body.expires_at || undefined,
+    closedReason: body.closedReason || body.closed_reason || undefined,
     signalSource: 'tradingview',
     source: 'tradingview',
     origin: 'tradingview_webhook',
@@ -328,7 +362,10 @@ function buildSignalData(body) {
     signalData.patternLabel = 'Pattern B: Breakaway Gap';
   }
 
-  validateKachingEntrySignal(signalData);
+  // Outcome / expiry alerts carry levels for audit but may not need full entry validation.
+  if (TradeLifecycleService.isEntryAlert(signalData.alertType)) {
+    validateKachingEntrySignal(signalData);
+  }
 
   return signalData;
 }
@@ -337,16 +374,49 @@ function buildSignalData(body) {
  * TradingView webhook / inject path — validate, enrich, and publish a Signal.
  * Delivery (Socket.IO / email / Telegram / MT5) is owned by TradeDeliveryService.
  * Never fetches candles, never runs indicator / liquidity / FVG / SMC pipelines.
+ * Never accepts No-Signal / active=false / delete resets that would wipe a live trade.
  */
 async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
   const body = parseWebhookBody(rawBody);
+
+  if (isForbiddenResetPayload(body)) {
+    logSignalEvent('reject_reset', {
+      symbol: body.symbol || body.ticker,
+      timeframe: body.timeframe || body.interval || body.tf,
+      alertType: body.alertType || body.type,
+      reason: 'forbidden_no_signal_or_reset'
+    });
+    return {
+      mode: 'rejected',
+      publishOnly: true,
+      rejected: true,
+      reason: 'forbidden_reset_payload',
+      message:
+        'No-Signal / active=false / delete resets are rejected. Active trades persist until TP3/SL/expiry/cancel.'
+    };
+  }
+
   const baseData = buildSignalData(body);
 
-  const { signalData, updatedEntry } = await SignalOutcomeService.processSignalLifecycle(
+  // Single source of truth: registry + DB + state machine (symbol+timeframe keyed).
+  const lifecycle = await TradeLifecycleService.processIncomingTradeAlert(
     baseData,
     inMemorySignals,
     { fromTradingViewWebhook: true, skipMarketData: true }
   );
+
+  if (lifecycle.rejected) {
+    return {
+      mode: 'rejected',
+      publishOnly: true,
+      rejected: true,
+      reason: lifecycle.reason,
+      activeSignal: lifecycle.activeSignal,
+      message: lifecycle.message
+    };
+  }
+
+  const { signalData, updatedEntry } = lifecycle;
 
   if (updatedEntry) {
     io.emit('signal:outcome', updatedEntry);
@@ -357,8 +427,18 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
     skipMarketData: true
   });
 
+  logSignalEvent('broadcast', {
+    symbol: signalData.symbol,
+    timeframe: signalData.timeframe,
+    alertType: signalData.alertType,
+    signalUuid: signalData.signalUuid || signalData.signalId || signalData.signalGroupId,
+    lifecycleStage: signalData.lifecycleStage,
+    reason: `delivered=${delivery.delivered}`
+  });
+
   console.log(
     `[TV Webhook] Published ${signalData.alertType} ${signalData.symbol} ` +
+      `tf=${signalData.timeframe || '-'} uuid=${signalData.signalUuid || signalData.signalId || '-'} ` +
       `(publish-only, delivered=${delivery.delivered}, skipped=${delivery.skippedByEntitlement || 0}, no market-data fetch)`
   );
 
@@ -366,6 +446,7 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
     mode: 'broadcast',
     publishOnly: true,
     outcomeLinked: Boolean(updatedEntry),
+    signalUuid: signalData.signalUuid || signalData.signalId || signalData.signalGroupId,
     ...delivery
   };
 }
@@ -395,5 +476,6 @@ module.exports = {
   processTradingViewWebhook,
   publishTradingViewAlert,
   buildSignalData,
+  isForbiddenResetPayload,
   KACHING_ALERT_NAMES
 };

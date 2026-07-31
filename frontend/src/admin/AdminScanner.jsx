@@ -1,6 +1,18 @@
 import { useEffect, useState } from 'react';
 import { adminApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import {
+  OFFICIAL_SCALPING_RESTORE,
+  SCALPING_TP_SCORE_WEIGHTS,
+  SCALPING_CONFIDENCE_WEIGHTS,
+  normalizeConfidenceWeights,
+  sumConfidenceWeights
+} from '../constants/scalpingDefaults';
+import {
+  OFFICIAL_DAYTRADING_RESTORE,
+  DAYTRADING_TP_SCORE_WEIGHTS,
+  DAYTRADING_CONFIDENCE_WEIGHTS
+} from '../constants/dayTradingDefaults';
 
 const LIVE_STRATEGY_KEYS = new Set(['daytrading', 'scalping']);
 
@@ -87,39 +99,31 @@ const DEFAULT_TP_SCORE_WEIGHTS = {
   rr_fallback: 5
 };
 
-/** Scalping Strategy TP Profile weight defaults (admin UI fallback). */
-const SCALPING_TP_SCORE_WEIGHTS = {
-  internal_liquidity: 50,
-  equal_high_low: 45,
-  untapped_fvg: 40,
-  swing_high_low: 35,
-  external_liquidity: 25,
-  order_block: 25,
-  breaker_block: 22,
-  mitigation_block: 22,
-  pdh_pdl: 18,
-  pwh_pwl: 8,
-  pmh_pml: 5,
-  atr_projection: 8,
-  rr_fallback: 5
+const DEFAULT_MAX_SPREAD_BY_CLASS = {
+  forex: 2.5,
+  gold: 5,
+  indices: 10,
+  metal: 5,
+  crypto: 25,
+  other: 10
 };
 
-/** Day Trading Strategy TP Profile weight defaults (admin UI fallback). */
-const DAYTRADING_TP_SCORE_WEIGHTS = {
-  pdh_pdl: 48,
-  pwh_pwl: 44,
-  external_liquidity: 42,
-  swing_high_low: 40,
-  equal_high_low: 32,
-  untapped_fvg: 30,
-  internal_liquidity: 28,
-  order_block: 25,
-  breaker_block: 22,
-  mitigation_block: 22,
-  pmh_pml: 28,
-  atr_projection: 8,
-  rr_fallback: 5
-};
+const SPREAD_CLASS_FIELDS = [
+  { key: 'forex', label: 'Forex max spread (pips)' },
+  { key: 'gold', label: 'Gold max spread (pips)' },
+  { key: 'indices', label: 'Indices max spread (pips)' }
+];
+
+const SPREAD_OVERRIDE_SYMBOLS = [
+  'EUR/USD',
+  'GBP/USD',
+  'USD/JPY',
+  'AUD/USD',
+  'USD/CAD',
+  'XAU/USD',
+  'US30',
+  'US100'
+];
 
 const TP_SCORE_WEIGHT_FIELDS = [
   { key: 'internal_liquidity', label: 'Weight for Internal Liquidity' },
@@ -136,6 +140,55 @@ const TP_SCORE_WEIGHT_FIELDS = [
   { key: 'atr_projection', label: 'Weight for ATR Projection' },
   { key: 'rr_fallback', label: 'Weight for Risk:Reward fallback' }
 ];
+
+const SCALPING_WEIGHT_KEYS = SCALPING_WEIGHT_FIELDS.map(f => f.key);
+const DAYTRADING_WEIGHT_KEYS = DAYTRADING_WEIGHT_FIELDS.map(f => f.key);
+
+function cloneDefaults(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function validateNonNegative(label, value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return `${label} must be a non-negative number.`;
+  }
+  return null;
+}
+
+function validateStrategyForm(strategyKey, strategy) {
+  if (!strategy) return null;
+  const prefix = strategyKey === 'scalping' ? 'Scalping' : 'Day Trading';
+  const checks = [
+    validateNonNegative(`${prefix} confidence threshold`, strategy.confidence?.threshold),
+    validateNonNegative(`${prefix} SL buffer`, strategy.stop?.bufferAtrRatio),
+    validateNonNegative(`${prefix} min ATR`, strategy.filters?.minAtrPips),
+    validateNonNegative(`${prefix} min FVG/ATR`, strategy.fvg?.minGapToAtrRatio),
+    validateNonNegative(`${prefix} max ATR multiplier`, strategy.takeProfit?.maxAtrMultiplier),
+    validateNonNegative(`${prefix} min TP score`, strategy.takeProfit?.minScore)
+  ];
+  for (const err of checks) {
+    if (err) return err;
+  }
+  const spreads = strategy.filters?.maxSpreadPipsByClass || {};
+  for (const [cls, val] of Object.entries(spreads)) {
+    const err = validateNonNegative(`${prefix} ${cls} max spread`, val);
+    if (err) return err;
+  }
+  const confKeys = strategyKey === 'scalping' ? SCALPING_WEIGHT_KEYS : DAYTRADING_WEIGHT_KEYS;
+  const weights = strategy.confidence?.weights || {};
+  for (const key of confKeys) {
+    const err = validateNonNegative(`${prefix} weight ${key}`, weights[key] ?? 0);
+    if (err) return err;
+  }
+  const sum = sumConfidenceWeights(
+    Object.fromEntries(confKeys.map(k => [k, weights[k] ?? 0]))
+  );
+  if (sum !== 100) {
+    return `${prefix} confidence weights must total 100 (currently ${sum}).`;
+  }
+  return null;
+}
 
 function isSmartTpEnabled(tp) {
   if (tp?.enableSmartTpScoring === false) return false;
@@ -160,6 +213,70 @@ function csvToList(value) {
     .filter(Boolean);
 }
 
+/** Decimal-friendly ATR cap field — keeps draft text so "1." / "0.7" can be typed. */
+function AtrCapInput({ label, value, onCommit }) {
+  const [draft, setDraft] = useState(() =>
+    Number.isFinite(Number(value)) ? String(value) : ''
+  );
+
+  useEffect(() => {
+    if (Number.isFinite(Number(value))) {
+      setDraft(String(value));
+    }
+  }, [value]);
+
+  const commit = raw => {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) {
+      onCommit(n);
+      setDraft(String(n));
+      return;
+    }
+    setDraft(Number.isFinite(Number(value)) ? String(value) : '');
+  };
+
+  return (
+    <Field label={label}>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        onChange={e => {
+          const raw = e.target.value.trim();
+          if (raw !== '' && !/^\d*\.?\d*$/.test(raw)) return;
+          setDraft(raw);
+          const n = Number(raw);
+          if (Number.isFinite(n) && n > 0 && !raw.endsWith('.')) {
+            onCommit(n);
+          }
+        }}
+        onBlur={() => commit(draft)}
+      />
+    </Field>
+  );
+}
+
+function AtrCapsEditors({ atrCaps, atrCapsDefault, onChange }) {
+  const caps =
+    Array.isArray(atrCaps) && atrCaps.length >= 3
+      ? atrCaps.slice(0, 3).map(Number)
+      : [...atrCapsDefault];
+
+  const setAt = (index, nextValue) => {
+    const next = [...caps];
+    next[index] = nextValue;
+    onChange(next);
+  };
+
+  return (
+    <>
+      <AtrCapInput label="ATR cap TP1" value={caps[0]} onCommit={v => setAt(0, v)} />
+      <AtrCapInput label="ATR cap TP2" value={caps[1]} onCommit={v => setAt(1, v)} />
+      <AtrCapInput label="ATR cap TP3" value={caps[2]} onCommit={v => setAt(2, v)} />
+    </>
+  );
+}
+
 function Field({ label, children, className = '' }) {
   if (className.includes('admin-checkbox')) {
     return (
@@ -174,6 +291,46 @@ function Field({ label, children, className = '' }) {
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function MaxSpreadFields({ byClass = {}, bySymbol = {}, onClassChange, onSymbolChange }) {
+  return (
+    <>
+      <p className="admin-form-note" style={{ gridColumn: '1 / -1' }}>
+        Defaults by asset class (Forex 2.5 / Gold 5 / Indices 10). Each symbol uses its class
+        limit unless you set a per-symbol override below.
+      </p>
+      {SPREAD_CLASS_FIELDS.map(field => (
+        <Field key={field.key} label={field.label}>
+          <input
+            type="number"
+            min={0.1}
+            step={0.1}
+            value={byClass?.[field.key] ?? DEFAULT_MAX_SPREAD_BY_CLASS[field.key]}
+            onChange={e => onClassChange(field.key, Number(e.target.value))}
+          />
+        </Field>
+      ))}
+      <fieldset className="admin-weight-grid" style={{ gridColumn: '1 / -1' }}>
+        <legend>Per-symbol max spread overrides (optional)</legend>
+        {SPREAD_OVERRIDE_SYMBOLS.map(symbol => (
+          <Field key={symbol} label={symbol}>
+            <input
+              type="number"
+              min={0.1}
+              step={0.1}
+              placeholder="class default"
+              value={bySymbol?.[symbol] ?? ''}
+              onChange={e => {
+                const raw = e.target.value;
+                onSymbolChange(symbol, raw === '' ? null : Number(raw));
+              }}
+            />
+          </Field>
+        ))}
+      </fieldset>
+    </>
   );
 }
 
@@ -292,13 +449,11 @@ function LiquidityTargetScoringSection({
           onChange={e => setTp('maxAtrMultiplier', Number(e.target.value))}
         />
       </Field>
-      <Field label="ATR caps TP1,TP2,TP3">
-        <input
-          type="text"
-          value={listToCsv(takeProfit?.atrCaps || atrCapsDefault)}
-          onChange={e => setTp('atrCaps', csvToList(e.target.value).map(Number))}
-        />
-      </Field>
+      <AtrCapsEditors
+        atrCaps={takeProfit?.atrCaps}
+        atrCapsDefault={atrCapsDefault}
+        onChange={next => setTp('atrCaps', next)}
+      />
       <Field label="Maximum TP distance (pips)">
         <input
           type="number"
@@ -406,6 +561,62 @@ export default function AdminScanner() {
     }));
   };
 
+  const updateMarketRegimeSpreadClass = (assetClass, value) => {
+    setForm(prev => ({
+      ...prev,
+      marketRegime: {
+        ...(prev.marketRegime || {}),
+        maxSpreadPipsByClass: {
+          ...(prev.marketRegime?.maxSpreadPipsByClass || {}),
+          [assetClass]: value
+        }
+      }
+    }));
+  };
+
+  const updateMarketRegimeSpreadSymbol = (symbol, value) => {
+    setForm(prev => {
+      const nextSymbols = { ...(prev.marketRegime?.maxSpreadPipsBySymbol || {}) };
+      if (value == null || Number.isNaN(value)) delete nextSymbols[symbol];
+      else nextSymbols[symbol] = value;
+      return {
+        ...prev,
+        marketRegime: {
+          ...(prev.marketRegime || {}),
+          maxSpreadPipsBySymbol: nextSymbols
+        }
+      };
+    });
+  };
+
+  const updateFilterSpreadClass = (strategyKey, assetClass, value) => {
+    updateStrategy(strategyKey, current => ({
+      ...current,
+      filters: {
+        ...(current.filters || {}),
+        maxSpreadPipsByClass: {
+          ...(current.filters?.maxSpreadPipsByClass || {}),
+          [assetClass]: value
+        }
+      }
+    }));
+  };
+
+  const updateFilterSpreadSymbol = (strategyKey, symbol, value) => {
+    updateStrategy(strategyKey, current => {
+      const nextSymbols = { ...(current.filters?.maxSpreadPipsBySymbol || {}) };
+      if (value == null || Number.isNaN(value)) delete nextSymbols[symbol];
+      else nextSymbols[symbol] = value;
+      return {
+        ...current,
+        filters: {
+          ...(current.filters || {}),
+          maxSpreadPipsBySymbol: nextSymbols
+        }
+      };
+    });
+  };
+
   const selectStrategyTab = strategyKey => {
     setActiveStrategy(strategyKey);
     // Only live strategies drive analyze prefer / persisted activeStrategy
@@ -439,6 +650,76 @@ export default function AdminScanner() {
     }));
   };
 
+  const handleRestoreScalpingDefaults = () => {
+    const ok = window.confirm(
+      'Restore official Scalping defaults?\n\nThis resets Core scan settings, Market Regime, and Scalping strategy fields in the form. Click Save afterward to apply globally.'
+    );
+    if (!ok || !form) return;
+    const pack = OFFICIAL_SCALPING_RESTORE;
+    const strategy = cloneDefaults(pack.strategy);
+    strategy.confidence = {
+      ...strategy.confidence,
+      weights: normalizeConfidenceWeights(
+        strategy.confidence?.weights || SCALPING_CONFIDENCE_WEIGHTS,
+        SCALPING_WEIGHT_KEYS
+      )
+    };
+    setActiveStrategy('scalping');
+    setForm(prev => ({
+      ...prev,
+      ...cloneDefaults(pack.core),
+      activeStrategy: 'scalping',
+      marketRegime: {
+        ...(prev.marketRegime || {}),
+        ...cloneDefaults(pack.marketRegime)
+      },
+      strategies: {
+        ...prev.strategies,
+        scalping: {
+          ...(prev.strategies?.scalping || {}),
+          ...strategy,
+          id: prev.strategies?.scalping?.id,
+          name: prev.strategies?.scalping?.name || strategy.name
+        }
+      }
+    }));
+    setError('');
+    setMessage('Scalping defaults restored — click Save to apply globally.');
+  };
+
+  const handleRestoreDayTradingDefaults = () => {
+    const ok = window.confirm(
+      'Restore official Day Trading defaults?\n\nThis resets Market Regime (day-trading pack) and Day Trading strategy fields in the form. Click Save afterward to apply globally.'
+    );
+    if (!ok || !form) return;
+    const pack = OFFICIAL_DAYTRADING_RESTORE;
+    const strategy = cloneDefaults(pack.strategy);
+    strategy.confidence = {
+      ...strategy.confidence,
+      weights: { ...DAYTRADING_CONFIDENCE_WEIGHTS }
+    };
+    setActiveStrategy('daytrading');
+    setForm(prev => ({
+      ...prev,
+      activeStrategy: 'daytrading',
+      marketRegime: {
+        ...(prev.marketRegime || {}),
+        ...cloneDefaults(pack.marketRegime)
+      },
+      strategies: {
+        ...prev.strategies,
+        daytrading: {
+          ...(prev.strategies?.daytrading || {}),
+          ...strategy,
+          id: prev.strategies?.daytrading?.id,
+          name: prev.strategies?.daytrading?.name || strategy.name
+        }
+      }
+    }));
+    setError('');
+    setMessage('Day Trading defaults restored — click Save to apply globally.');
+  };
+
   const handleSave = async event => {
     event.preventDefault();
     if (!form) return;
@@ -446,8 +727,48 @@ export default function AdminScanner() {
     setMessage('');
     setError('');
     try {
-      // Persist the currently selected strategy tab alongside independent profiles
-      const payload = { ...form, activeStrategy };
+      const strategies = form.strategies || {};
+      for (const key of ['scalping', 'daytrading']) {
+        if (!strategies[key]) continue;
+        const confKeys = key === 'scalping' ? SCALPING_WEIGHT_KEYS : DAYTRADING_WEIGHT_KEYS;
+        const weights = strategies[key].confidence?.weights || {};
+        const normalized =
+          key === 'scalping'
+            ? normalizeConfidenceWeights(weights, confKeys)
+            : Object.fromEntries(
+                confKeys.map(k => [k, Math.max(0, Number(weights[k]) || 0)])
+              );
+        if (key === 'daytrading' && sumConfidenceWeights(normalized) !== 100) {
+          setError('Day Trading confidence weights must total 100.');
+          setSaving(false);
+          return;
+        }
+        strategies[key] = {
+          ...strategies[key],
+          confidence: {
+            ...(strategies[key].confidence || {}),
+            weights: normalized
+          }
+        };
+        const validationError = validateStrategyForm(key, strategies[key]);
+        if (validationError) {
+          setError(validationError);
+          setSaving(false);
+          return;
+        }
+      }
+
+      const regime = form.marketRegime || {};
+      for (const label of ['minAtrPips', 'minVolatilityScore', 'minRegimeScore']) {
+        const err = validateNonNegative(`Market regime ${label}`, regime[label] ?? 0);
+        if (err) {
+          setError(err);
+          setSaving(false);
+          return;
+        }
+      }
+
+      const payload = { ...form, strategies, activeStrategy };
       const response = await adminApi.updateScannerConfig(payload);
       const config = response.data.config;
       setForm(config);
@@ -489,8 +810,10 @@ export default function AdminScanner() {
           <p className="admin-form-note">
             Strategy Engine profiles plug into a shared scanner. Each strategy has independent
             settings — changing one never affects another. Live strategies (Liquidity Sweep Scalping
-            / Day Trading) are fully configurable; others show as coming soon. Selected live strategy
-            and overrides persist to the database. TradingView webhook → TradeDelivery is unchanged.
+            / Day Trading) are fully configurable; others show as coming soon. Core scan settings,
+            market regime, selected live strategy, and strategy overrides all persist to the database
+            and apply globally for all traders after save (survives refresh, logout, and backend
+            restart). TradingView webhook → TradeDelivery is unchanged.
           </p>
         </div>
       </div>
@@ -550,15 +873,12 @@ export default function AdminScanner() {
               onChange={e => updateMarketRegime('minAtrPips', Number(e.target.value))}
             />
           </Field>
-          <Field label="Maximum Spread (pips)">
-            <input
-              type="number"
-              min={0.1}
-              step={0.5}
-              value={form.marketRegime?.maxSpreadPips ?? 25}
-              onChange={e => updateMarketRegime('maxSpreadPips', Number(e.target.value))}
-            />
-          </Field>
+          <MaxSpreadFields
+            byClass={form.marketRegime?.maxSpreadPipsByClass}
+            bySymbol={form.marketRegime?.maxSpreadPipsBySymbol}
+            onClassChange={updateMarketRegimeSpreadClass}
+            onSymbolChange={updateMarketRegimeSpreadSymbol}
+          />
           <Field label="Minimum Volatility Score">
             <input
               type="number"
@@ -694,9 +1014,18 @@ export default function AdminScanner() {
 
         {activeStrategy === 'daytrading' && (
           <div className="admin-strategy-panel" role="tabpanel">
+            <div className="admin-form-actions" style={{ marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-small admin-btn"
+                onClick={handleRestoreDayTradingDefaults}
+              >
+                Restore Default Day Trading Settings
+              </button>
+            </div>
             <p className="admin-form-note">
-              Liquidity Sweep + FVG day trading — HTF bias on {daytrading.htfTimeframe || '4h'},
-              entries on 15m / 5m.
+              Liquidity Sweep + FVG day trading — HTF bias on {daytrading.htfTimeframe || '1h'},
+              entries on 15m / 5m. Restore fills the form only; click Save to apply globally.
             </p>
             <div className="admin-form-grid">
               <Field label="HTF timeframe">
@@ -745,7 +1074,7 @@ export default function AdminScanner() {
                   type="number"
                   min={0}
                   max={100}
-                  value={daytrading.confidence?.threshold ?? 70}
+                  value={daytrading.confidence?.threshold ?? 80}
                   onChange={e =>
                     patchNested('daytrading', 'confidence', 'threshold', Number(e.target.value))
                   }
@@ -768,7 +1097,7 @@ export default function AdminScanner() {
                 <input
                   type="number"
                   min={4}
-                  value={daytrading.entry?.maxWaitBars ?? 16}
+                  value={daytrading.entry?.maxWaitBars ?? 15}
                   onChange={e =>
                     patchNested('daytrading', 'entry', 'maxWaitBars', Number(e.target.value))
                   }
@@ -812,8 +1141,8 @@ export default function AdminScanner() {
               <LiquidityTargetScoringSection
                 strategyKey="daytrading"
                 takeProfit={daytrading.takeProfit}
-                atrCapsDefault={[1.5, 2.5, 3.5]}
-                maxAtrDefault={3.5}
+                atrCapsDefault={[1.0, 2.0, 3.5]}
+                maxAtrDefault={3}
                 tpModels={DAY_TP_MODELS}
                 showMinRr
                 scoreWeightDefaults={DAYTRADING_TP_SCORE_WEIGHTS}
@@ -825,29 +1154,28 @@ export default function AdminScanner() {
                   type="number"
                   min={0}
                   step={0.01}
-                  value={daytrading.fvg?.minGapToAtrRatio ?? 0.15}
+                  value={daytrading.fvg?.minGapToAtrRatio ?? 0.18}
                   onChange={e =>
                     patchNested('daytrading', 'fvg', 'minGapToAtrRatio', Number(e.target.value))
                   }
                 />
               </Field>
-              <Field label="Max spread (pips)">
-                <input
-                  type="number"
-                  min={0}
-                  step={0.1}
-                  value={daytrading.filters?.maxSpreadPips ?? 4}
-                  onChange={e =>
-                    patchNested('daytrading', 'filters', 'maxSpreadPips', Number(e.target.value))
-                  }
-                />
-              </Field>
+              <MaxSpreadFields
+                byClass={daytrading.filters?.maxSpreadPipsByClass}
+                bySymbol={daytrading.filters?.maxSpreadPipsBySymbol}
+                onClassChange={(assetClass, value) =>
+                  updateFilterSpreadClass('daytrading', assetClass, value)
+                }
+                onSymbolChange={(symbol, value) =>
+                  updateFilterSpreadSymbol('daytrading', symbol, value)
+                }
+              />
               <Field label="Min ATR (pips)">
                 <input
                   type="number"
                   min={0}
                   step={0.1}
-                  value={daytrading.filters?.minAtrPips ?? 4}
+                  value={daytrading.filters?.minAtrPips ?? 5}
                   onChange={e =>
                     patchNested('daytrading', 'filters', 'minAtrPips', Number(e.target.value))
                   }
@@ -888,7 +1216,7 @@ export default function AdminScanner() {
               </Field>
             </div>
             <WeightGrid
-              legend="Day Trading confidence weights (points, typically sum ~100)"
+              legend="Day Trading confidence weights (must total 100)"
               fields={DAYTRADING_WEIGHT_FIELDS}
               weights={daytrading.confidence?.weights}
               onChange={(key, value) =>
@@ -906,9 +1234,19 @@ export default function AdminScanner() {
 
         {activeStrategy === 'scalping' && (
           <div className="admin-strategy-panel" role="tabpanel">
+            <div className="admin-form-actions" style={{ marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-small admin-btn"
+                onClick={handleRestoreScalpingDefaults}
+              >
+                Restore Default Scalping Settings
+              </button>
+            </div>
             <p className="admin-form-note">
               Liquidity Sweep + FVG scalping — HTF context on {scalping.htfTimeframe || '15m'},
-              entries on 3m / 1m.
+              entries on 3m / 1m. Also restores Core scan + Market Regime. Click Save to apply
+              globally.
             </p>
             <div className="admin-form-grid">
               <Field label="HTF timeframe">
@@ -997,7 +1335,7 @@ export default function AdminScanner() {
               <LiquidityTargetScoringSection
                 strategyKey="scalping"
                 takeProfit={scalping.takeProfit}
-                atrCapsDefault={[0.7, 1.3, 2.0]}
+                atrCapsDefault={[0.8, 1.4, 2.0]}
                 maxAtrDefault={2.0}
                 tpModels={SCALP_TP_MODELS}
                 scoreWeightDefaults={SCALPING_TP_SCORE_WEIGHTS}
@@ -1015,17 +1353,16 @@ export default function AdminScanner() {
                   }
                 />
               </Field>
-              <Field label="Max spread (pips)">
-                <input
-                  type="number"
-                  min={0}
-                  step={0.1}
-                  value={scalping.filters?.maxSpreadPips ?? 3.5}
-                  onChange={e =>
-                    patchNested('scalping', 'filters', 'maxSpreadPips', Number(e.target.value))
-                  }
-                />
-              </Field>
+              <MaxSpreadFields
+                byClass={scalping.filters?.maxSpreadPipsByClass}
+                bySymbol={scalping.filters?.maxSpreadPipsBySymbol}
+                onClassChange={(assetClass, value) =>
+                  updateFilterSpreadClass('scalping', assetClass, value)
+                }
+                onSymbolChange={(symbol, value) =>
+                  updateFilterSpreadSymbol('scalping', symbol, value)
+                }
+              />
               <Field label="Min ATR (pips)">
                 <input
                   type="number"
@@ -1048,7 +1385,7 @@ export default function AdminScanner() {
               </Field>
             </div>
             <WeightGrid
-              legend="Scalping confidence weights (points, typically sum ~100)"
+              legend="Scalping confidence weights (must total 100)"
               fields={SCALPING_WEIGHT_FIELDS}
               weights={scalping.confidence?.weights}
               onChange={(key, value) =>

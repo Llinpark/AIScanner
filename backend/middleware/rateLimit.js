@@ -93,11 +93,34 @@ function createAuthFailureTracker({
 }
 
 const globalApiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
-const authLimiter = createRateLimiter({
+
+/** Login / register credential attempts (IP-scoped). */
+const authAttemptLimiter = createRateLimiter({
   windowMs: 15 * 60_000,
   max: 30,
   message: 'Too many authentication attempts. Please wait and try again.'
 });
+
+/** Password-reset + resend-verification email sends (IP-scoped, separate bucket). */
+const authEmailLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 10,
+  message: 'Too many email requests. Please wait and try again.'
+});
+
+/**
+ * Token redeem endpoints (verify-email, reset-password).
+ * Separate from login/register so failed sign-in /me traffic cannot block verification.
+ */
+const authTokenLimiter = createRateLimiter({
+  windowMs: 15 * 60_000,
+  max: 20,
+  message: 'Too many verification attempts. Please wait and try again.'
+});
+
+/** @deprecated Use authAttemptLimiter; kept for callers that still import authLimiter. */
+const authLimiter = authAttemptLimiter;
+
 const webhookLimiter = createRateLimiter({
   windowMs: 60_000,
   max: 120,
@@ -120,6 +143,9 @@ module.exports = {
   clientKey,
   globalApiLimiter,
   authLimiter,
+  authAttemptLimiter,
+  authEmailLimiter,
+  authTokenLimiter,
   webhookLimiter,
   scannerLimiter,
   tradingViewAuthFailureTracker

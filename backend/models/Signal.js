@@ -36,7 +36,16 @@ const SignalSchema = new mongoose.Schema({
   notes: { type: String },
   alertType: {
     type: String,
-    enum: ['entry', 'stop_loss', 'take_profit_1', 'take_profit_2', 'take_profit_3', 'signal'],
+    enum: [
+      'entry',
+      'stop_loss',
+      'take_profit_1',
+      'take_profit_2',
+      'take_profit_3',
+      'expired',
+      'cancelled',
+      'signal'
+    ],
     default: 'signal'
   },
   userId: { type: String, index: true },
@@ -45,11 +54,43 @@ const SignalSchema = new mongoose.Schema({
   source: { type: String, default: 'tradingview' },
   // Distribution metadata (TradingView webhook is the sole production signal source).
   signalSource: { type: String, default: 'tradingview' },
+  /** Permanent trade id from Pine / webhook — never overwritten after confirm. */
+  signalUuid: { type: String, index: true },
+  /** Alias kept for clients that send signalId. */
+  signalId: { type: String, index: true },
   strategyName: { type: String },
   /** Additive Strategy Engine metadata (optional; does not replace pattern/strategyName). */
   strategyId: { type: String },
   strategyVersion: { type: Number },
   timeframe: { type: String },
+  /** DETECTED | CONFIRMED | ACTIVE | TP1 | TP2 | TP3 | SL | EXPIRED | CANCELLED */
+  lifecycleStage: {
+    type: String,
+    enum: [
+      'DETECTED',
+      'CONFIRMED',
+      'ACTIVE',
+      'TP1',
+      'TP2',
+      'TP3',
+      'SL',
+      'EXPIRED',
+      'CANCELLED'
+    ],
+    default: 'ACTIVE'
+  },
+  /** Highest TP milestone reached while trade was open (pending|tp1|tp2|tp3). */
+  highestMilestone: {
+    type: String,
+    enum: ['pending', 'tp1', 'tp2', 'tp3'],
+    default: 'pending'
+  },
+  /** After confirm, entry/SL/TPs/direction/confidence must not be rewritten by scans. */
+  levelsFrozen: { type: Boolean, default: false },
+  expiryBars: { type: Number },
+  enableTradeExpiry: { type: Boolean, default: true },
+  expiresAt: { type: Date },
+  closedReason: { type: String },
   deliveryStatus: {
     type: String,
     enum: ['pending', 'delivered', 'partial', 'failed'],
@@ -83,12 +124,12 @@ const SignalSchema = new mongoose.Schema({
   parentSignalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Signal' },
   tradeStatus: {
     type: String,
-    enum: ['open', 'won', 'lost', 'partial', 'closed'],
+    enum: ['open', 'won', 'lost', 'partial', 'closed', 'expired', 'cancelled'],
     default: 'open'
   },
   outcome: {
     type: String,
-    enum: ['pending', 'tp1', 'tp2', 'tp3', 'sl', 'breakeven'],
+    enum: ['pending', 'tp1', 'tp2', 'tp3', 'sl', 'breakeven', 'expired', 'cancelled'],
     default: 'pending'
   },
   outcomeR: { type: Number },

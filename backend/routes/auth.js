@@ -11,6 +11,11 @@ const { isBetaMode, getBetaSubscription } = require('../utils/betaMode');
 const requireAuth = require('../middleware/requireAuth');
 const validateRequest = require('../middleware/validate');
 const {
+  authAttemptLimiter,
+  authEmailLimiter,
+  authTokenLimiter
+} = require('../middleware/rateLimit');
+const {
   registerValidators,
   loginValidators,
   forgotPasswordValidators,
@@ -84,7 +89,7 @@ async function createUserRecord({
 }) {
   const defaultSubscription = {
     tier: 'basic',
-    status: 'inactive',
+    status: 'pending',
     createdAt: new Date(),
     updatedAt: new Date()
   };
@@ -137,7 +142,7 @@ function isUserVerified(user) {
   return user.emailVerified !== false;
 }
 
-router.post('/register', registerValidators, validateRequest, async (req, res) => {
+router.post('/register', authAttemptLimiter, registerValidators, validateRequest, async (req, res) => {
   try {
     const { email, password, displayName, phone, referralCode } = req.body;
 
@@ -213,7 +218,7 @@ function sendAuthSession(res, user, message) {
   });
 }
 
-router.post('/login', loginValidators, validateRequest, async (req, res) => {
+router.post('/login', authAttemptLimiter, loginValidators, validateRequest, async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await findUserByEmail(email);
@@ -235,13 +240,20 @@ router.post('/login', loginValidators, validateRequest, async (req, res) => {
       });
     }
 
+    if (user.emailVerificationToken || user.emailVerificationExpiresAt) {
+      updateUserRecord(user, {
+        emailVerificationToken: null,
+        emailVerificationExpiresAt: null
+      }).catch(() => {});
+    }
+
     return sendAuthSession(res, user, 'Signed in successfully.');
   } catch (error) {
     return res.status(500).json({ message: 'Unable to sign in.' });
   }
 });
 
-router.post('/forgot-password', forgotPasswordValidators, validateRequest, async (req, res) => {
+router.post('/forgot-password', authEmailLimiter, forgotPasswordValidators, validateRequest, async (req, res) => {
   try {
     const { email } = req.body;
     const user = await findUserByEmail(email);
@@ -265,7 +277,7 @@ router.post('/forgot-password', forgotPasswordValidators, validateRequest, async
   }
 });
 
-router.post('/reset-password', resetPasswordValidators, validateRequest, async (req, res) => {
+router.post('/reset-password', authTokenLimiter, resetPasswordValidators, validateRequest, async (req, res) => {
   try {
     const { token, password } = req.body;
     const user = await findUserByResetToken(token);
@@ -293,11 +305,12 @@ async function verifyEmailWithToken(token) {
     return { error: { status: 400, message: 'This verification link is invalid or has expired.' } };
   }
 
-  const updated = await updateUserRecord(user, {
-    emailVerified: true,
-    emailVerificationToken: null,
-    emailVerificationExpiresAt: null
-  });
+  // Keep the hashed token until expiry so StrictMode remounts, email-link
+  // prefetchers, and double-clicks remain idempotent instead of failing.
+  let updated = user;
+  if (user.emailVerified !== true) {
+    updated = await updateUserRecord(user, { emailVerified: true });
+  }
 
   return {
     message: 'Email verified successfully.',
@@ -306,7 +319,7 @@ async function verifyEmailWithToken(token) {
   };
 }
 
-router.get('/verify-email', async (req, res) => {
+router.get('/verify-email', authTokenLimiter, async (req, res) => {
   const token = String(req.query.token || '').trim();
   if (!token) {
     return res.status(400).json({ message: 'Verification token is required.' });
@@ -325,7 +338,7 @@ router.get('/verify-email', async (req, res) => {
   }
 });
 
-router.post('/verify-email', verifyEmailValidators, validateRequest, async (req, res) => {
+router.post('/verify-email', authTokenLimiter, verifyEmailValidators, validateRequest, async (req, res) => {
   try {
     const result = await verifyEmailWithToken(req.body.token);
     if (result.error) {
@@ -339,7 +352,7 @@ router.post('/verify-email', verifyEmailValidators, validateRequest, async (req,
   }
 });
 
-router.post('/resend-verification', resendVerificationValidators, validateRequest, async (req, res) => {
+router.post('/resend-verification', authEmailLimiter, resendVerificationValidators, validateRequest, async (req, res) => {
   try {
     const { email } = req.body;
     const user = await findUserByEmail(email);

@@ -56,16 +56,14 @@ export const subscriptionApi = {
   getTiers: () => api.get('/api/tiers'),
   subscribe: payload => api.post('/api/subscribe', payload),
   getMe: () => api.get('/api/subscription/me'),
+  submitManualPayment: payload => api.post('/api/payments/manual/submit', payload),
+  getMyManualPayments: () => api.get('/api/payments/manual/mine'),
   confirmMockPayment: payload => api.post('/api/payments/mock/confirm', payload),
   getMpesaStatus: checkoutRequestId => api.get(`/api/payments/mpesa/status/${checkoutRequestId}`),
   confirmMpesaMock: payload => api.post('/api/payments/mpesa/mock-complete', payload),
   confirmPaypalMock: payload => api.post('/api/payments/paypal/mock-complete', payload),
   getBinanceStatus: merchantTradeNo => api.get(`/api/payments/binance/status/${merchantTradeNo}`),
   confirmBinanceMock: payload => api.post('/api/payments/binance/mock-complete', payload),
-  getSasaPayStatus: checkoutRequestId => api.get(`/api/payments/sasapay/status/${checkoutRequestId}`),
-  confirmSasaPayMock: payload => api.post('/api/payments/sasapay/mock-complete', payload),
-  getPaystackStatus: reference => api.get(`/api/payments/paystack/status/${reference}`),
-  confirmPaystackMock: payload => api.post('/api/payments/paystack/mock-complete', payload),
   getPerformanceSummary: () => api.get('/api/performance/summary')
 };
 
@@ -148,6 +146,18 @@ export const adminApi = {
   updateSignalOutcome: (id, payload) => api.patch(`/api/admin/signals/${id}/outcome`, payload),
   getPayments: (params = {}) => api.get('/api/admin/payments', { params }),
   getPaymentsSummary: () => api.get('/api/admin/payments/summary'),
+  getManualActivations: (params = {}) => api.get('/api/admin/manual-activations', { params }),
+  getManualActivation: id => api.get(`/api/admin/manual-activations/${id}`),
+  approveManualActivation: (id, payload) =>
+    api.post(`/api/admin/manual-activations/${id}/approve`, payload),
+  rejectManualActivation: (id, payload) =>
+    api.post(`/api/admin/manual-activations/${id}/reject`, payload),
+  updateManualActivationNotes: (id, payload) =>
+    api.patch(`/api/admin/manual-activations/${id}/notes`, payload),
+  extendManualActivationUser: (userId, payload) =>
+    api.post(`/api/admin/manual-activations/users/${userId}/extend`, payload),
+  cancelManualActivationUser: (userId, payload) =>
+    api.post(`/api/admin/manual-activations/users/${userId}/cancel`, payload),
   getAuditLog: (params = {}) => api.get('/api/admin/audit-log', { params }),
   getScannerConfig: () => api.get('/api/admin/scanner/config'),
   updateScannerConfig: payload => api.patch('/api/admin/scanner/config', payload),

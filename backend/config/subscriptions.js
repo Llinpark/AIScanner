@@ -2,12 +2,8 @@
 const {
   WEBHOOK_MPESA_URL,
   WEBHOOK_BINANCE_URL,
-  WEBHOOK_SASAPAY_URL,
-  WEBHOOK_PAYSTACK_URL,
   WEBHOOK_PAYPAL_URL,
-  PAYSTACK_CALLBACK_URL,
-  PAYPAL_RETURN_URL,
-  FRONTEND_URL
+  PAYPAL_RETURN_URL
 } = require('./appUrls');
 const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
@@ -241,24 +237,6 @@ const PAYMENT_CONFIG = {
     merchantId: process.env.BINANCE_PAY_MERCHANT_ID,
     environment: process.env.BINANCE_PAY_ENVIRONMENT || 'sandbox',
     webhookUrl: process.env.BINANCE_PAY_WEBHOOK_URL || WEBHOOK_BINANCE_URL
-  },
-  sasapay: {
-    clientId: process.env.SASAPAY_CLIENT_ID,
-    clientSecret: process.env.SASAPAY_CLIENT_SECRET,
-    merchantCode: process.env.SASAPAY_MERCHANT_CODE,
-    networkCode: process.env.SASAPAY_NETWORK_CODE || '63902',
-    currency: process.env.SASAPAY_CURRENCY || 'KES',
-    callbackUrl: process.env.SASAPAY_CALLBACK_URL || WEBHOOK_SASAPAY_URL,
-    baseUrl: process.env.SASAPAY_BASE_URL || 'https://sandbox.sasapay.app/api/v1'
-  },
-  paystack: {
-    secretKey: process.env.PAYSTACK_SECRET_KEY,
-    publicKey: process.env.PAYSTACK_PUBLIC_KEY,
-    // User browser return after checkout (server verifies, then redirects to frontend)
-    callbackUrl: process.env.PAYSTACK_CALLBACK_URL || PAYSTACK_CALLBACK_URL,
-    webhookUrl: process.env.PAYSTACK_WEBHOOK_URL || WEBHOOK_PAYSTACK_URL,
-    // Optional marketing/site URL shown in Paystack dashboard (not used for API verify)
-    siteCallbackUrl: process.env.PAYSTACK_SITE_CALLBACK_URL || FRONTEND_URL
   }
 };
 
@@ -340,20 +318,20 @@ function getPublicPaymentMethods() {
   }
 
   const methods = {
-    paystack: {
-      currency: 'KES',
-      publicKey: PAYMENT_CONFIG.paystack.publicKey || null,
-      configured: Boolean(PAYMENT_CONFIG.paystack.secretKey)
-    },
     mpesa: {
       tillNumber: PAYMENT_CONFIG.mpesa.shortcode || '5337170',
-      currency: 'KES'
+      businessName: 'KachingFx Official',
+      currency: 'KES',
+      mode: 'manual_till'
     },
-    sasapay: {
-      currency: PAYMENT_CONFIG.sasapay.currency || 'KES'
+    manualMpesa: {
+      tillNumber: PAYMENT_CONFIG.mpesa.shortcode || '5337170',
+      businessName: 'KachingFx Official',
+      currency: 'KES'
     },
     binance: {
       merchantId: PAYMENT_CONFIG.binance.merchantId || null,
+      binanceId: '484947783',
       currency: 'USDT'
     },
     paypal: {
@@ -365,7 +343,8 @@ function getPublicPaymentMethods() {
     },
     // Frontend must hide mock when this is false (always false in production)
     mockPaymentsAllowed,
-    defaultProvider: 'paystack'
+    // Primary checkout is manual M-Pesa Till until automated gateways are re-enabled.
+    defaultProvider: 'manual_mpesa'
   };
 
   return methods;

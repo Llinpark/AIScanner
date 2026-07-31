@@ -25,6 +25,7 @@ const { HTFBiasService } = require('./services/HTFBiasService');
 const { TrendFilter } = require('./services/TrendFilter');
 const { NewsFilter } = require('./services/NewsFilter');
 const { atr, toPips, isSidewaysMarket, normalizeCandle, candleMetrics } = require('./utils/candleMath');
+const { resolveMaxSpreadPips } = require('../utils/maxSpreadLimits');
 
 class DayTradingStrategy extends IStrategy {
   /**
@@ -501,7 +502,8 @@ class DayTradingStrategy extends IStrategy {
 
     if (context.spread != null && Number.isFinite(context.spread)) {
       const spreadPips = toPips(context.spread, symbol);
-      if (spreadPips > (f.maxSpreadPips || 4)) {
+      const maxSpread = resolveMaxSpreadPips(symbol, f);
+      if (spreadPips > maxSpread) {
         return { signal: false, stage: 'filtered', reason: 'spread_high' };
       }
     }

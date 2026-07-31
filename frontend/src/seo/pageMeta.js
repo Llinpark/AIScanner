@@ -96,7 +96,7 @@ export const PRICING_FAQS = [
   {
     question: 'Which payment methods are supported?',
     answer:
-      'You can pay with PayPal/card, M-Pesa, Binance Pay, and SasaPay depending on availability. Subscriptions can be billed monthly or yearly (yearly saves 5%).'
+      'You can pay with PayPal/card, M-Pesa, and Binance Pay depending on availability. Subscriptions can be billed monthly or yearly (yearly saves 5%).'
   },
   {
     question: 'Is trading with AI signals risk-free?',
@@ -137,7 +137,7 @@ const PAGE_META = {
   pricing: {
     title: `Pricing & Plans — ${APP_NAME}`,
     description:
-      'Compare Basic, Pro, and Premium KachingScanner plans. Monthly or yearly billing (save 5% yearly) with PayPal, M-Pesa, Binance Pay, and SasaPay. Unlock live AI forex signals and TradingView alerts.',
+      'Compare Basic, Pro, and Premium KachingScanner plans. Monthly or yearly billing (save 5% yearly) with PayPal, M-Pesa, and Binance Pay. Unlock live AI forex signals and TradingView alerts.',
     robots: PUBLIC_ROBOTS,
     keywords: `${KEYWORDS}, forex subscription, trading plans`,
     jsonLd: () =>

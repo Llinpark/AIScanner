@@ -277,16 +277,17 @@ function generateForUser(user, options = {}) {
       tradingviewUsernameBound: true,
       tradingviewUsername: tvUsername,
       authNote:
-        'This script is licensed to your TradingView username and includes a private license token. It will not send valid alerts from another TradingView account. Do not share the generated script.'
+        'This script is licensed to your TradingView username and includes a private license token. Confirm is prefilled to that username so the script unlocks after paste. It will not send valid alerts from another TradingView account. Do not share the generated script.'
     },
     instructions: [
       instructionLead,
-      `In TradingView script settings, enter your TradingView username exactly: ${tvUsername}. Signals stay locked until it matches.`,
-      'When a signal fires, TradingView shows Kaching Buy/Sell plus short Entry/SL/TP1–3 levels with prices (latest trade only). Adjust “Trade level length (bars)” under KachingFx Display (default 22).',
+      `Confirm username is prefilled to ${tvUsername} under KachingFx License — leave it as-is to unlock. Override only if needed; signals stay locked until Confirm matches the licensed username.`,
+      'When a signal fires, TradingView shows Kaching Buy/Sell plus Entry/SL/TP1–3 levels with prices. Overlays stay until TP3, SL, candle expiry, or cancel — they do not disappear if a later setup fails.',
+      'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry). Lines keep extending while the trade is active.',
       `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
       'Switch strategies with ?strategy=daytrading | scalping.',
-      'Re-copy and re-add this script after plan, username, or script updates so TradingView uses the latest overlay logic.',
+      'After updating your TradingView username in the app, re-save, re-copy this script, and re-add it to the chart so the license token and prefilled Confirm match.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan) · TV: ${tvUsername}.`
     ]
   };

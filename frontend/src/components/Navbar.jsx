@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import AppLink from './AppLink';
 import { APP_NAME } from '../config/appUrls';
-
-const TIER_BADGE_LABELS = { basic: 'BASIC', professional: 'PRO', premium: 'PREMIUM' };
+import { getNavbarTierBadge } from '../utils/subscriptionDisplay';
 
 export default function Navbar({
   isAuthenticated,
@@ -40,6 +39,8 @@ export default function Navbar({
     setMenuOpen(false);
     onNavigate(page, options, navOpts);
   };
+
+  const tierBadge = subscription ? getNavbarTierBadge(subscription, user) : null;
 
   return (
     <header className={`site-navbar ${menuOpen ? 'menu-open' : ''}`}>
@@ -84,11 +85,7 @@ export default function Navbar({
               <>
                 <div className="navbar-user">
                   <span className="navbar-user-name">{user.displayName || user.email}</span>
-                  {subscription && (
-                    <span className={`tier-badge tier-${subscription.tier}`}>
-                      {TIER_BADGE_LABELS[subscription.tier] || subscription.tier.toUpperCase()}
-                    </span>
-                  )}
+                  {tierBadge && <span className={tierBadge.className}>{tierBadge.text}</span>}
                 </div>
                 <button type="button" className="navbar-auth-link" onClick={onLogout}>
                   Log Out

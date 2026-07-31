@@ -26,6 +26,7 @@ const { ConfidenceScoringService } = require('./engines/ConfidenceScoringService
 const { TradeSignalGenerator } = require('./engines/TradeSignalGenerator');
 const { atr, toPips, isSidewaysMarket, normalizeCandle } = require('./utils/candleMath');
 const { evaluateNewsImpact } = require('../utils/newsFilter');
+const { resolveMaxSpreadPips } = require('../utils/maxSpreadLimits');
 
 class ScalpingStrategy extends IStrategy {
   /**
@@ -444,7 +445,8 @@ class ScalpingStrategy extends IStrategy {
 
     if (context.spread != null && Number.isFinite(context.spread)) {
       const spreadPips = toPips(context.spread, symbol);
-      if (spreadPips > (f.maxSpreadPips || 3.5)) {
+      const maxSpread = resolveMaxSpreadPips(symbol, f);
+      if (spreadPips > maxSpread) {
         return { signal: false, stage: 'filtered', reason: 'spread_high' };
       }
     }

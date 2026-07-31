@@ -28,12 +28,12 @@ const PATTERN_SCANNER_CONFIG = {
     entryMode: 'close' // 'close' | 'gap_mid'
   },
 
-  autoScanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS, 10) || 300_000,
+  // Default 60s; Admin Scanner overrides persist in Mongo (coreScanner) and win at boot.
+  autoScanIntervalMs: parseInt(process.env.SCANNER_INTERVAL_MS, 10) || 60_000,
   // Scan more symbols per cycle so the full universe rotates faster.
   scanBatchSize: Math.max(1, parseInt(process.env.SCANNER_BATCH_SIZE, 10) || 5),
-  // Opt-in only: trading signals publish via TradingView webhooks, not timer polls.
-  // Set SCANNER_AUTO_ENABLED=true to re-enable legacy polling signal generation.
-  autoScanEnabled: process.env.SCANNER_AUTO_ENABLED === 'true',
+  // Official default ON; set SCANNER_AUTO_ENABLED=false to disable polling.
+  autoScanEnabled: process.env.SCANNER_AUTO_ENABLED !== 'false',
 
   // 10-step SMC pipeline (liquidity → sweep → MSS → expansion → FVG → retrace → entry)
   pipeline: {

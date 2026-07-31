@@ -9,11 +9,19 @@ const {
   resetStrategyRuntimeConfigForTests,
   normalizeActiveStrategy
 } = require('../strategyRuntimeConfig');
-const { applyScannerConfig, getScannerConfig } = require('../scannerRuntimeConfig');
+const {
+  applyScannerConfig,
+  getScannerConfig,
+  getCoreScannerOverrides,
+  loadCoreScannerOverrides,
+  resetScannerRuntimeConfigForTests,
+  DEFAULT_AUTO_SCAN_INTERVAL_MS
+} = require('../scannerRuntimeConfig');
 
 describe('strategyRuntimeConfig persistence', () => {
   beforeEach(() => {
     resetStrategyRuntimeConfigForTests();
+    resetScannerRuntimeConfigForTests();
   });
 
   it('normalizeActiveStrategy accepts only scalping|daytrading', () => {
@@ -99,5 +107,91 @@ describe('strategyRuntimeConfig persistence', () => {
     assert.equal(day.takeProfit.maxTpDistancePips, 90);
     assert.equal(scalp.takeProfit.profileId, 'scalping');
     assert.equal(day.takeProfit.profileId, 'daytrading');
+  });
+});
+
+describe('scannerRuntimeConfig core persistence', () => {
+  beforeEach(() => {
+    resetStrategyRuntimeConfigForTests();
+    resetScannerRuntimeConfigForTests();
+  });
+
+  it('defaults autoScanIntervalMs to 60000 when unset', () => {
+    assert.equal(DEFAULT_AUTO_SCAN_INTERVAL_MS, 60_000);
+    const config = getScannerConfig();
+    assert.ok(config.autoScanIntervalMs >= 60_000);
+    // After reset without SCANNER_INTERVAL_MS override, expect the module default
+    if (!process.env.SCANNER_INTERVAL_MS) {
+      assert.equal(config.autoScanIntervalMs, 60_000);
+    }
+  });
+
+  it('defaults autoScanEnabled ON unless SCANNER_AUTO_ENABLED=false', () => {
+    const prev = process.env.SCANNER_AUTO_ENABLED;
+    try {
+      delete process.env.SCANNER_AUTO_ENABLED;
+      resetScannerRuntimeConfigForTests();
+      assert.equal(getScannerConfig().autoScanEnabled, true);
+
+      process.env.SCANNER_AUTO_ENABLED = 'false';
+      resetScannerRuntimeConfigForTests();
+      assert.equal(getScannerConfig().autoScanEnabled, false);
+
+      process.env.SCANNER_AUTO_ENABLED = 'true';
+      resetScannerRuntimeConfigForTests();
+      assert.equal(getScannerConfig().autoScanEnabled, true);
+    } finally {
+      if (prev === undefined) delete process.env.SCANNER_AUTO_ENABLED;
+      else process.env.SCANNER_AUTO_ENABLED = prev;
+      resetScannerRuntimeConfigForTests();
+    }
+  });
+
+  it('tracks core overrides for Mongo persistence and restores them on load', () => {
+    applyScannerConfig({
+      autoScanIntervalMs: 120_000,
+      scanBatchSize: 7,
+      autoScanEnabled: true
+    });
+
+    const overrides = getCoreScannerOverrides();
+    assert.equal(overrides.autoScanIntervalMs, 120_000);
+    assert.equal(overrides.scanBatchSize, 7);
+    assert.equal(overrides.autoScanEnabled, true);
+    assert.equal(getScannerConfig().autoScanIntervalMs, 120_000);
+
+    resetScannerRuntimeConfigForTests();
+    assert.notEqual(getScannerConfig().autoScanIntervalMs, 120_000);
+
+    loadCoreScannerOverrides(overrides);
+    assert.equal(getScannerConfig().autoScanIntervalMs, 120_000);
+    assert.equal(getScannerConfig().scanBatchSize, 7);
+    assert.equal(getScannerConfig().autoScanEnabled, true);
+  });
+
+  it('clamps scan interval to at least 60000', () => {
+    applyScannerConfig({ autoScanIntervalMs: 5_000 });
+    assert.equal(getScannerConfig().autoScanIntervalMs, 60_000);
+  });
+
+  it('does not clear core runtime when only strategies are patched', () => {
+    applyScannerConfig({
+      autoScanIntervalMs: 90_000,
+      scanBatchSize: 4,
+      activeStrategy: 'scalping',
+      strategies: {
+        scalping: { enabled: true, htfTimeframe: '15m' }
+      }
+    });
+
+    applyScannerConfig({
+      strategies: {
+        daytrading: { htfTimeframe: '1h' }
+      }
+    });
+
+    assert.equal(getScannerConfig().autoScanIntervalMs, 90_000);
+    assert.equal(getScannerConfig().scanBatchSize, 4);
+    assert.equal(getActiveStrategy(), 'scalping');
   });
 });

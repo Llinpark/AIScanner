@@ -3,10 +3,7 @@ const ALLOWED_CHECKOUT_HOSTS = [
   'www.paypal.com',
   'sandbox.paypal.com',
   'binance.com',
-  'www.binance.com',
-  'paystack.com',
-  'checkout.paystack.com',
-  'standard.paystack.co'
+  'www.binance.com'
 ];
 
 export function isAllowedCheckoutUrl(urlString) {

@@ -132,9 +132,16 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
         </p>
       </div>
 
+      {!summary.openTrades && !summary.closedTrades ? (
+        <div className="insights-empty" style={{ marginBottom: '1rem' }}>
+          No webhook trades to analyze yet. Analytics uses the same TradingView signal history as
+          Signal History — it will populate after the next successful alert webhook.
+        </div>
+      ) : null}
+
       <div className="analytics-grid">
         <div className="analytics-stat">
-          <span>Win rate</span>
+          <span>Win rate (TP vs SL)</span>
           <strong>{summary.winRate}%</strong>
         </div>
         <div className="analytics-stat">
@@ -146,9 +153,42 @@ export default function AnalyticsDashboard({ tierLimits, onNavigatePricing }) {
           <strong>{summary.openTrades}</strong>
         </div>
         <div className="analytics-stat">
-          <span>Wins / Losses</span>
+          <span>TP hits / SL</span>
           <strong>
             {summary.wins} / {summary.losses}
+          </strong>
+        </div>
+        <div className="analytics-stat">
+          <span>TP1 / TP2 / TP3</span>
+          <strong>
+            {summary.outcomeBreakdown?.tp1 ??
+              summary.outcomeCounts?.tp1 ??
+              summary.tp1 ??
+              0}{' '}
+            /{' '}
+            {summary.outcomeBreakdown?.tp2 ??
+              summary.outcomeCounts?.tp2 ??
+              summary.tp2 ??
+              0}{' '}
+            /{' '}
+            {summary.outcomeBreakdown?.tp3 ??
+              summary.outcomeCounts?.tp3 ??
+              summary.tp3 ??
+              0}
+          </strong>
+        </div>
+        <div className="analytics-stat">
+          <span>Expired / Cancelled</span>
+          <strong>
+            {summary.outcomeBreakdown?.expired ??
+              summary.outcomeCounts?.expired ??
+              summary.expired ??
+              0}{' '}
+            /{' '}
+            {summary.outcomeBreakdown?.cancelled ??
+              summary.outcomeCounts?.cancelled ??
+              summary.cancelled ??
+              0}
           </strong>
         </div>
         <div className="analytics-stat">

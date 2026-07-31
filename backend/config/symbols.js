@@ -138,11 +138,39 @@ function getBasePrice(symbol) {
   return MARKET_SYMBOLS[key]?.basePrice ?? 1.085;
 }
 
+const INDEX_SYMBOL_RE =
+  /^(US30|US100|NAS100|USTEC|NDX|DJ30|DJI|DJIA|DOW|SPX500|SPX|GER40|DE40|UK100|FTSE|JPN225|NI225|ESP35|FRA40|AU200|HK50)/i;
+
+/**
+ * Classify a symbol for spread / risk defaults.
+ * @returns {'forex'|'gold'|'indices'|'metal'|'crypto'|'other'}
+ */
+function getSymbolAssetClass(symbol) {
+  const key = normalizeSymbol(symbol);
+  const catalogCategory = MARKET_SYMBOLS[key]?.category;
+  if (catalogCategory === 'forex') return 'forex';
+  if (catalogCategory === 'index') return 'indices';
+  if (catalogCategory === 'crypto') return 'crypto';
+  if (catalogCategory === 'metal') {
+    if (key.includes('XAU') || key.includes('GOLD')) return 'gold';
+    return 'metal';
+  }
+
+  const compact = key.replace(/\//g, '');
+  if (compact.includes('XAU') || compact.includes('GOLD')) return 'gold';
+  if (INDEX_SYMBOL_RE.test(compact)) return 'indices';
+  if (compact.includes('BTC') || compact.includes('ETH') || compact.includes('USDT')) return 'crypto';
+  if (compact.includes('XAG') || compact.includes('SILVER')) return 'metal';
+  if (key.includes('/')) return 'forex';
+  return 'other';
+}
+
 module.exports = {
   MARKET_SYMBOLS,
   ALL_CURRENCY_PAIRS,
   SYMBOL_ALIASES,
   FX_CURRENCY_CODES,
   normalizeSymbol,
-  getBasePrice
+  getBasePrice,
+  getSymbolAssetClass
 };

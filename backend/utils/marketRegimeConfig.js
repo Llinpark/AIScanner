@@ -4,7 +4,19 @@
  * Default: filter ENABLED with conservative thresholds so extreme conditions
  * (closed FX market, high-impact news, tiny ATR) are skipped without blocking
  * normal London/NY sessions. Tune via Admin → Scanner.
+ *
+ * Maximum spread is symbol-aware: Forex 2.5 / Gold 5 / Indices 10 by default,
+ * with admin class + per-symbol overrides.
  */
+
+const {
+  DEFAULT_MAX_SPREAD_PIPS_BY_CLASS,
+  mergeClassDefaults,
+  normalizeSymbolMap,
+  resolveMaxSpreadPips,
+  pickMaxSpreadAdminPatch
+} = require('./maxSpreadLimits');
+const { normalizeSymbol } = require('../config/symbols');
 
 const DEFAULT_SESSIONS = Object.freeze({
   asian: { startHour: 0, endHour: 8 },
@@ -16,7 +28,10 @@ const DEFAULT_SESSIONS = Object.freeze({
 const DEFAULT_MARKET_REGIME_CONFIG = Object.freeze({
   enabled: true,
   minAtrPips: 3,
-  maxSpreadPips: 25,
+  /** @deprecated Prefer maxSpreadPipsByClass / resolveMaxSpreadPips(symbol). */
+  maxSpreadPips: DEFAULT_MAX_SPREAD_PIPS_BY_CLASS.forex,
+  maxSpreadPipsByClass: { ...DEFAULT_MAX_SPREAD_PIPS_BY_CLASS },
+  maxSpreadPipsBySymbol: {},
   minVolatilityScore: 20,
   avoidHighImpactNews: true,
   avoidLowLiquiditySessions: false,
@@ -46,10 +61,22 @@ function getMarketRegimeConfig() {
     london: { ...DEFAULT_SESSIONS.london, ...(o.sessions?.london || {}) },
     ny: { ...DEFAULT_SESSIONS.ny, ...(o.sessions?.ny || {}) }
   };
+  const maxSpreadPipsByClass = mergeClassDefaults({
+    ...DEFAULT_MARKET_REGIME_CONFIG.maxSpreadPipsByClass,
+    ...(o.maxSpreadPipsByClass || {})
+  });
+  const maxSpreadPipsBySymbol = normalizeSymbolMap(o.maxSpreadPipsBySymbol || {});
   return {
     enabled: o.enabled !== undefined ? Boolean(o.enabled) : DEFAULT_MARKET_REGIME_CONFIG.enabled,
     minAtrPips: clampNumber(o.minAtrPips, DEFAULT_MARKET_REGIME_CONFIG.minAtrPips, 0, 500),
-    maxSpreadPips: clampNumber(o.maxSpreadPips, DEFAULT_MARKET_REGIME_CONFIG.maxSpreadPips, 0.1, 500),
+    maxSpreadPips: clampNumber(
+      o.maxSpreadPips,
+      maxSpreadPipsByClass.forex,
+      0.1,
+      500
+    ),
+    maxSpreadPipsByClass,
+    maxSpreadPipsBySymbol,
     minVolatilityScore: clampNumber(
       o.minVolatilityScore,
       DEFAULT_MARKET_REGIME_CONFIG.minVolatilityScore,
@@ -111,18 +138,37 @@ function applyMarketRegimeConfig(patch = {}) {
   for (const key of boolKeys) {
     if (patch[key] !== undefined) next[key] = Boolean(patch[key]);
   }
-  const numKeys = [
-    'minAtrPips',
-    'maxSpreadPips',
-    'minVolatilityScore',
-    'minRegimeScore',
-    'cacheTtlSeconds'
-  ];
+  const numKeys = ['minAtrPips', 'minVolatilityScore', 'minRegimeScore', 'cacheTtlSeconds'];
   for (const key of numKeys) {
     if (patch[key] !== undefined && Number.isFinite(Number(patch[key]))) {
       next[key] = Number(patch[key]);
     }
   }
+
+  const spreadPatch = pickMaxSpreadAdminPatch(patch);
+  if (spreadPatch.maxSpreadPipsByClass) {
+    next.maxSpreadPipsByClass = {
+      ...(next.maxSpreadPipsByClass || {}),
+      ...spreadPatch.maxSpreadPipsByClass
+    };
+  }
+  if (patch.maxSpreadPipsBySymbol && typeof patch.maxSpreadPipsBySymbol === 'object') {
+    const mergedSymbols = { ...(next.maxSpreadPipsBySymbol || {}) };
+    for (const [raw, value] of Object.entries(patch.maxSpreadPipsBySymbol)) {
+      const symbol = normalizeSymbol(raw);
+      if (!symbol) continue;
+      if (value == null || value === '') {
+        delete mergedSymbols[symbol];
+      } else if (Number.isFinite(Number(value))) {
+        mergedSymbols[symbol] = Number(value);
+      }
+    }
+    next.maxSpreadPipsBySymbol = normalizeSymbolMap(mergedSymbols);
+  }
+  if (spreadPatch.maxSpreadPips !== undefined) {
+    next.maxSpreadPips = spreadPatch.maxSpreadPips;
+  }
+
   if (patch.sessions && typeof patch.sessions === 'object') {
     next.sessions = {
       ...(next.sessions || {}),
@@ -147,12 +193,19 @@ function resetMarketRegimeConfigForTests() {
   overrides = {};
 }
 
+function resolveRegimeMaxSpreadPips(symbol, config = getMarketRegimeConfig()) {
+  return resolveMaxSpreadPips(symbol, config);
+}
+
 module.exports = {
   DEFAULT_MARKET_REGIME_CONFIG,
   DEFAULT_SESSIONS,
+  DEFAULT_MAX_SPREAD_PIPS_BY_CLASS,
   getMarketRegimeConfig,
   applyMarketRegimeConfig,
   getMarketRegimeOverrides,
   loadMarketRegimeOverrides,
-  resetMarketRegimeConfigForTests
+  resetMarketRegimeConfigForTests,
+  resolveRegimeMaxSpreadPips,
+  resolveMaxSpreadPips
 };

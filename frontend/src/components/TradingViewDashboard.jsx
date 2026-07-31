@@ -3,6 +3,7 @@ import { getSharedSocket } from '../services/marketDataSocket';
 import { tradingviewApi, subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
+import TradingViewSetup from './TradingViewSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
 import { alertMatchesSymbol } from '../constants/markets';
 import { isInsightsSignal } from '../utils/insightsSignal';
@@ -312,10 +313,11 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
 
   const copyPineScript = async () => {
     setPineCopyState('loading');
+    setPineLoadError('');
     try {
-      if (!pineScriptRef.current) {
-        await loadPineScriptBundle();
-      }
+      // Always regenerate so username / license token changes are never stale in the clipboard.
+      pineScriptRef.current = '';
+      await loadPineScriptBundle(pineStrategy);
       if (!pineScriptRef.current) {
         throw new Error('Script unavailable');
       }
@@ -324,6 +326,14 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       window.setTimeout(() => setPineCopyState('idle'), 3000);
     } catch (error) {
       console.error('Failed to copy Pine Script:', error);
+      const data = error.response?.data;
+      if (data?.code === 'tradingview_username_required' || data?.requiresTradingViewUsername) {
+        setPineLoadError(
+          data.message || 'Link your TradingView username before generating your personal script.'
+        );
+      } else if (data?.message) {
+        setPineLoadError(data.message);
+      }
       setPineCopyState('error');
       window.setTimeout(() => setPineCopyState('idle'), 4000);
     }
@@ -456,172 +466,196 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       )}
 
       {activeTab === 'setup' && (
-        <div className="tv-section">
+        <div className="tv-section tv-setup-panel">
           {!subscribed ? (
-            <div className="empty-state">Subscribe first to unlock your personal TradingView script and setup guide.</div>
+            <>
+              <TradingViewSetup />
+              <div className="empty-state">Subscribe first to unlock your personal TradingView script and setup tools.</div>
+            </>
           ) : (
-            <div className="pine-script-section">
-              <h3>Connect TradingView</h3>
-              <p>
-                Link the TradingView username you will run the script under, copy your personal script, add it to a
-                chart, then create one alert that sends to your webhook URL below. Kaching publishes those trades here —
-                charts stay separate and display-only.
-              </p>
-              <p className="setup-note">
-                Keep the script on your TradingView chart. When a signal fires it draws Entry, SL, TP1, TP2, and TP3
-                lines on TradingView — included on Basic, Pro, and Premium. The script is licensed to your TradingView
-                username and will not send valid alerts from another TradingView account.
-              </p>
+            <div className="pine-script-section tv-setup">
+              <header className="tv-setup-intro">
+                <h3>Connect TradingView</h3>
+                <p>
+                  Link your TradingView username, copy your personal script, add it to a chart, then create one webhook
+                  alert. Kaching publishes those trades here — charts stay display-only.
+                </p>
+              </header>
 
-              <form className="tv-username-link" onSubmit={linkTradingViewUsername}>
-                <label htmlFor="tv-username-input">
-                  <strong>TradingView username</strong>
-                </label>
-                <div className="tv-username-link-row">
-                  <input
-                    id="tv-username-input"
-                    type="text"
-                    value={tvUsernameInput}
-                    onChange={e => setTvUsernameInput(e.target.value)}
-                    placeholder="Exact TradingView username"
-                    autoComplete="off"
-                    spellCheck={false}
-                  />
-                  <button type="submit" className="btn-copy-script" disabled={tvLinkState === 'loading'}>
-                    {tvLinkState === 'loading'
-                      ? 'Saving…'
-                      : linkedTvUsername
-                        ? 'Update username'
-                        : 'Save username'}
-                  </button>
-                </div>
-                {linkedTvUsername ? (
-                  <p className="setup-note">
-                    Licensed to <code>{linkedTvUsername}</code>. After changing it, re-copy the script and confirm the
-                    same username in TradingView script settings.
-                  </p>
-                ) : (
-                  <p className="setup-note">
-                    Required before your personal script can be generated. Use the exact username shown on your
-                    TradingView profile.
-                  </p>
-                )}
-                {tvLinkError && <p className="pine-script-copy-feedback error">{tvLinkError}</p>}
-                {tvLinkState === 'success' && (
-                  <p className="pine-script-copy-feedback success">
-                    TradingView username saved. Your personal script is ready to copy.
-                  </p>
-                )}
-              </form>
-
-              {tierLimits.multiMarketScanner && (
-                <p className="premium-feature-hint">
-                  Premium: you receive alerts across all markets on your plan.
-                </p>
-              )}
-              {tierLimits.smartMoneyConcepts && (
-                <p className="premium-feature-hint">
-                  Premium: additional Smart Money overlays (FVG / zones from alert metadata) on your in-app Kaching
-                  charts — separate from the Entry / SL / TP lines on TradingView.
-                </p>
-              )}
-              {tierLimits.mt5Execution && (
-                <p className="premium-feature-hint">
-                  Auto Trading (Pro+): connect MT5 in the Auto Trading tab. Premium Auto queues entries without
-                  Telegram; Pro Manual confirms with Execute on the Telegram alert (queue only — MT5 does not depend
-                  on Telegram).
-                </p>
-              )}
-              {tierLimits.trailingStop && (
-                <p className="premium-feature-hint">
-                  Trailing stop: after the trade fills, MT5 automatically trails your stop as price moves in your favor.
-                </p>
-              )}
-              {tierLimits.breakEvenAutomation && (
-                <p className="premium-feature-hint">
-                  Break-even: once price reaches about 1R profit, MT5 moves your stop to entry (plus a small buffer).
-                </p>
-              )}
-              {tierLimits.autoLotSizing && (
-                <p className="premium-feature-hint">
-                  Premium auto lot sizing: position size is calculated from your synced MT5 balance and risk %. Keep the
-                  EA running so your balance stays up to date.
-                </p>
-              )}
-
-              <div className="pine-script-box">
-                <div className="pine-script-meta">
-                  <label htmlFor="pine-strategy-select">
-                    <strong>Strategy script:</strong>
-                  </label>{' '}
-                  <select
-                    id="pine-strategy-select"
-                    value={pineStrategy}
-                    onChange={async e => {
-                      const next = e.target.value;
-                      setPineStrategy(next);
-                      pineScriptRef.current = '';
-                      setPineLoadError('');
-                      try {
-                        await loadPineScriptBundle(next);
-                      } catch (error) {
-                        setPineLoadError(
-                          error.response?.data?.message || 'Unable to load strategy script.'
-                        );
-                      }
-                    }}
-                  >
-                    <option value="daytrading">Liquidity Sweep + FVG (Day Trading)</option>
-                    <option value="scalping">Liquidity Sweep + FVG (Scalping)</option>
-                  </select>
-                  {pineMeta?.strategyName && (
-                    <p className="setup-note">Active: {pineMeta.strategyName}</p>
-                  )}
-                </div>
-                {pineMeta && (
-                  <div className="pine-script-meta">
-                    <p>
-                      <strong>Generated for:</strong> {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
-                    </p>
-                    {pineMeta.tradingviewUsername && (
-                      <p>
-                        <strong>Licensed TradingView user:</strong> <code>{pineMeta.tradingviewUsername}</code>
-                      </p>
-                    )}
-                    <p className="setup-webhook-url">
-                      <strong>Webhook URL:</strong> <code>{pineMeta.webhookUrl}</code>
-                    </p>
-                    <p>
-                      <strong>Script ID:</strong> {pineMeta.scriptId}
-                      {pineMeta.generatedAt && (
-                        <span> · {new Date(pineMeta.generatedAt).toLocaleString()}</span>
-                      )}
-                    </p>
-                    {pineMeta.security?.authNote && (
-                      <p>
-                        <strong>Privacy:</strong> {pineMeta.security.authNote}
-                      </p>
-                    )}
-                    <p className="setup-note">
-                      Charts are display-only. Chart feed issues never block alerts.
-                      {pineStrategy === 'scalping'
-                        ? ' Scalping: use a 1m or 3m chart; HTF liquidity is 15m context only.'
-                        : pineStrategy === 'daytrading'
-                          ? ' Day Trading: use a 15m or 5m chart; HTF bias/liquidity is 4H context only.'
-                          : ''}
-                    </p>
+              <section className="tv-setup-block" aria-labelledby="tv-setup-username-heading">
+                <h4 id="tv-setup-username-heading">
+                  <span className="tv-setup-step-num" aria-hidden="true">1</span>
+                  Link TradingView username
+                </h4>
+                <form className="tv-username-link" onSubmit={linkTradingViewUsername}>
+                  <label htmlFor="tv-username-input">Exact TradingView username</label>
+                  <div className="tv-username-link-row">
+                    <input
+                      id="tv-username-input"
+                      type="text"
+                      value={tvUsernameInput}
+                      onChange={e => setTvUsernameInput(e.target.value)}
+                      placeholder="Your TradingView username"
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                    <button type="submit" className="btn-copy-script" disabled={tvLinkState === 'loading'}>
+                      {tvLinkState === 'loading'
+                        ? 'Saving…'
+                        : linkedTvUsername
+                          ? 'Update username'
+                          : 'Save username'}
+                    </button>
                   </div>
-                )}
+                  {linkedTvUsername ? (
+                    <p className="setup-note">
+                      Licensed to <code>{linkedTvUsername}</code>. After changing it, re-copy the script and re-add it
+                      to the chart so Confirm unlocks on paste.
+                    </p>
+                  ) : (
+                    <p className="setup-note">
+                      Required before your personal script can be generated. Use the username on your TradingView
+                      profile.
+                    </p>
+                  )}
+                  {tvLinkError && <p className="pine-script-copy-feedback error">{tvLinkError}</p>}
+                  {tvLinkState === 'success' && (
+                    <p className="pine-script-copy-feedback success">
+                      Username saved. Re-copy your personal script so the license matches.
+                    </p>
+                  )}
+                </form>
+              </section>
 
+              <section className="tv-setup-block" aria-labelledby="tv-setup-script-heading">
+                <h4 id="tv-setup-script-heading">
+                  <span className="tv-setup-step-num" aria-hidden="true">2</span>
+                  Copy your personal script
+                </h4>
+                <div className="pine-script-box">
+                  <div className="pine-script-meta pine-script-strategy">
+                    <label htmlFor="pine-strategy-select">Strategy</label>
+                    <select
+                      id="pine-strategy-select"
+                      value={pineStrategy}
+                      onChange={async e => {
+                        const next = e.target.value;
+                        setPineStrategy(next);
+                        pineScriptRef.current = '';
+                        setPineLoadError('');
+                        try {
+                          await loadPineScriptBundle(next);
+                        } catch (error) {
+                          setPineLoadError(
+                            error.response?.data?.message || 'Unable to load strategy script.'
+                          );
+                        }
+                      }}
+                    >
+                      <option value="daytrading">Liquidity Sweep + FVG (Day Trading)</option>
+                      <option value="scalping">Liquidity Sweep + FVG (Scalping)</option>
+                    </select>
+                    {pineMeta?.strategyName && (
+                      <p className="setup-note">Active: {pineMeta.strategyName}</p>
+                    )}
+                  </div>
+
+                  {pineMeta && (
+                    <div className="pine-script-meta">
+                      <dl className="pine-script-dl">
+                        <div>
+                          <dt>Generated for</dt>
+                          <dd>
+                            {pineMeta.subscriberLabel} ({pineMeta.tierLabel})
+                          </dd>
+                        </div>
+                        {pineMeta.tradingviewUsername && (
+                          <div>
+                            <dt>Licensed user</dt>
+                            <dd>
+                              <code>{pineMeta.tradingviewUsername}</code>
+                            </dd>
+                          </div>
+                        )}
+                        <div className="setup-webhook-url">
+                          <dt>Webhook URL</dt>
+                          <dd>
+                            <code>{pineMeta.webhookUrl}</code>
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Script ID</dt>
+                          <dd>
+                            {pineMeta.scriptId}
+                            {pineMeta.generatedAt && (
+                              <span> · {new Date(pineMeta.generatedAt).toLocaleString()}</span>
+                            )}
+                          </dd>
+                        </div>
+                      </dl>
+                      {pineMeta.security?.authNote && (
+                        <p className="setup-note">{pineMeta.security.authNote}</p>
+                      )}
+                      <p className="setup-note">
+                        Keep the script on the chart so Entry, SL, and TP1–3 draw when signals fire. Charts are
+                        display-only and never block alerts.
+                        {pineStrategy === 'scalping'
+                          ? ' Scalping: use a 1m or 3m chart; HTF liquidity is 15m context only.'
+                          : pineStrategy === 'daytrading'
+                            ? ' Day Trading: use a 15m or 5m chart; HTF bias/liquidity is 4H context only.'
+                            : ''}
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="pine-script-actions">
+                    <button
+                      type="button"
+                      className="btn-copy-script"
+                      onClick={copyPineScript}
+                      disabled={pineCopyState === 'loading' || !linkedTvUsername}
+                    >
+                      {pineCopyState === 'loading' ? 'Copying…' : 'Copy Script'}
+                    </button>
+                    <p className="pine-script-copy-note">
+                      Copied to your clipboard only — the script is not shown on this page.
+                      {!linkedTvUsername && ' Save your TradingView username first.'}
+                    </p>
+                    {!pineMeta && !pineLoadError && pineCopyState !== 'loading' && (
+                      <p className="pine-script-loading">Preparing your script…</p>
+                    )}
+                    {pineLoadError && (
+                      <p className="pine-script-copy-feedback error">{pineLoadError}</p>
+                    )}
+                    {pineCopyState === 'success' && (
+                      <p className="pine-script-copy-feedback success">
+                        Script copied (licensed to{' '}
+                        <code>{pineMeta?.tradingviewUsername || linkedTvUsername || 'your TV user'}</code>
+                        ). Paste into Pine Editor → Add to chart.
+                      </p>
+                    )}
+                    {pineCopyState === 'error' && !pineLoadError && (
+                      <p className="pine-script-copy-feedback error">
+                        Could not copy the script. Allow clipboard access and try again.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="tv-setup-block" aria-labelledby="tv-setup-alert-heading">
+                <h4 id="tv-setup-alert-heading">
+                  <span className="tv-setup-step-num" aria-hidden="true">3</span>
+                  Add to chart &amp; create alert
+                </h4>
                 <div className="pine-script-instructions">
                   <ol>
                     {(pineMeta?.instructions?.length
                       ? pineMeta.instructions
                       : [
-                          'Link your TradingView username above',
                           'Open TradingView → Pine Editor → paste your personal script → Add to chart',
-                          'In script settings, confirm the same TradingView username to unlock signals',
-                          'Keep the script on the chart so Entry, SL, and TP1–3 overlays draw when signals fire',
+                          'Confirm username is prefilled under KachingFx License — leave it to unlock',
+                          'If an old locked copy is still on the chart, remove it and re-add the new script',
                           'Create one alert for this script and enable webhook notifications',
                           'Paste your Kaching webhook URL into the alert',
                           'Optional: enable TradingView mobile notifications'
@@ -631,38 +665,36 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                     ))}
                   </ol>
                 </div>
+              </section>
 
-                <div className="pine-script-actions">
-                  <button
-                    type="button"
-                    className="btn-copy-script"
-                    onClick={copyPineScript}
-                    disabled={pineCopyState === 'loading' || !linkedTvUsername}
-                  >
-                    {pineCopyState === 'loading' ? 'Copying…' : 'Copy Script'}
-                  </button>
-                  <p className="pine-script-copy-note">
-                    Your personal Pine Script is copied to the clipboard only — it is not shown on this page.
-                    {!linkedTvUsername && ' Save your TradingView username first.'}
-                  </p>
-                  {!pineMeta && !pineLoadError && pineCopyState !== 'loading' && (
-                    <p className="pine-script-loading">Preparing your script…</p>
-                  )}
-                  {pineLoadError && (
-                    <p className="pine-script-copy-feedback error">{pineLoadError}</p>
-                  )}
-                  {pineCopyState === 'success' && (
-                    <p className="pine-script-copy-feedback success">
-                      Script copied. Paste it into the TradingView Pine Editor.
-                    </p>
-                  )}
-                  {pineCopyState === 'error' && !pineLoadError && (
-                    <p className="pine-script-copy-feedback error">
-                      Could not copy the script. Allow clipboard access and try again.
-                    </p>
-                  )}
-                </div>
-              </div>
+              {(tierLimits.multiMarketScanner ||
+                tierLimits.smartMoneyConcepts ||
+                tierLimits.mt5Execution ||
+                tierLimits.trailingStop ||
+                tierLimits.breakEvenAutomation ||
+                tierLimits.autoLotSizing) && (
+                <section className="tv-setup-block tv-setup-plan-perks" aria-labelledby="tv-setup-perks-heading">
+                  <h4 id="tv-setup-perks-heading">Included with your plan</h4>
+                  <ul className="tv-setup-perk-list">
+                    {tierLimits.multiMarketScanner && (
+                      <li>Alerts across all markets on your plan</li>
+                    )}
+                    {tierLimits.smartMoneyConcepts && (
+                      <li>Smart Money overlays on in-app Kaching charts (separate from TradingView levels)</li>
+                    )}
+                    {tierLimits.mt5Execution && (
+                      <li>Auto Trading via MT5 — connect in the Auto Trading tab</li>
+                    )}
+                    {tierLimits.trailingStop && <li>Trailing stop after fill</li>}
+                    {tierLimits.breakEvenAutomation && (
+                      <li>Break-even stop once price reaches about 1R</li>
+                    )}
+                    {tierLimits.autoLotSizing && (
+                      <li>Auto lot sizing from synced MT5 balance and risk %</li>
+                    )}
+                  </ul>
+                </section>
+              )}
             </div>
           )}
         </div>

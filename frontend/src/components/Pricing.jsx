@@ -1,12 +1,26 @@
 import { useState, useEffect } from 'react';
 import { subscriptionApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import Checkout from './Checkout';
+import ManualMpesaCheckout from './ManualMpesaCheckout';
 import { PRICING_FAQS } from '../seo/pageMeta';
+import {
+  getPlanDisplayLabel,
+  getStatusDisplayLabel,
+  hasAdminUnlimitedAccess
+} from '../utils/subscriptionDisplay';
 
 function isActiveSubscription(subscription) {
   if (!subscription) return false;
   return subscription.status === 'active';
+}
+
+function subscriptionStatusLabel(subscription) {
+  const status = subscription?.status || 'pending';
+  if (status === 'active') return 'Active';
+  if (status === 'pending') return 'Awaiting Verification';
+  if (status === 'expired') return 'Subscription Expired';
+  if (status === 'cancelled') return 'Cancelled';
+  return status;
 }
 
 function getTierPrice(tier, billingCycle) {
@@ -68,8 +82,10 @@ export default function Pricing({
   }
 
   const currentTier = subscription?.tier || 'basic';
-  const hasAccess = isAuthenticated && isActiveSubscription(subscription);
+  const isAdminAccess = hasAdminUnlimitedAccess(subscription, user);
+  const hasAccess = isAuthenticated && (isActiveSubscription(subscription) || isAdminAccess);
   const periodSuffix = billingCycle === 'yearly' ? '/year' : '/month';
+  const adminPlanLabel = getPlanDisplayLabel(subscription, user);
 
   return (
     <div className="pricing-container">
@@ -79,13 +95,24 @@ export default function Pricing({
           {isAuthenticated ? (
             <>
               Signed in as <strong>{user.displayName || user.email}</strong>.
-              {hasAccess ? (
+              {isAdminAccess ? (
+                <>
+                  {' '}
+                  Plan: <strong>{adminPlanLabel}</strong> · Status:{' '}
+                  <strong>{getStatusDisplayLabel(subscription, user)}</strong> · Expires:{' '}
+                  <strong>Never</strong>.
+                </>
+              ) : hasAccess ? (
                 <>
                   {' '}
                   Your <strong>{tiers[currentTier]?.name || currentTier}</strong> plan is active.
                 </>
               ) : (
-                <> Complete payment to unlock live alerts.</>
+                <>
+                  {' '}
+                  Status: <strong>{subscriptionStatusLabel(subscription)}</strong>. Pay via M-Pesa
+                  Till to unlock live alerts.
+                </>
               )}
             </>
           ) : (
@@ -116,7 +143,8 @@ export default function Pricing({
         <>
           <div className="pricing-tiers">
             {Object.entries(tiers).map(([key, tier]) => {
-              const isCurrent = key === currentTier && hasAccess;
+              // Admins use role access — never mark Basic/Pro/Premium as "Current Plan".
+              const isCurrent = !isAdminAccess && key === currentTier && hasAccess;
               const limits = tier.limits || {};
               const pricing = getTierPrice(tier, billingCycle);
 
@@ -186,6 +214,26 @@ export default function Pricing({
             })}
           </div>
 
+          <section className="pricing-payment-info" aria-label="Direct payment details">
+            <p className="pricing-payment-intro">
+              You can pay directly through our M-Pesa Till
+            </p>
+            <ul className="pricing-payment-details">
+              <li>
+                <span className="pricing-payment-label">Mpesa Till</span>
+                <span className="pricing-payment-value">5337170</span>
+              </li>
+              <li>
+                <span className="pricing-payment-label">Account name</span>
+                <span className="pricing-payment-value">KachingFx Official</span>
+              </li>
+              <li>
+                <span className="pricing-payment-label">Binance Pay — Binance ID</span>
+                <span className="pricing-payment-value">484947783</span>
+              </li>
+            </ul>
+          </section>
+
           <section className="pricing-faq" aria-labelledby="pricing-faq-title">
             <h2 id="pricing-faq-title">Frequently asked questions</h2>
             <div className="pricing-faq-list">
@@ -214,7 +262,7 @@ export default function Pricing({
           </div>
         </>
       ) : (
-        <Checkout
+        <ManualMpesaCheckout
           tier={selectedTier}
           tierData={tiers[selectedTier]}
           billingCycle={billingCycle}

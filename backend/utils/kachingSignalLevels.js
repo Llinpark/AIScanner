@@ -4,6 +4,8 @@ const KACHING_ALERT_NAMES = {
   take_profit_1: 'Kaching TP1',
   take_profit_2: 'Kaching TP2',
   take_profit_3: 'Kaching TP3',
+  expired: 'Kaching Expired',
+  cancelled: 'Kaching Cancelled',
   signal: 'Kaching Signal'
 };
 

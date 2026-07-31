@@ -27,6 +27,12 @@ const StrategyRuntimeConfigSchema = new mongoose.Schema({
   },
   /** Independent Market Regime Filter settings (pre-scan gate; not strategy-specific) */
   marketRegime: { type: mongoose.Schema.Types.Mixed, default: {} },
+  /**
+   * Core scanner runtime settings (interval, batch size, auto-scan).
+   * Env/patternScanner defaults are baseline; this object wins after boot load.
+   * Shape: { autoScanEnabled?, autoScanIntervalMs?, scanBatchSize? }
+   */
+  coreScanner: { type: mongoose.Schema.Types.Mixed, default: {} },
   updatedAt: { type: Date, default: Date.now },
   updatedBy: { type: String }
 });

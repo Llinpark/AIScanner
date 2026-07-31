@@ -27,8 +27,10 @@ const {
 const WeightLearningService = require('../services/WeightLearningService');
 const { canManageScannerConfig } = require('../utils/adminAccess');
 
+const ActivationService = require('../services/ActivationService');
+
 const SUBSCRIPTION_TIERS = new Set(['basic', 'professional', 'premium']);
-const SUBSCRIPTION_STATUSES = new Set(['inactive', 'pending', 'active', 'cancelled']);
+const SUBSCRIPTION_STATUSES = new Set(['inactive', 'pending', 'active', 'cancelled', 'expired']);
 const SUBSCRIPTION_BILLING_CYCLES = new Set(['monthly', 'yearly']);
 
 function createAdminRouter({ io } = {}) {
@@ -127,13 +129,10 @@ function createAdminRouter({ io } = {}) {
         UserConfig.countDocuments(filter)
       ]);
 
+      // Use sanitizeUser so admin/super_admin Status reflects effective access (active premium),
+      // not raw DB billing fields that may still be inactive.
       res.json({
-        users: users.map(user => ({
-          ...sanitizeUser(user),
-          role: user.role || 'user',
-          // Keep stored billing state for admin management (not computed admin bypass).
-          subscription: user.subscription || {}
-        })),
+        users: users.map(user => sanitizeUser(user)),
         page,
         limit,
         total,
@@ -157,11 +156,7 @@ function createAdminRouter({ io } = {}) {
       }
 
       res.json({
-        user: {
-          ...sanitizeUser(user),
-          role: user.role || 'user',
-          subscription: user.subscription || {}
-        }
+        user: sanitizeUser(user)
       });
     } catch (error) {
       console.error('Admin user detail error:', error);
@@ -556,25 +551,20 @@ function createAdminRouter({ io } = {}) {
         }
       }
 
-      let persisted = null;
-      const shouldPersistStrategies =
-        Boolean(req.body?.strategies) ||
-        req.body?.activeStrategy !== undefined ||
-        Boolean(req.body?.marketRegime);
-      if (shouldPersistStrategies) {
-        persisted = await persistStrategyConfig({
-          updatedBy: req.user?.email || req.user?.id || null
-        });
-      }
+      // Always persist: core scan + strategies + market regime are the global
+      // runtime source of truth for all traders (survives refresh / logout / restart).
+      const persisted = await persistStrategyConfig({
+        updatedBy: req.user?.email || req.user?.id || null
+      });
 
       await logAdminAction(req, {
         action: 'scanner.config.update',
         targetType: 'scanner',
-        summary: shouldPersistStrategies
-          ? 'Updated scanner + strategy/regime runtime configuration'
-          : 'Updated scanner runtime configuration',
+        summary: 'Updated scanner runtime configuration (core + strategies + regime)',
         metadata: {
           autoScanEnabled: updated.autoScanEnabled,
+          autoScanIntervalMs: updated.autoScanIntervalMs,
+          scanBatchSize: updated.scanBatchSize,
           activeStrategy: updated.activeStrategy,
           marketRegimeEnabled: updated.marketRegime?.enabled,
           strategies: updated.strategies
@@ -589,13 +579,13 @@ function createAdminRouter({ io } = {}) {
 
       res.json({
         message: persisted
-          ? 'Scanner, strategy, and market regime configuration saved.'
-          : 'Scanner configuration updated.',
+          ? 'Scanner configuration saved. Core scan, strategy, and market regime settings persist across restarts.'
+          : 'Scanner configuration updated in memory (database unavailable — changes will not survive restart).',
         config: updated,
         status: MarketScannerService.getScannerStatus(),
         note: persisted
-          ? 'Strategy and market regime overrides are persisted in the database and survive restarts. Core scan settings still need backend/.env if you want them durable.'
-          : 'Runtime changes apply until backend restart unless mirrored in backend/.env.'
+          ? 'Saved to the database. Backend loads this config on boot and applies it globally for all traders.'
+          : 'MongoDB was not ready; settings apply until process restart only.'
       });
     } catch (error) {
       console.error('Admin scanner config error:', error);
@@ -711,6 +701,190 @@ function createAdminRouter({ io } = {}) {
       console.error('Admin referral pay error:', error);
       const status = error.message === 'Referral commission not found' ? 404 : 400;
       res.status(status).json({ message: error.message || 'Unable to mark commission paid', error: error.message });
+    }
+  });
+
+  // ── Manual M-Pesa activations (Super Admin only) ──────────────────────────
+
+  router.get('/manual-activations', requireSuperAdmin, async (req, res) => {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return res.json({ payments: [], page: 1, limit: 25, total: 0, pages: 0 });
+      }
+      const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 25));
+      const result = await ActivationService.listManualPayments({
+        status: req.query.status || undefined,
+        search: req.query.search || undefined,
+        page,
+        limit
+      });
+      res.json(result);
+    } catch (error) {
+      console.error('Admin manual activations list error:', error);
+      res.status(500).json({ message: 'Unable to load manual activations', error: error.message });
+    }
+  });
+
+  router.get('/manual-activations/:id', requireSuperAdmin, async (req, res) => {
+    try {
+      const payment = await PaymentTransaction.findById(req.params.id)
+        .populate('userId', 'email displayName phone subscription')
+        .populate('activatedBy', 'email displayName')
+        .lean();
+      if (!payment) {
+        return res.status(404).json({ message: 'Payment not found.' });
+      }
+      const user = payment.userId && typeof payment.userId === 'object' ? payment.userId : null;
+      res.json({
+        payment: {
+          id: String(payment._id),
+          userId: user?._id ? String(user._id) : String(payment.userId),
+          userEmail: user?.email || null,
+          userName: user?.displayName || null,
+          plan: payment.tier,
+          tier: payment.tier,
+          phone: payment.phoneNumber || user?.phone || null,
+          mpesaCode: payment.providerReference,
+          amount: payment.amount,
+          currency: payment.currency,
+          billingCycle: payment.billingCycle,
+          status: payment.status,
+          notes: payment.notes || '',
+          screenshotUrl: payment.screenshotUrl || '',
+          paymentMethod: payment.paymentMethod || payment.provider,
+          activatedBy: payment.activatedBy?.email || null,
+          activationDate: payment.activationDate || null,
+          createdAt: payment.createdAt,
+          completedAt: payment.completedAt || null,
+          subscription: ActivationService.serializeSubscription(user?.subscription)
+        }
+      });
+    } catch (error) {
+      console.error('Admin manual activation detail error:', error);
+      res.status(500).json({ message: 'Unable to load payment', error: error.message });
+    }
+  });
+
+  router.post('/manual-activations/:id/approve', requireSuperAdmin, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await ActivationService.approveManualPayment(
+        req.params.id,
+        req.user,
+        {
+          tier: body.tier || body.plan,
+          amount: body.amount,
+          phoneNumber: body.phoneNumber || body.phone,
+          mpesaCode: body.mpesaCode,
+          startDate: body.startDate,
+          expiryDate: body.expiryDate,
+          notes: body.notes,
+          billingCycle: body.billingCycle,
+          io
+        },
+        req
+      );
+      res.json({
+        message: 'Payment approved and subscription activated.',
+        user: sanitizeUser(result.user),
+        payment: {
+          id: String(result.payment._id),
+          status: result.payment.status,
+          mpesaCode: result.payment.providerReference,
+          activationDate: result.payment.activationDate
+        },
+        subscription: result.subscription
+      });
+    } catch (error) {
+      console.error('Admin manual activation approve error:', error);
+      res.status(error.status || 500).json({
+        message: error.message || 'Unable to approve payment'
+      });
+    }
+  });
+
+  router.post('/manual-activations/:id/reject', requireSuperAdmin, async (req, res) => {
+    try {
+      const result = await ActivationService.rejectManualPayment(
+        req.params.id,
+        req.user,
+        { notes: req.body?.notes || '', io },
+        req
+      );
+      res.json({
+        message: 'Payment rejected.',
+        payment: {
+          id: String(result.payment._id),
+          status: result.payment.status
+        }
+      });
+    } catch (error) {
+      console.error('Admin manual activation reject error:', error);
+      res.status(error.status || 500).json({
+        message: error.message || 'Unable to reject payment'
+      });
+    }
+  });
+
+  router.patch('/manual-activations/:id/notes', requireSuperAdmin, async (req, res) => {
+    try {
+      const payment = await ActivationService.updateManualPaymentNotes(
+        req.params.id,
+        req.body?.notes || '',
+        req
+      );
+      res.json({
+        message: 'Notes updated.',
+        payment: { id: String(payment._id), notes: payment.notes }
+      });
+    } catch (error) {
+      console.error('Admin manual activation notes error:', error);
+      res.status(error.status || 500).json({
+        message: error.message || 'Unable to update notes'
+      });
+    }
+  });
+
+  router.post('/manual-activations/users/:userId/extend', requireSuperAdmin, async (req, res) => {
+    try {
+      const result = await ActivationService.extendUserSubscription(
+        req.params.userId,
+        req.user,
+        { days: req.body?.days || req.body?.extendDays, notes: req.body?.notes || '', io },
+        req
+      );
+      res.json({
+        message: 'Subscription extended.',
+        user: sanitizeUser(result.user),
+        subscription: result.subscription
+      });
+    } catch (error) {
+      console.error('Admin subscription extend error:', error);
+      res.status(error.status || 500).json({
+        message: error.message || 'Unable to extend subscription'
+      });
+    }
+  });
+
+  router.post('/manual-activations/users/:userId/cancel', requireSuperAdmin, async (req, res) => {
+    try {
+      const result = await ActivationService.cancelUserSubscription(
+        req.params.userId,
+        req.user,
+        { notes: req.body?.notes || '', io },
+        req
+      );
+      res.json({
+        message: 'Subscription cancelled.',
+        user: sanitizeUser(result.user),
+        subscription: result.subscription
+      });
+    } catch (error) {
+      console.error('Admin subscription cancel error:', error);
+      res.status(error.status || 500).json({
+        message: error.message || 'Unable to cancel subscription'
+      });
     }
   });
 

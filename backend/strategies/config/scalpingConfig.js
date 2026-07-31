@@ -156,7 +156,14 @@ const DEFAULT_SCALPING_CONFIG = Object.freeze({
 
   // Filters
   filters: {
-    maxSpreadPips: Number(process.env.SCALPING_MAX_SPREAD_PIPS || 3.5),
+    maxSpreadPipsByClass: {
+      forex: Number(process.env.SCALPING_MAX_SPREAD_FOREX || 2.5),
+      gold: Number(process.env.SCALPING_MAX_SPREAD_GOLD || 5),
+      indices: Number(process.env.SCALPING_MAX_SPREAD_INDICES || 10)
+    },
+    maxSpreadPipsBySymbol: {},
+    /** @deprecated Prefer maxSpreadPipsByClass / resolveMaxSpreadPips. */
+    maxSpreadPips: Number(process.env.SCALPING_MAX_SPREAD_PIPS || 2.5),
     minAtrPips: Number(process.env.SCALPING_MIN_ATR_PIPS || 2.0),
     sidewaysAtrRatioMax: Number(process.env.SCALPING_SIDEWAYS_ATR || 0.55),
     sidewaysLookback: 20,
@@ -198,7 +205,18 @@ function resolveScalpingConfig(overrides = {}) {
         ...(overrides.confidence?.weights || {})
       }
     },
-    filters: { ...DEFAULT_SCALPING_CONFIG.filters, ...(overrides.filters || {}) },
+    filters: {
+      ...DEFAULT_SCALPING_CONFIG.filters,
+      ...(overrides.filters || {}),
+      maxSpreadPipsByClass: {
+        ...(DEFAULT_SCALPING_CONFIG.filters.maxSpreadPipsByClass || {}),
+        ...(overrides.filters?.maxSpreadPipsByClass || {})
+      },
+      maxSpreadPipsBySymbol: {
+        ...(DEFAULT_SCALPING_CONFIG.filters.maxSpreadPipsBySymbol || {}),
+        ...(overrides.filters?.maxSpreadPipsBySymbol || {})
+      }
+    },
     cache: { ...DEFAULT_SCALPING_CONFIG.cache, ...(overrides.cache || {}) }
   };
 }

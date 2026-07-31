@@ -261,7 +261,8 @@ export default function AdminSignals() {
                   {signals.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="admin-table-empty">
-                        No signals found.
+                        No signals found. Signals appear here after TradingView Pine webhooks persist to Mongo
+                        (auto-scan does not write this list).
                       </td>
                     </tr>
                   ) : (

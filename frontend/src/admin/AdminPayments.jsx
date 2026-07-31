@@ -27,6 +27,7 @@ function billingCyclePillTone(cycle) {
 const SUMMARY_STATUSES = [
   { key: 'pending', label: 'Pending', tone: 'warning' },
   { key: 'completed', label: 'Completed', tone: 'success' },
+  { key: 'rejected', label: 'Rejected', tone: 'danger' },
   { key: 'failed', label: 'Failed', tone: 'danger' },
   { key: 'cancelled', label: 'Cancelled', tone: 'default' }
 ];
@@ -151,6 +152,7 @@ export default function AdminPayments() {
             <option value="">All statuses</option>
             <option value="pending">Pending</option>
             <option value="completed">Completed</option>
+            <option value="rejected">Rejected</option>
             <option value="failed">Failed</option>
             <option value="cancelled">Cancelled</option>
           </select>

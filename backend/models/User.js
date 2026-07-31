@@ -41,14 +41,56 @@ const UserConfigSchema = new mongoose.Schema({
     terminalId: { type: String, default: null }
   },
 
+  /**
+   * Subscription = access entitlement.
+   * Scanner / alerts / premium gates check status === 'active' only (never PaymentTransaction).
+   *
+   * Conceptual mapping (spec → stored lowercase for compatibility):
+   *   ACTIVE|PENDING|EXPIRED|CANCELLED → active|pending|expired|cancelled
+   *   planId → tier
+   *   expiryDate → current_period_end
+   *   startDate → startDate (also mirrored on activation)
+   *   remainingDays → computed at read time
+   */
   subscription: {
     tier: { type: String, enum: ['basic', 'professional', 'premium'], default: 'basic' },
-    status: { type: String, enum: ['inactive', 'pending', 'active', 'cancelled'], default: 'inactive' },
-    provider: { type: String, enum: ['mpesa', 'paypal', 'mock', 'binance', 'sasapay', 'paystack', 'beta'] },
+    status: {
+      type: String,
+      enum: ['inactive', 'pending', 'active', 'cancelled', 'expired'],
+      default: 'pending'
+    },
+    provider: {
+      type: String,
+      enum: [
+        'mpesa',
+        'paypal',
+        'mock',
+        'binance',
+        'sasapay',
+        'paystack',
+        'beta',
+        'manual_mpesa',
+        'daraja',
+        'stripe',
+        'bank',
+        'complimentary',
+        'admin'
+      ]
+    },
+    /** Canonical source for how access was granted (uppercase constants). */
+    paymentSource: {
+      type: String,
+      enum: ['MANUAL_MPESA', 'DARAJA', 'STRIPE', 'PAYPAL', 'BANK', 'ADMIN', 'BINANCE', 'MOCK', 'BETA'],
+      default: undefined
+    },
     providerCustomerId: { type: String },
     providerSubscriptionId: { type: String },
     providerOrderId: { type: String },
+    /** Subscription start (activation date). */
+    startDate: { type: Date },
+    /** Expiry — same as current_period_end (kept for legacy readers). */
     current_period_end: { type: Date },
+    activatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'UserConfig', default: null },
     billingCycle: { type: String, enum: ['weekly', 'monthly', 'yearly'], default: 'monthly' },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }

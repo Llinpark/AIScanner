@@ -166,7 +166,7 @@ function serializeSignal(signal) {
 }
 
 function applyManualOutcomeUpdate(outcome) {
-  const allowed = new Set(['pending', 'tp1', 'tp2', 'tp3', 'sl', 'breakeven']);
+  const allowed = new Set(['pending', 'tp1', 'tp2', 'tp3', 'sl', 'breakeven', 'expired', 'cancelled']);
   if (!allowed.has(outcome)) {
     throw new Error('Invalid outcome value.');
   }
@@ -176,18 +176,52 @@ function applyManualOutcomeUpdate(outcome) {
       outcome: 'pending',
       outcomeR: null,
       tradeStatus: 'open',
-      closedAt: null
+      lifecycleStage: 'ACTIVE',
+      closedAt: null,
+      closedReason: null
     };
   }
 
-  const outcomeR = { tp1: 1, tp2: 2, tp3: 3, sl: -1, breakeven: 0 }[outcome];
-  const tradeStatus = ['tp1', 'tp2', 'tp3'].includes(outcome) ? 'won' : outcome === 'sl' ? 'lost' : 'closed';
+  const outcomeR = { tp1: 1, tp2: 2, tp3: 3, sl: -1, breakeven: 0, expired: 0, cancelled: 0 }[outcome];
+  const lifecycleStage = {
+    tp1: 'TP1',
+    tp2: 'TP2',
+    tp3: 'TP3',
+    sl: 'SL',
+    breakeven: 'TP3',
+    expired: 'EXPIRED',
+    cancelled: 'CANCELLED'
+  }[outcome];
+
+  if (outcome === 'tp1' || outcome === 'tp2') {
+    return {
+      outcome,
+      outcomeR,
+      tradeStatus: 'partial',
+      lifecycleStage,
+      closedAt: null,
+      closedReason: outcome
+    };
+  }
+
+  const tradeStatus =
+    outcome === 'tp3'
+      ? 'won'
+      : outcome === 'sl'
+        ? 'lost'
+        : outcome === 'expired'
+          ? 'expired'
+          : outcome === 'cancelled'
+            ? 'cancelled'
+            : 'closed';
 
   return {
     outcome,
     outcomeR,
     tradeStatus,
-    closedAt: new Date()
+    lifecycleStage,
+    closedAt: new Date(),
+    closedReason: outcome
   };
 }
 

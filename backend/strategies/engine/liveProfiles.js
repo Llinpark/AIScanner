@@ -46,6 +46,8 @@ function createScalpingProfile() {
       rejectOnMajorNews: Boolean(cfg.filters?.rejectOnMajorNews)
     },
     spreadRules: {
+      maxSpreadPipsByClass: { ...(cfg.filters?.maxSpreadPipsByClass || {}) },
+      maxSpreadPipsBySymbol: { ...(cfg.filters?.maxSpreadPipsBySymbol || {}) },
       maxSpreadPips: cfg.filters?.maxSpreadPips
     },
     riskSettings: {
@@ -100,6 +102,8 @@ function createDayTradingProfile() {
       newsWindowMinutes: cfg.filters?.newsWindowMinutes
     },
     spreadRules: {
+      maxSpreadPipsByClass: { ...(cfg.filters?.maxSpreadPipsByClass || {}) },
+      maxSpreadPipsBySymbol: { ...(cfg.filters?.maxSpreadPipsBySymbol || {}) },
       maxSpreadPips: cfg.filters?.maxSpreadPips
     },
     riskSettings: {

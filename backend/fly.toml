@@ -13,10 +13,10 @@ primary_region = 'ams'
   HOST = '0.0.0.0'
   NODE_ENV = 'production'
   PORT = '8080'
-  # Signal generation is TradingView webhook-driven; do not poll for signals.
+  # Auto-scan timer ON by default (internal/admin). Production signals still come from TradingView webhooks.
   SCALPING_STRATEGY_ENABLED = 'true'
   DAYTRADING_SWEEP_FVG_ENABLED = 'true'
-  SCANNER_AUTO_ENABLED = 'false'
+  SCANNER_AUTO_ENABLED = 'true'
 
 [http_service]
   internal_port = 8080

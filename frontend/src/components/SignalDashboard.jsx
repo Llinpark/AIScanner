@@ -11,6 +11,13 @@ import {
   formatStrategyName,
   isInsightsSignal
 } from '../utils/insightsSignal';
+import {
+  getExpiryDisplayLabel,
+  getPlanDisplayLabel,
+  getRemainingDaysDisplay,
+  getStatusDisplayLabel,
+  hasAdminUnlimitedAccess
+} from '../utils/subscriptionDisplay';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -39,6 +46,25 @@ function isActiveSubscription(subscription) {
   return subscription.status === 'active';
 }
 
+function formatShortDate(value) {
+  if (!value) return '—';
+  return new Date(value).toLocaleDateString();
+}
+
+function subscriptionBannerCopy(subscription) {
+  const status = subscription?.status || 'pending';
+  if (status === 'pending') {
+    return 'Awaiting Verification — your payment is being reviewed. Live alerts unlock once a Super Admin activates your plan.';
+  }
+  if (status === 'expired') {
+    return 'Subscription Expired — renew on Pricing to restore live alerts and premium features.';
+  }
+  if (status === 'cancelled') {
+    return 'Your subscription was cancelled. Go to Pricing to subscribe again.';
+  }
+  return `Your subscription is ${status}. Go to Pricing to upgrade.`;
+}
+
 function signalStatusLabel(signal) {
   if (signal.outcome && signal.outcome !== 'pending') {
     return String(signal.outcome).toUpperCase();
@@ -47,7 +73,7 @@ function signalStatusLabel(signal) {
 }
 
 export default function SignalDashboard({ initialSignals, subscription, onNavigateReferrals }) {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const [signals, setSignals] = useState(() =>
     (initialSignals || []).filter(isInsightsSignal)
   );
@@ -59,6 +85,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
   const [expandedId, setExpandedId] = useState(null);
   const [chartSymbol, setChartSymbol] = useState('EUR/USD');
   const [chartError, setChartError] = useState(null);
+  const isAdminAccess = hasAdminUnlimitedAccess(subscription, user);
 
   const onChartErrorChange = useCallback(err => setChartError(err), []);
 
@@ -131,8 +158,16 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
   const visibleSignals = useMemo(() => signals.filter(isInsightsSignal), [signals]);
 
-  const hasAccess = isActiveSubscription(subscription);
+  const hasAccess = isActiveSubscription(subscription) || isAdminAccess;
   const tierKey = subscription?.tier || 'basic';
+  const planLabel = getPlanDisplayLabel(
+    subscription,
+    user,
+    tierDisplayName || TIER_LABELS[tierKey] || tierKey
+  );
+  const statusLabel = getStatusDisplayLabel(subscription, user);
+  const expiryLabel = getExpiryDisplayLabel(subscription, user, formatShortDate);
+  const remainingLabel = getRemainingDaysDisplay(subscription, user);
 
   return (
     <div className="dashboard-card">
@@ -147,9 +182,63 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
       {!hasAccess && (
         <div className="subscription-banner">
-          <p>Your subscription is {subscription?.status || 'inactive'}. Go to Pricing to upgrade.</p>
+          <p>{subscriptionBannerCopy(subscription)}</p>
         </div>
       )}
+
+      <div className="subscription-status-card">
+        {hasAccess ? (
+          <>
+            <div className="subscription-status-header">
+              <h3>Current Plan</h3>
+              <span className={`admin-pill ${isAdminAccess ? 'status-unlimited' : 'status-active'}`}>
+                {statusLabel}
+              </span>
+            </div>
+            <dl className="admin-meta-grid">
+              <div className="admin-meta-item">
+                <dt>Plan</dt>
+                <dd>{planLabel}</dd>
+              </div>
+              {!isAdminAccess && (
+                <div className="admin-meta-item">
+                  <dt>Activation Date</dt>
+                  <dd>{formatShortDate(subscription?.startDate || subscription?.updatedAt)}</dd>
+                </div>
+              )}
+              <div className="admin-meta-item">
+                <dt>Expires</dt>
+                <dd>{expiryLabel}</dd>
+              </div>
+              <div className="admin-meta-item">
+                <dt>{isAdminAccess ? 'Access' : 'Remaining Days'}</dt>
+                <dd>{remainingLabel}</dd>
+              </div>
+            </dl>
+          </>
+        ) : subscription?.status === 'pending' ? (
+          <>
+            <div className="subscription-status-header">
+              <h3>Subscription</h3>
+              <span className="admin-pill status-pending">Awaiting Verification</span>
+            </div>
+            <p className="admin-table-meta">
+              After you pay via M-Pesa Till and submit your code on Pricing, a Super Admin will activate
+              your plan.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="subscription-status-header">
+              <h3>Subscription</h3>
+              <span className="admin-pill status-inactive">
+                {subscription?.status === 'expired' ? 'Subscription Expired' : subscription?.status || 'Inactive'}
+              </span>
+            </div>
+            <p className="admin-table-meta">Renew on Pricing to restore access to live alerts.</p>
+          </>
+        )}
+      </div>
 
       {onNavigateReferrals && (
         <div className="refer-earn-cta">
@@ -165,8 +254,18 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
       <div className="plan-summary">
         <p>
-          <strong>{tierDisplayName}</strong> plan · {allowedPairs.length} pairs ·{' '}
-          {(tierLimits.timeframes || ['1h']).join(', ')} timeframes · {tierLimits.historyDays || 7}-day history
+          {isAdminAccess ? (
+            <>
+              <strong>{planLabel}</strong> · Unlimited Access · {allowedPairs.length} pairs ·{' '}
+              {(tierLimits.timeframes || ['1h']).join(', ')} timeframes
+            </>
+          ) : (
+            <>
+              <strong>{planLabel}</strong> plan · {allowedPairs.length} pairs ·{' '}
+              {(tierLimits.timeframes || ['1h']).join(', ')} timeframes · {tierLimits.historyDays || 7}-day
+              history
+            </>
+          )}
         </p>
       </div>
 
@@ -325,7 +424,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
         )}
         {tierLimits.telegramAlerts && (
           <p className="telegram-hint">
-            Telegram notifications are enabled for your {TIER_LABELS[tierKey] || tierDisplayName} plan.
+            Telegram notifications are enabled for your {isAdminAccess ? planLabel : `${TIER_LABELS[tierKey] || tierDisplayName} plan`}.
           </p>
         )}
       </div>

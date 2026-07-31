@@ -83,10 +83,10 @@ const subscribeValidators = [
     .isIn(['basic', 'professional', 'premium'])
     .withMessage('Invalid subscription tier.'),
   body('provider')
-    .isIn(['mpesa', 'paypal', 'mock', 'binance', 'sasapay', 'paystack'])
+    .isIn(['mpesa', 'paypal', 'mock', 'binance'])
     .withMessage('Invalid payment provider.'),
   body('phone')
-    .if(body('provider').isIn(['mpesa', 'sasapay']))
+    .if(body('provider').equals('mpesa'))
     .trim()
     .matches(/^\+?[0-9]{9,15}$/)
     .withMessage('A valid phone number is required for M-Pesa.'),

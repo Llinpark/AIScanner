@@ -26,11 +26,11 @@ KachingScanner is a **signal distribution** platform. It does not generate trade
 
 The following must not publish production trading signals from provider candles:
 
-- Timer auto-scan (`SCANNER_AUTO_ENABLED` remains `false` in production)
+- Timer auto-scan (`SCANNER_AUTO_ENABLED` defaults `true` for the admin/internal scanner timer; it must still never publish live-provider candles as TradingView signals)
 - `POST /api/scanner/run` / `scanSymbol`
 - Dashboard `GET /api/scanner/analyze` (no longer used to invent levels)
 
-Legacy pattern-detection helpers may remain for offline math / weight learning but are not a selectable production strategy. Active strategies are Sweep+FVG Day Trading and Scalping only.
+Legacy pattern-detection helpers may remain for offline math / weight learning but are not a selectable production strategy. Active strategies are Sweep+FVG Day Trading and Scalping only. TradingView webhooks remain the sole production signal distribution path.
 
 ## Decision: AI commentary is descriptive, not generative of trades
 

@@ -45,16 +45,13 @@ function isMockPaymentsAllowed() {
 
 /**
  * Shared secret for payment completion webhooks that lack native signatures
- * (M-Pesa Daraja / SasaPay). Prefer header; query is supported because those
+ * (M-Pesa Daraja). Prefer header; query is supported because those
  * providers only POST to CallBackURL and cannot send custom headers.
  */
 function resolvePaymentWebhookSecret(provider) {
   const key = String(provider || '').toLowerCase();
   if (key === 'mpesa' && process.env.MPESA_WEBHOOK_SECRET) {
     return process.env.MPESA_WEBHOOK_SECRET;
-  }
-  if (key === 'sasapay' && process.env.SASAPAY_WEBHOOK_SECRET) {
-    return process.env.SASAPAY_WEBHOOK_SECRET;
   }
   return process.env.PAYMENT_WEBHOOK_SECRET || '';
 }
@@ -76,7 +73,7 @@ function verifyPaymentWebhookSecret(req, provider) {
   return timingSafeEqualString(String(extractProvidedWebhookSecret(req)), expected);
 }
 
-/** Embed shared secret in CallBackURL so Daraja/SasaPay can authenticate without custom headers. */
+/** Embed shared secret in CallBackURL so Daraja can authenticate without custom headers. */
 function appendWebhookSecretToUrl(url, provider) {
   const secret = resolvePaymentWebhookSecret(provider);
   if (!url || !secret) return url;
@@ -139,7 +136,7 @@ function isClientIpAllowed(req, allowlist) {
 }
 
 /**
- * Verify M-Pesa / SasaPay (and generic payment) webhooks before activating subscriptions.
+ * Verify M-Pesa (and generic payment) webhooks before activating subscriptions.
  * Fail closed in production when secret is missing or wrong.
  * Optional IP allowlist is additive — never a substitute for the shared secret.
  */
@@ -154,18 +151,13 @@ function verifyProviderPaymentWebhook(req, provider) {
   const verifyIpFlag =
     key === 'mpesa'
       ? process.env.MPESA_WEBHOOK_VERIFY_IP
-      : key === 'sasapay'
-        ? process.env.SASAPAY_WEBHOOK_VERIFY_IP
-        : process.env.PAYMENT_WEBHOOK_VERIFY_IP;
+      : process.env.PAYMENT_WEBHOOK_VERIFY_IP;
 
   if (verifyIpFlag === 'true') {
     const allowlist =
       key === 'mpesa'
         ? parseIpAllowlist(process.env.MPESA_WEBHOOK_IP_ALLOWLIST, DEFAULT_MPESA_IP_ALLOWLIST)
-        : parseIpAllowlist(
-            process.env.SASAPAY_WEBHOOK_IP_ALLOWLIST || process.env.PAYMENT_WEBHOOK_IP_ALLOWLIST,
-            []
-          );
+        : parseIpAllowlist(process.env.PAYMENT_WEBHOOK_IP_ALLOWLIST, []);
 
     if (allowlist.length && !isClientIpAllowed(req, allowlist)) {
       return { ok: false, reason: 'ip_not_allowed', ip: getClientIp(req) };
@@ -188,11 +180,8 @@ function assertProductionSecurityConfig() {
     if (process.env.PAYMENTS_MODE === 'mock' || process.env.ALLOW_MOCK_PAYMENTS === 'true') {
       issues.push('Mock payments must be disabled in production (set PAYMENTS_MODE=live and unset ALLOW_MOCK_PAYMENTS).');
     }
-    if (!process.env.PAYSTACK_SECRET_KEY) {
-      issues.push('PAYSTACK_SECRET_KEY should be set in production for live checkout.');
-    }
     if (!process.env.PAYMENT_WEBHOOK_SECRET) {
-      issues.push('PAYMENT_WEBHOOK_SECRET must be set in production (M-Pesa/SasaPay callback auth).');
+      issues.push('PAYMENT_WEBHOOK_SECRET must be set in production (M-Pesa callback auth).');
     }
     if (process.env.ALLOW_LEGACY_WEBHOOK_SECRET === 'true') {
       issues.push('ALLOW_LEGACY_WEBHOOK_SECRET should not be enabled in production.');
@@ -213,7 +202,7 @@ function assertProductionSecurityConfig() {
     );
   }
 
-  // Soft notice only — PayPal is optional alongside Paystack
+  // Soft notice only — PayPal is the primary card checkout path
   if (IS_PRODUCTION && (!process.env.PAYPAL_CLIENT_ID || !process.env.PAYPAL_CLIENT_SECRET)) {
     console.warn('[Security] PayPal live checkout disabled until PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET are set.');
   }

@@ -5,43 +5,64 @@ const {
   ALL_CURRENCY_PAIRS
 } = require('../config/subscriptions');
 const { normalizeSymbol } = require('../config/symbols');
-const { isAdmin } = require('./adminAccess');
+const { isAdmin, isSuperAdmin } = require('./adminAccess');
 const { isWebhookInsightsSignal } = require('./insightsSignalFilter');
-
-/** Far-future period end so admin bypass stays "active" in expiry checks. */
-const ADMIN_ACCESS_PERIOD_END = new Date('2099-12-31T23:59:59.000Z');
 
 function hasFullAccess(user) {
   return isAdmin(user);
 }
 
+function adminPlanLabel(user) {
+  return isSuperAdmin(user) ? 'Super Admin' : 'Administrator';
+}
+
 /**
  * Computed subscription used for feature gates and API/UI responses.
- * Admins/super_admins get active premium without requiring a paid plan in DB.
+ * Admins/super_admins get active premium without a paid plan or fake period end.
  */
 function getEffectiveSubscription(user) {
   if (!user) {
-    return { status: 'inactive', tier: 'basic' };
+    return { status: 'inactive', tier: 'basic', remainingDays: null };
   }
 
   const raw = user.subscription?.toObject?.() || user.subscription || {};
 
   if (!hasFullAccess(user)) {
-    return {
+    const status = raw.status || 'inactive';
+    const enriched = {
       ...raw,
-      status: raw.status || 'inactive',
-      tier: raw.tier || 'basic'
+      status,
+      tier: raw.tier || 'basic',
+      startDate: raw.startDate || null,
+      expiryDate: raw.current_period_end || null,
+      remainingDays: remainingDays(raw),
+      paymentSource: raw.paymentSource || null
     };
+    // Treat past-due active rows as expired for API consumers (job also flips DB).
+    if (status === 'active' && !isSubscriptionActive(enriched)) {
+      return { ...enriched, status: 'expired', remainingDays: 0 };
+    }
+    return enriched;
   }
 
+  const planLabel = adminPlanLabel(user);
   return {
     ...raw,
     tier: 'premium',
     status: 'active',
     provider: raw.provider || 'admin',
-    billingCycle: raw.billingCycle || 'monthly',
-    current_period_end: ADMIN_ACCESS_PERIOD_END,
-    adminBypass: true
+    paymentSource: raw.paymentSource || 'ADMIN',
+    billingCycle: null,
+    startDate: raw.startDate || null,
+    // Role-based unlimited access — never invent a sentinel expiry year.
+    current_period_end: null,
+    expiryDate: null,
+    remainingDays: null,
+    adminBypass: true,
+    unlimitedAccess: true,
+    planLabel,
+    statusLabel: 'Unlimited Access',
+    expiresLabel: 'Never'
   };
 }
 
@@ -59,13 +80,27 @@ function withEffectiveAccess(user) {
 
 function isSubscriptionActive(subscription) {
   if (!subscription) return false;
-  if (subscription.status === 'active') {
-    if (subscription.current_period_end && new Date(subscription.current_period_end) < new Date()) {
+  // Admin role bypass — unlimited access without a period end.
+  if (subscription.adminBypass || subscription.unlimitedAccess) {
+    return true;
+  }
+  // Canonical ACTIVE semantics — stored lowercase 'active' for Mongo compatibility.
+  if (subscription.status === 'active' || subscription.status === 'ACTIVE') {
+    const expiry = subscription.current_period_end || subscription.expiryDate;
+    if (expiry && new Date(expiry) < new Date()) {
       return false;
     }
     return true;
   }
   return false;
+}
+
+function remainingDays(subscription) {
+  const expiry = subscription?.current_period_end || subscription?.expiryDate;
+  if (!expiry) return null;
+  const ms = new Date(expiry).getTime() - Date.now();
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, Math.ceil(ms / (24 * 60 * 60 * 1000)));
 }
 
 function getTierName(subscription) {
@@ -297,6 +332,7 @@ module.exports = {
   getEffectiveSubscription,
   withEffectiveAccess,
   isSubscriptionActive,
+  remainingDays,
   getTierName,
   getTierFeatures,
   getTierDisplayName,

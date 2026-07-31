@@ -1,11 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { authApi } from '../services/api';
+
+/** Shared across StrictMode remounts so verify-email is called once per token. */
+const verifyPromises = new Map();
 
 export default function VerifyEmailPage({ token, onSuccess }) {
   const { applySession } = useAuth();
   const [status, setStatus] = useState('loading');
   const [message, setMessage] = useState('Verifying your email…');
+  const onSuccessRef = useRef(onSuccess);
+  const applySessionRef = useRef(applySession);
+
+  useEffect(() => {
+    onSuccessRef.current = onSuccess;
+  }, [onSuccess]);
+
+  useEffect(() => {
+    applySessionRef.current = applySession;
+  }, [applySession]);
 
   useEffect(() => {
     if (!token) {
@@ -16,16 +29,22 @@ export default function VerifyEmailPage({ token, onSuccess }) {
 
     let cancelled = false;
 
-    authApi
-      .verifyEmail(token)
+    let promise = verifyPromises.get(token);
+    if (!promise) {
+      promise = authApi.verifyEmail(token);
+      verifyPromises.set(token, promise);
+    }
+
+    promise
       .then(response => {
         if (cancelled) return;
-        applySession(null, response.data.user);
+        applySessionRef.current?.(null, response.data.user);
         setStatus('success');
         setMessage(response.data.message || 'Email verified successfully.');
-        onSuccess?.();
+        onSuccessRef.current?.();
       })
       .catch(err => {
+        verifyPromises.delete(token);
         if (cancelled) return;
         setStatus('error');
         setMessage(err.response?.data?.message || 'Unable to verify email.');
@@ -34,7 +53,7 @@ export default function VerifyEmailPage({ token, onSuccess }) {
     return () => {
       cancelled = true;
     };
-  }, [token, applySession, onSuccess]);
+  }, [token]);
 
   return (
     <div className="login-container">

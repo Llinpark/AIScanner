@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { isSubscriptionActive } = require('./subscriptionAccess');
+const { getEffectiveSubscription, isSubscriptionActive } = require('./subscriptionAccess');
 
 const LICENSE_PREFIX = 'kls_v1';
 
@@ -110,11 +110,17 @@ function parseWebhookBody(req) {
   return {};
 }
 
-function verifyGlobalWebhookSecret(req, body) {
+function verifyGlobalWebhookSecret(req, body, { allowInProduction = false } = {}) {
   const globalSecret = process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
   if (!globalSecret) return false;
 
-  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_LEGACY_WEBHOOK_SECRET !== 'true') {
+  // Primary anonymous secret auth stays gated in production. Callers may opt into
+  // allowInProduction for Pine fallback after a stale/invalid licenseToken.
+  if (
+    process.env.NODE_ENV === 'production' &&
+    process.env.ALLOW_LEGACY_WEBHOOK_SECRET !== 'true' &&
+    !allowInProduction
+  ) {
     return false;
   }
 
@@ -137,12 +143,13 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
    * Auth order (harden server-side without mass-breaking Pine scripts):
    * 1) HMAC body signature (x-kaching-signature) — preferred for server-to-server
    * 2) Per-user licenseToken (kls_v1.*) — preferred for TradingView alert JSON
-   * 3) Legacy global TRADINGVIEW_WEBHOOK_SECRET — disabled in production unless
-   *    ALLOW_LEGACY_WEBHOOK_SECRET=true
+   * 3) Legacy global TRADINGVIEW_WEBHOOK_SECRET — anonymous use disabled in production
+   *    unless ALLOW_LEGACY_WEBHOOK_SECRET=true; Pine scripts that embed both a
+   *    licenseToken and secret may fall back to the secret when the token is stale
    *
    * License tokens (v2) bind uid + TradingView username (tvu). Payload must include
    * the same tradingviewUsername, and the subscriber account must still store that
-   * username with an active subscription.
+   * username with an active (or admin-effective) subscription.
    *
    * Rotation: rotate WEBHOOK_SIGNING_SECRET carefully — regenerating signing secret
    * invalidates all existing licenseTokens; users must re-copy Pine / alert JSON.
@@ -162,43 +169,54 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
   const licenseToken = body.licenseToken || body.license_token;
   if (licenseToken) {
     const claims = verifyLicenseToken(licenseToken);
-    if (!claims) {
-      return { ok: false, reason: 'invalid_license_token', body };
-    }
-
-    if (bodyUserId && String(bodyUserId) !== String(claims.uid)) {
-      return { ok: false, reason: 'license_user_mismatch', body };
-    }
-
-    // v2+ tokens bind TradingView username; reject legacy tokens and mismatches.
-    if (!claims.tvu) {
-      return { ok: false, reason: 'license_requires_tv_username', body };
-    }
-    if (!bodyTvUsername || bodyTvUsername !== claims.tvu) {
-      return { ok: false, reason: 'license_tv_username_mismatch', body };
-    }
-
-    if (resolveUserById) {
-      const user = await resolveUserById(claims.uid);
-      if (!user || !isSubscriptionActive(user.subscription)) {
-        return { ok: false, reason: 'inactive_subscription', body };
+    if (claims) {
+      if (bodyUserId && String(bodyUserId) !== String(claims.uid)) {
+        return { ok: false, reason: 'license_user_mismatch', body };
       }
 
-      const storedTv = normalizeTradingViewUsername(
-        user.tradingviewUsername || user.preferences?.tradingviewUsername || ''
-      );
-      if (!storedTv || storedTv !== claims.tvu) {
-        return { ok: false, reason: 'stored_tv_username_mismatch', body };
+      // v2+ tokens bind TradingView username; reject legacy tokens and mismatches.
+      if (!claims.tvu) {
+        return { ok: false, reason: 'license_requires_tv_username', body };
       }
+      if (!bodyTvUsername || bodyTvUsername !== claims.tvu) {
+        return { ok: false, reason: 'license_tv_username_mismatch', body };
+      }
+
+      if (resolveUserById) {
+        const user = await resolveUserById(claims.uid);
+        // Admins get an effective active premium sub — never check raw DB subscription alone.
+        if (!user || !isSubscriptionActive(getEffectiveSubscription(user))) {
+          return { ok: false, reason: 'inactive_subscription', body };
+        }
+
+        const storedTv = normalizeTradingViewUsername(
+          user.tradingviewUsername || user.preferences?.tradingviewUsername || ''
+        );
+        if (!storedTv || storedTv !== claims.tvu) {
+          return { ok: false, reason: 'stored_tv_username_mismatch', body };
+        }
+      }
+
+      return {
+        ok: true,
+        mode: 'license',
+        body,
+        userId: claims.uid,
+        tradingviewUsername: claims.tvu
+      };
     }
 
-    return {
-      ok: true,
-      mode: 'license',
-      body,
-      userId: claims.uid,
-      tradingviewUsername: claims.tvu
-    };
+    // Stale/invalid licenseToken: Pine still embeds TRADINGVIEW_WEBHOOK_SECRET — allow fallback.
+    if (verifyGlobalWebhookSecret(req, body, { allowInProduction: true })) {
+      return {
+        ok: true,
+        mode: 'global_secret_fallback',
+        body,
+        userId: bodyUserId || null
+      };
+    }
+
+    return { ok: false, reason: 'invalid_license_token', body };
   }
 
   if (bodyUserId) {

@@ -3,6 +3,7 @@
 // Production scripts are generated from:
 //   templates/kaching-sweep-fvg-daytrading.pine.template
 //   templates/kaching-sweep-fvg-scalp.pine.template
+// Hardened with not tradeActive entry gates so mid-trade overwrites cannot occur if this file is still pasted.
 indicator("KachingFx Structural Scanner", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
 
 // ===== CONFIGURATION =====
@@ -208,7 +209,8 @@ if tradeActive and barstate.isconfirmed
         tradeActive := false
 
 // ===== FIRE ENTRY ALERTS =====
-if perfectBullFVG
+// Gate all new entries while a trade is still active (prevents mid-trade overwrite).
+if perfectBullFVG and not tradeActive
     [e, sl, t1, t2, t3, _] = calcLevels("long", close, gapTopBull, gapBotBull)
     msg = buildPayload("entry", "perfect_fvg", "long", e, sl, t1, t2, t3, gapTopBull, gapBotBull, 0.88)
     alert(msg, alert.freq_once_per_bar)
@@ -234,7 +236,7 @@ if perfectBullFVG
         activeTp3 := t3
         tradeActive := true
 
-if perfectBearFVG
+if perfectBearFVG and not tradeActive
     [e, sl, t1, t2, t3, _] = calcLevels("short", close, gapTopBear, gapBotBear)
     msg = buildPayload("entry", "perfect_fvg", "short", e, sl, t1, t2, t3, gapTopBear, gapBotBear, 0.88)
     alert(msg, alert.freq_once_per_bar)
@@ -260,7 +262,7 @@ if perfectBearFVG
         activeTp3 := t3
         tradeActive := true
 
-if bullBreakConfirm
+if bullBreakConfirm and not tradeActive
     [e, sl, t1, t2, t3, _] = calcLevels("long", close, math.max(c2Open, c3h), c1h)
     msg = buildPayload("entry", "breakaway_gap", "long", e, sl, t1, t2, t3, math.max(c2Open, c3h), c1h, 0.82)
     alert(msg, alert.freq_once_per_bar)
@@ -286,7 +288,7 @@ if bullBreakConfirm
         activeTp3 := t3
         tradeActive := true
 
-if bearBreakConfirm
+if bearBreakConfirm and not tradeActive
     [e, sl, t1, t2, t3, _] = calcLevels("short", close, c1l, math.min(c2Open, c3l))
     msg = buildPayload("entry", "breakaway_gap", "short", e, sl, t1, t2, t3, c1l, math.min(c2Open, c3l), 0.82)
     alert(msg, alert.freq_once_per_bar)

@@ -13,7 +13,8 @@ const { evaluateNewsImpact } = require('../utils/newsFilter');
 const { getRedisClient } = require('../utils/redisClient');
 const {
   getMarketRegimeConfig,
-  DEFAULT_SESSIONS
+  DEFAULT_SESSIONS,
+  resolveRegimeMaxSpreadPips
 } = require('../utils/marketRegimeConfig');
 const { normalizeSymbol } = require('../config/symbols');
 
@@ -118,6 +119,8 @@ function evaluateFromInputs(input = {}) {
   const cfg = { ...getMarketRegimeConfig(), ...(input.config || {}) };
   const symbol = normalizeSymbol(input.symbol || '');
   const timeframe = String(input.timeframe || '15m');
+  const maxSpreadPips = resolveRegimeMaxSpreadPips(symbol, cfg);
+  cfg.maxSpreadPips = maxSpreadPips;
   const now = input.now instanceof Date ? input.now : new Date(input.now || Date.now());
   const reasons = [];
   const unavailable = [];
@@ -312,6 +315,7 @@ function evaluateFromInputs(input = {}) {
       timeframe,
       atrPips,
       spreadPips,
+      maxSpreadPips,
       volatilityScore: volScore,
       session: session.name,
       newsImpact: news.impact,

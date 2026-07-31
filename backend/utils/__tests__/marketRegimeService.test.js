@@ -54,6 +54,9 @@ describe('MarketRegimeService.evaluateFromInputs', () => {
     assert.equal(cfg.enabled, true);
     assert.equal(cfg.minRegimeScore, 40);
     assert.equal(cfg.minAtrPips, 3);
+    assert.equal(cfg.maxSpreadPipsByClass.forex, 2.5);
+    assert.equal(cfg.maxSpreadPipsByClass.gold, 5);
+    assert.equal(cfg.maxSpreadPipsByClass.indices, 10);
   });
 
   it('skips when ATR is below minimum (filter enabled)', () => {
@@ -154,6 +157,36 @@ describe('MarketRegimeService.evaluateFromInputs', () => {
     assert.equal(result.shouldScan, true);
     assert.ok(result.score >= 40);
     assert.ok(['TRENDING', 'RANGING', 'HIGH_VOLATILITY'].includes(result.regime));
+  });
+
+  it('skips when symbol spread exceeds class-specific maximum', () => {
+    const candles = makeCandles({ range: 0.0012, volume: 2000 });
+    const result = evaluateFromInputs({
+      symbol: 'EURUSD',
+      timeframe: '15m',
+      candles,
+      spreadPips: 3.5, // forex default max is 2.5
+      now: new Date(Date.UTC(2026, 6, 1, 10, 0, 0)),
+      volatilityScore: 55
+    });
+    assert.equal(result.shouldScan, false);
+    assert.equal(result.metrics.maxSpreadPips, 2.5);
+    assert.ok(result.reasons.some(r => /spread/i.test(r)));
+  });
+
+  it('uses gold-specific max spread for XAUUSD', () => {
+    const candles = makeCandles({ range: 2.5, base: 2650, volume: 2000 });
+    const result = evaluateFromInputs({
+      symbol: 'XAUUSD',
+      timeframe: '15m',
+      candles,
+      spreadPips: 4.5, // under gold default of 5
+      now: new Date(Date.UTC(2026, 6, 1, 10, 0, 0)),
+      volatilityScore: 55,
+      config: { minAtrPips: 0, minVolatilityScore: 0, avoidHighImpactNews: false }
+    });
+    assert.equal(result.metrics.maxSpreadPips, 5);
+    assert.equal(result.shouldScan, true);
   });
 
   it('degrades gracefully without candles/spread (does not throw)', () => {

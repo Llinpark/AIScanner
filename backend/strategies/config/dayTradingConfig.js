@@ -17,10 +17,10 @@ const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
   name: STRATEGY_NAME,
   enabled: process.env.DAYTRADING_SWEEP_FVG_ENABLED !== 'false',
 
-  // HTF: 4H bias (never entries); optional 1H refine; entries only 15m/5m
-  htfTimeframe: process.env.DAYTRADING_HTF_TF || '4h',
+  // Official default: 1H HTF bias; optional refine HTF; entries only 15m/5m
+  htfTimeframe: process.env.DAYTRADING_HTF_TF || '1h',
   refineHtfTimeframe: process.env.DAYTRADING_REFINE_HTF_TF || '1h',
-  useRefineHtf: process.env.DAYTRADING_USE_REFINE_HTF !== 'false',
+  useRefineHtf: process.env.DAYTRADING_USE_REFINE_HTF === 'true',
   entryTimeframes: (process.env.DAYTRADING_ENTRY_TFS || '15m,5m')
     .split(',')
     .map(s => s.trim())
@@ -73,14 +73,14 @@ const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
   },
 
   fvg: {
-    minGapToAtrRatio: Number(process.env.DAYTRADING_MIN_FVG_ATR || 0.15),
+    minGapToAtrRatio: Number(process.env.DAYTRADING_MIN_FVG_ATR || 0.18),
     lookbackBars: Math.max(8, parseInt(process.env.DAYTRADING_FVG_LOOKBACK || '24', 10)),
     dojiBodyRatioMax: Number(process.env.DAYTRADING_DOJI_BODY || 0.12)
   },
 
   entry: {
     model: process.env.DAYTRADING_ENTRY_MODEL || 'ce',
-    maxWaitBars: Math.max(4, parseInt(process.env.DAYTRADING_RETRACE_WAIT || '16', 10)),
+    maxWaitBars: Math.max(4, parseInt(process.env.DAYTRADING_RETRACE_WAIT || '15', 10)),
     neverEnterOnDisplacement: true,
     doNotChase: true
   },
@@ -152,23 +152,32 @@ const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
     minRr: Number(process.env.DAYTRADING_MIN_RR || _dayTp.minRr)
   },
 
+  // Confidence weights sum to 100.
+  // User labels Engulfing+Doji map to optionalConfirmation (5+5=10); htfBias=0.
   confidence: {
-    threshold: Number(process.env.DAYTRADING_CONFIDENCE_THRESHOLD || 70),
+    threshold: Number(process.env.DAYTRADING_CONFIDENCE_THRESHOLD || 80),
     weights: {
-      htfBias: 20,
-      sweep: 25,
-      mss: 15,
-      displacement: 15,
-      fvg: 10,
-      retrace: 10,
-      optionalConfirmation: 5
+      htfBias: 0,
+      sweep: 35,
+      mss: 25,
+      displacement: 10,
+      fvg: 15,
+      retrace: 5,
+      optionalConfirmation: 10
     }
   },
 
   filters: {
     tradeReversals: process.env.DAYTRADING_TRADE_REVERSALS === 'true',
-    maxSpreadPips: Number(process.env.DAYTRADING_MAX_SPREAD_PIPS || 4),
-    minAtrPips: Number(process.env.DAYTRADING_MIN_ATR_PIPS || 4),
+    maxSpreadPipsByClass: {
+      forex: Number(process.env.DAYTRADING_MAX_SPREAD_FOREX || 2.5),
+      gold: Number(process.env.DAYTRADING_MAX_SPREAD_GOLD || 8),
+      indices: Number(process.env.DAYTRADING_MAX_SPREAD_INDICES || 15)
+    },
+    maxSpreadPipsBySymbol: {},
+    /** @deprecated Prefer maxSpreadPipsByClass / resolveMaxSpreadPips. */
+    maxSpreadPips: Number(process.env.DAYTRADING_MAX_SPREAD_PIPS || 2.5),
+    minAtrPips: Number(process.env.DAYTRADING_MIN_ATR_PIPS || 5),
     sidewaysAtrRatioMax: Number(process.env.DAYTRADING_SIDEWAYS_ATR || 0.6),
     sidewaysLookback: 24,
     rejectOnMajorNews: process.env.DAYTRADING_NEWS_FILTER !== 'false',
@@ -215,7 +224,18 @@ function resolveDayTradingConfig(overrides = {}) {
         ...(overrides.confidence?.weights || {})
       }
     },
-    filters: { ...DEFAULT_DAYTRADING_CONFIG.filters, ...(overrides.filters || {}) },
+    filters: {
+      ...DEFAULT_DAYTRADING_CONFIG.filters,
+      ...(overrides.filters || {}),
+      maxSpreadPipsByClass: {
+        ...(DEFAULT_DAYTRADING_CONFIG.filters.maxSpreadPipsByClass || {}),
+        ...(overrides.filters?.maxSpreadPipsByClass || {})
+      },
+      maxSpreadPipsBySymbol: {
+        ...(DEFAULT_DAYTRADING_CONFIG.filters.maxSpreadPipsBySymbol || {}),
+        ...(overrides.filters?.maxSpreadPipsBySymbol || {})
+      }
+    },
     cache: { ...DEFAULT_DAYTRADING_CONFIG.cache, ...(overrides.cache || {}) }
   };
 }

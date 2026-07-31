@@ -1,6 +1,8 @@
 /**
- * Day Trading Strategy TP Profile — larger swings, HTF external liquidity.
- * Optimised for Entry 5m/15m, HTF 1H/4H. Expected TP1 ~40–70 pips.
+ * Day Trading Strategy TP Profile — larger swings, institutional liquidity.
+ * Official defaults for Restore Default Day Trading Settings.
+ * Fewer / higher-quality signals; wider TPs for multi-hour holds.
+ * Optimised for Entry 5m/15m, HTF 1H. Expected TP1 ~40–70 pips.
  */
 
 const DAY_TRADING_TP_PROFILE = Object.freeze({
@@ -8,27 +10,27 @@ const DAY_TRADING_TP_PROFILE = Object.freeze({
   model: 'smart_scoring',
   enableSmartTpScoring: true,
   enableDynamicTp: true,
-  atrCaps: Object.freeze([1.5, 2.5, 3.5]),
-  maxAtrMultiplier: 3.5,
-  maxTpDistancePips: 100,
-  minScore: 0,
+  atrCaps: Object.freeze([1.0, 2.0, 3.5]),
+  maxAtrMultiplier: 3.0,
+  maxTpDistancePips: 150,
+  minScore: 70,
   scoreProximity: 5,
   allowRrFallback: true,
   /** No deferred categories — PDH/PWH/external are first-class targets. */
   deferredLiquidityCategories: Object.freeze([]),
   scoreWeights: Object.freeze({
-    pdh_pdl: 48,
-    pwh_pwl: 44,
-    external_liquidity: 42,
+    internal_liquidity: 55,
+    external_liquidity: 30,
+    equal_high_low: 45,
     swing_high_low: 40,
-    equal_high_low: 32,
-    untapped_fvg: 30,
-    internal_liquidity: 28,
-    order_block: 25,
-    breaker_block: 22,
-    mitigation_block: 22,
-    pmh_pml: 28,
-    atr_projection: 8,
+    untapped_fvg: 45,
+    order_block: 30,
+    breaker_block: 25,
+    mitigation_block: 25,
+    pdh_pdl: 25,
+    pwh_pwl: 15,
+    pmh_pml: 10,
+    atr_projection: 10,
     rr_fallback: 5
   }),
   liquidityPriority: Object.freeze([

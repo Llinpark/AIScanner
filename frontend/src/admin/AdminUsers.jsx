@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { adminApi } from '../services/api';
+import {
+  getExpiryDisplayLabel,
+  getPlanDisplayLabel,
+  getStatusDisplayLabel,
+  hasAdminUnlimitedAccess
+} from '../utils/subscriptionDisplay';
 
 const TIERS = ['basic', 'professional', 'premium'];
-const STATUSES = ['inactive', 'pending', 'active', 'cancelled'];
+const STATUSES = ['inactive', 'pending', 'active', 'cancelled', 'expired'];
 const BILLING_CYCLES = ['monthly', 'yearly'];
 
 function formatDate(value) {
@@ -18,6 +24,7 @@ function formatBillingCycle(cycle) {
 // Billing cycle is only meaningful while a plan is actually in effect;
 // free/never-subscribed/cancelled users shouldn't show a stale "monthly" default.
 function hasBillableSubscription(subscription = {}) {
+  if (subscription.adminBypass || subscription.unlimitedAccess) return false;
   return subscription.status === 'active' || subscription.status === 'pending';
 }
 
@@ -68,24 +75,32 @@ function SubscriptionEditor({ user, onClose, onSaved }) {
 
       <dl className="admin-meta-grid admin-drawer-meta">
         <div className="admin-meta-item">
-          <dt>Current tier</dt>
-          <dd>{subscription.tier || 'basic'}</dd>
+          <dt>Plan</dt>
+          <dd>
+            {hasAdminUnlimitedAccess(subscription, user)
+              ? getPlanDisplayLabel(subscription, user)
+              : subscription.tier || 'basic'}
+          </dd>
         </div>
         <div className="admin-meta-item">
-          <dt>Current status</dt>
-          <dd>{subscription.status || 'inactive'}</dd>
+          <dt>Status</dt>
+          <dd>{getStatusDisplayLabel(subscription, user)}</dd>
         </div>
         <div className="admin-meta-item">
           <dt>Billing cycle</dt>
           <dd>{getBillingCycleLabel(subscription) || '—'}</dd>
         </div>
         <div className="admin-meta-item">
-          <dt>Period end</dt>
-          <dd>{formatDate(subscription.current_period_end)}</dd>
+          <dt>Expires</dt>
+          <dd>{getExpiryDisplayLabel(subscription, user, formatDate)}</dd>
         </div>
         <div className="admin-meta-item">
           <dt>Provider</dt>
-          <dd>{subscription.provider || '—'}</dd>
+          <dd>
+            {hasAdminUnlimitedAccess(subscription, user)
+              ? 'Role access'
+              : subscription.provider || '—'}
+          </dd>
         </div>
       </dl>
 
@@ -266,17 +281,34 @@ export default function AdminUsers() {
                         <td data-label="Email">{user.email}</td>
                         <td data-label="Name">{user.displayName || '—'}</td>
                         <td data-label="Tier">
-                          {user.subscription?.tier || 'basic'}
-                          {getBillingCycleLabel(user.subscription) && (
-                            <span className="admin-tier-cycle"> ({getBillingCycleLabel(user.subscription)})</span>
-                          )}
+                          {hasAdminUnlimitedAccess(user.subscription, user)
+                            ? getPlanDisplayLabel(user.subscription, user)
+                            : (
+                              <>
+                                {user.subscription?.tier || 'basic'}
+                                {getBillingCycleLabel(user.subscription) && (
+                                  <span className="admin-tier-cycle">
+                                    {' '}
+                                    ({getBillingCycleLabel(user.subscription)})
+                                  </span>
+                                )}
+                              </>
+                            )}
                         </td>
                         <td data-label="Status">
-                          <span className={`admin-pill status-${user.subscription?.status || 'inactive'}`}>
-                            {user.subscription?.status || 'inactive'}
+                          <span
+                            className={`admin-pill ${
+                              hasAdminUnlimitedAccess(user.subscription, user)
+                                ? 'status-unlimited'
+                                : `status-${user.subscription?.status || 'inactive'}`
+                            }`}
+                          >
+                            {getStatusDisplayLabel(user.subscription, user)}
                           </span>
                         </td>
-                        <td data-label="Period end">{formatDate(user.subscription?.current_period_end)}</td>
+                        <td data-label="Period end">
+                          {getExpiryDisplayLabel(user.subscription, user, formatDate)}
+                        </td>
                         <td data-label="Role">
                           <span className={`admin-pill ${user.isAdmin || user.role === 'admin' || user.role === 'super_admin' ? 'role-admin' : 'role-user'}`}>
                             {user.role === 'super_admin' ? 'super admin' : user.role === 'admin' || user.isAdmin ? 'admin' : 'user'}

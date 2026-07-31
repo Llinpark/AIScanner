@@ -7,9 +7,10 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "generate-secrets": "node scripts/generate-secrets.js",
-    "test": "node --test strategies/__tests__/**/*.test.js utils/__tests__/**/*.test.js",
+    "test": "node --test strategies/__tests__/**/*.test.js utils/__tests__/**/*.test.js middleware/__tests__/**/*.test.js services/__tests__/**/*.test.js",
     "test:strategies": "node --test strategies/__tests__/**/*.test.js",
     "test:utils": "node --test utils/__tests__/**/*.test.js",
+    "test:services": "node --test services/__tests__/**/*.test.js",
     "test:regime": "node --test utils/__tests__/marketRegimeService.test.js",
     "test:patterns": "node scripts/verify-patterns.js"
   },

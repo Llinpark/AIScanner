@@ -215,10 +215,11 @@ describe('TakeProfitEngine smart scoring (daytrading)', () => {
     assert.ok(tps.sources.every(s => s.source === 'rr_fallback'));
   });
 
-  it('defaults maxTpDistancePips to 100 for day trading', () => {
+  it('defaults maxTpDistancePips to 150 for day trading', () => {
     const cfg = resolveDayTradingConfig();
-    assert.equal(cfg.takeProfit.maxTpDistancePips, 100);
-    assert.deepEqual(cfg.takeProfit.atrCaps, [1.5, 2.5, 3.5]);
+    assert.equal(cfg.takeProfit.maxTpDistancePips, 150);
+    assert.deepEqual(cfg.takeProfit.atrCaps, [1.0, 2.0, 3.5]);
+    assert.equal(cfg.takeProfit.minScore, 70);
     assert.equal(cfg.takeProfit.profileId, 'daytrading');
   });
 
@@ -231,6 +232,7 @@ describe('TakeProfitEngine smart scoring (daytrading)', () => {
         atrCaps: [1.5, 2.5, 3.5],
         maxAtrMultiplier: 3.5,
         maxTpDistancePips: 100,
+        minScore: 0,
         allowRrFallback: true,
         rrMultiples: [1.5, 2, 3],
         scoreWeights: {

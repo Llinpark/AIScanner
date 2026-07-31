@@ -74,13 +74,17 @@ const CLEAN_SUBSCRIPTION = {
     }
   );
 
-  // Re-affirm roles (do not wipe admin/super_admin).
+  // Re-affirm roles: only canonical super admin; other operators stay admin.
   await UserConfig.updateMany(
-    { email: { $in: ['collinspark1985@gmail.com', 'barasajohn1985@gmail.com'] } },
+    { email: { $in: ['collinspark1985@gmail.com'] } },
     { $set: { role: 'super_admin' } }
   );
   await UserConfig.updateMany(
-    { email: { $in: ['lilianmonari15@gmail.com'] } },
+    { email: { $in: ['barasajohn1985@gmail.com', 'lilianmonari15@gmail.com'] } },
+    { $set: { role: 'admin' } }
+  );
+  await UserConfig.updateMany(
+    { role: 'super_admin', email: { $nin: ['collinspark1985@gmail.com'] } },
     { $set: { role: 'admin' } }
   );
 

@@ -148,7 +148,10 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
     <div className="insights-section">
       <div className="insights-section-header">
         <h3>Trade Journal</h3>
-        <p>Per-signal notes, rating, emotion, lessons, and execution context</p>
+        <p>
+          Per-signal notes, rating, emotion, lessons, and execution context. Prefill from Signal
+          History after TradingView webhooks arrive, or add entries manually.
+        </p>
       </div>
 
       {error && <div className="feature-lock">{error}</div>}

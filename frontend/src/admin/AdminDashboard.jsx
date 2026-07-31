@@ -39,6 +39,8 @@ export default function AdminDashboard() {
   const config = scanner.config || {};
   const showConfig = canManageScanner && Boolean(config.autoScanEnabled != null);
 
+  const signalTotal = stats?.signals?.total ?? 0;
+
   return (
     <div className="admin-dashboard">
       <div className="admin-stat-grid">
@@ -50,7 +52,7 @@ export default function AdminDashboard() {
           value={stats?.signals?.openEntries ?? 0}
           tone="warning"
         />
-        <StatCard label="Total signals" value={stats?.signals?.total ?? 0} />
+        <StatCard label="Total signals" value={signalTotal} />
         <StatCard label="Completed payments" value={stats?.payments?.completed ?? 0} tone="success" />
         <StatCard label="Failed payments" value={stats?.payments?.failed ?? 0} tone="danger" />
         {showConfig && (
@@ -61,6 +63,20 @@ export default function AdminDashboard() {
           />
         )}
       </div>
+
+      {signalTotal === 0 && (
+        <div className="admin-panel">
+          <div className="admin-panel-header">
+            <h3>Signal source</h3>
+            <span className="admin-pill status-inactive">TradingView webhooks</span>
+          </div>
+          <p className="admin-table-meta">
+            Counters read the Mongo <code>Signal</code> collection. Production trades are ingested only from
+            TradingView Pine webhooks — auto-scan does not create listable signals. After a successful alert,
+            totals update here; historical zeros stay until the next webhook persists.
+          </p>
+        </div>
+      )}
 
       {canManageScanner && (
         <div className="admin-panel">

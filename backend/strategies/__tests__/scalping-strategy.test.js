@@ -661,11 +661,12 @@ describe('RiskManager + TakeProfitEngine', () => {
     assert.ok(tps.take_profit_1 <= 1.105 + atrVal * 0.7 + 1e-12);
   });
 
-  it('defaults maxTpDistancePips to 30 and atr caps to 0.7/1.3/2.0 for scalping', () => {
+  it('defaults maxTpDistancePips to 30 and atr caps to 0.8/1.4/2.0 for scalping', () => {
     const cfg = resolveScalpingConfig();
     assert.equal(cfg.takeProfit.maxTpDistancePips, 30);
-    assert.deepEqual(cfg.takeProfit.atrCaps, [0.7, 1.3, 2.0]);
+    assert.deepEqual(cfg.takeProfit.atrCaps, [0.8, 1.4, 2.0]);
     assert.equal(cfg.takeProfit.maxAtrMultiplier, 2.0);
+    assert.equal(cfg.takeProfit.minScore, 60);
     assert.deepEqual(cfg.takeProfit.rrMultiples, [1.5, 2, 3]);
     assert.equal(cfg.takeProfit.profileId, 'scalping');
     assert.ok(cfg.takeProfit.deferredLiquidityCategories.includes('pwh_pwl'));
@@ -678,9 +679,10 @@ describe('RiskManager + TakeProfitEngine', () => {
       takeProfit: {
         model: 'smart_scoring',
         enableSmartTpScoring: true,
-        atrCaps: [0.7, 1.3, 2.0],
+        atrCaps: [0.8, 1.4, 2.0],
         maxAtrMultiplier: 2.0,
         maxTpDistancePips: 30,
+        minScore: 0,
         allowRrFallback: true,
         deferredLiquidityCategories: ['pwh_pwl', 'pmh_pml'],
         rrMultiples: [1.5, 2, 3],
@@ -723,9 +725,10 @@ describe('RiskManager + TakeProfitEngine', () => {
       takeProfit: {
         model: 'smart_scoring',
         enableSmartTpScoring: true,
-        atrCaps: [0.7, 1.3, 2.0],
+        atrCaps: [0.8, 1.4, 2.0],
         maxAtrMultiplier: 2.0,
         maxTpDistancePips: 30,
+        minScore: 0,
         allowRrFallback: true,
         deferredLiquidityCategories: ['pwh_pwl', 'pmh_pml'],
         rrMultiples: [1.5, 2, 3],

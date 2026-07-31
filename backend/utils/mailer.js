@@ -207,10 +207,58 @@ async function sendTradeAlertEmail({ to, displayName, signal }) {
   });
 }
 
+async function sendSubscriptionActivatedEmail({
+  to,
+  displayName,
+  planName,
+  activationDate,
+  expiryDate
+}) {
+  if (!to) return null;
+
+  const name = displayName || String(to).split('@')[0];
+  const plan = planName || 'your plan';
+  const activated = activationDate ? new Date(activationDate).toLocaleString() : 'now';
+  const expires = expiryDate ? new Date(expiryDate).toLocaleString() : '—';
+  const dashboardUrl = FRONTEND_URL.replace(/\/$/, '');
+
+  return sendMail({
+    to,
+    subject: `${APP_NAME}: Subscription Activated — ${plan}`,
+    text: [
+      `Hi ${name},`,
+      '',
+      `Thank you for subscribing to ${APP_NAME}.`,
+      '',
+      `Plan: ${plan}`,
+      `Activated: ${activated}`,
+      `Expires: ${expires}`,
+      '',
+      'Your account now has full access to live alerts and premium features.',
+      `Open your dashboard: ${dashboardUrl}`,
+      '',
+      'Welcome aboard — happy trading!'
+    ].join('\n'),
+    html: `
+      <p>Hi ${name},</p>
+      <p>Thank you for subscribing to <strong>${APP_NAME}</strong>.</p>
+      <ul>
+        <li><strong>Plan:</strong> ${plan}</li>
+        <li><strong>Activated:</strong> ${activated}</li>
+        <li><strong>Expires:</strong> ${expires}</li>
+      </ul>
+      <p>Your account now has full access to live alerts and premium features.</p>
+      <p><a href="${dashboardUrl}">Open your dashboard</a></p>
+      <p>Welcome aboard — happy trading!</p>
+    `
+  });
+}
+
 module.exports = {
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendTradeAlertEmail,
+  sendSubscriptionActivatedEmail,
   isSmtpConfigured,
   isMailConfigured
 };

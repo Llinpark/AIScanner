@@ -20,7 +20,6 @@ const {
 } = require('./utils/security');
 const {
   globalApiLimiter,
-  authLimiter,
   webhookLimiter,
   scannerLimiter,
   tradingViewAuthFailureTracker
@@ -57,8 +56,6 @@ const {
 const MpesaService = require('./services/MpesaService');
 const PayPalService = require('./services/PayPalService');
 const BinanceService = require('./services/BinanceService');
-const SasaPayService = require('./services/SasaPayService');
-const PaystackService = require('./services/PaystackService');
 const {
   activateSubscription,
   createPaymentTransaction,
@@ -66,12 +63,14 @@ const {
   getPaymentStatus,
   findPaymentByReference
 } = require('./services/SubscriptionService');
+const ActivationService = require('./services/ActivationService');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
 const ChartDataService = require('./services/ChartDataService');
 const {
   normalizeSignalLevels,
-  validateKachingEntrySignal
+  validateKachingEntrySignal,
+  isStructuredEntryAlert
 } = require('./utils/kachingSignalLevels');
 const MarketScannerService = require('./services/MarketScannerService');
 const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
@@ -155,9 +154,13 @@ async function assertTradingViewWebhook(req, res) {
   const auth = await verifyTradingViewWebhook(req, resolveUserById);
   if (!auth.ok) {
     tradingViewAuthFailureTracker.recordFailure(req);
+    const reason = auth.reason || 'unauthorized';
+    console.warn(
+      `[TV Webhook] Auth rejected (${reason}) symbol=${auth.body?.symbol || auth.body?.ticker || 'n/a'}`
+    );
     res.status(401).json({
       message: 'Invalid webhook authentication',
-      reason: auth.reason || 'unauthorized'
+      reason
     });
     return null;
   }
@@ -251,7 +254,9 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-app.use('/api/auth', authLimiter, authRoutes);
+// Auth routes apply per-endpoint limiters (login/register vs email vs token redeem).
+// Do not blanket-limit /api/auth — /me and /logout must not consume auth-attempt budget.
+app.use('/api/auth', authRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/admin', createAdminRouter({ io }));
 
@@ -303,10 +308,15 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
     const auth = await assertTradingViewWebhook(req, res);
     if (!auth) return;
 
-    const parsed = TradingViewAlertService.parseWebhookBody(req.body);
-    const isStructuredEntry =
-      parsed.alertType === 'entry' || parsed.pattern === 'perfect_fvg' || parsed.pattern === 'breakaway_gap';
-    const isCandleFeed = parsed.alertType === 'candle' || parsed.pattern === 'feed';
+    // Prefer auth.body (already JSON-parsed) so text/plain TV posts are not re-parsed incorrectly.
+    const rawPayload = auth.body || req.body;
+    const parsed = TradingViewAlertService.parseWebhookBody(rawPayload);
+    const normalizedAlertType = TradingViewAlertService.normalizeAlertType(
+      parsed.alertType || parsed.alert_type || parsed.type
+    );
+    const structuredProbe = { ...parsed, alertType: normalizedAlertType };
+    const isStructuredEntry = isStructuredEntryAlert(structuredProbe);
+    const isCandleFeed = normalizedAlertType === 'candle' || parsed.pattern === 'feed';
     const isCandlePayload =
       !isStructuredEntry &&
       parsed.open != null &&
@@ -315,6 +325,7 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       parsed.close != null;
 
     // Candle feeds are acknowledged only — no ingest, scan, indicators, or live market-data fetch.
+    // Must not swallow structured entries (e.g. liquidity_sweep_*) that also include OHLC fields.
     if ((isCandlePayload || isCandleFeed) && parsed.symbol && !isStructuredEntry) {
       console.log(
         `[TV Webhook] Candle feed acknowledged (no scan/fetch): ${parsed.symbol || parsed.ticker}`
@@ -330,7 +341,7 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
 
     const result = await MarketScannerService.publishTradingViewAlert(
       io,
-      req.body,
+      rawPayload,
       inMemorySignals
     );
     return res.status(201).json({ success: true, ...result });
@@ -572,7 +583,7 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       if (PAYMENT_CONFIG.mode === 'mock' || !PayPalService.isConfigured()) {
         if (!isMockPaymentsAllowed()) {
           return res.status(503).json({
-            message: 'PayPal is not configured for live payments. Please use Paystack or another available method.'
+            message: 'PayPal is not configured for live payments. Please try another available method.'
           });
         }
         const mockOrderId = `paypal_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -710,162 +721,6 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
       });
     }
 
-    if (provider === 'sasapay') {
-      if (!phone) {
-        return res.status(400).json({ message: 'Phone number is required for SasaPay payment' });
-      }
-
-      const tierConfig = TIERS[tier];
-      let paymentResult;
-
-      if (PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured()) {
-        if (!isMockPaymentsAllowed()) {
-          return res.status(503).json({
-            message: 'SasaPay is not configured for live payments. Please use PayPal or another available method.'
-          });
-        }
-        paymentResult = {
-          checkoutRequestId: `sasa_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          merchantRequestId: `sasa_mr_${Date.now()}`,
-          customerMessage: 'Mock SasaPay request — configure SasaPay credentials for live payments'
-        };
-      } else {
-        paymentResult = await SasaPayService.initiateRequestPayment({
-          phone,
-          amount: pricing.price,
-          accountReference: userId,
-          description: `KachingFx ${tierConfig.name} (${pricing.periodLabel})`
-        });
-      }
-
-      await createPaymentTransaction({
-        userId,
-        tier,
-        provider: 'sasapay',
-        amount: pricing.price,
-        currency: pricing.currency,
-        providerReference: paymentResult.checkoutRequestId,
-        merchantRequestId: paymentResult.merchantRequestId
-      });
-
-      user = await UserConfig.findByIdAndUpdate(
-        userId,
-        {
-          phone,
-          subscription: {
-            ...pendingSubscription,
-            provider: 'sasapay',
-            providerOrderId: paymentResult.checkoutRequestId
-          },
-          updatedAt: new Date()
-        },
-        { new: true }
-      );
-
-      if (!user && !isDbReady()) {
-        user = devUserStore.upsertUser(userId, {
-          phone,
-          subscription: {
-            ...pendingSubscription,
-            provider: 'sasapay',
-            providerOrderId: paymentResult.checkoutRequestId
-          }
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: paymentResult.customerMessage || 'SasaPay payment request sent. Check your phone to approve.',
-        user: sanitizeUser(user),
-        checkoutRequestId: paymentResult.checkoutRequestId,
-        amount: pricing.price,
-        billingCycle: pricing.billingCycle,
-        mockMode: isMockPaymentsAllowed() && (PAYMENT_CONFIG.mode === 'mock' || !SasaPayService.isConfigured())
-      });
-    }
-
-    if (provider === 'paystack') {
-      const email = user.email || req.user?.email;
-      if (!email) {
-        return res.status(400).json({ message: 'Account email is required for Paystack payment' });
-      }
-
-      const callbackUrl = PAYMENT_CONFIG.paystack.callbackUrl;
-      let orderResult;
-
-      if (!PaystackService.isConfigured()) {
-        if (!isMockPaymentsAllowed()) {
-          return res.status(503).json({
-            message: 'Paystack is not configured. Please try again later.'
-          });
-        }
-        const mockRef = `psk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        orderResult = {
-          reference: mockRef,
-          accessCode: mockRef,
-          authorizationUrl: `${FRONTEND_URL}?paystack=mock&reference=${mockRef}&tier=${tier}&billingCycle=${pricing.billingCycle}`,
-          amount: pricing.price,
-          currency: pricing.currency
-        };
-      } else {
-        orderResult = await PaystackService.initializeTransaction({
-          tier,
-          userId: userId.toString(),
-          email,
-          billingCycle: pricing.billingCycle,
-          callbackUrl
-        });
-      }
-
-      await createPaymentTransaction({
-        userId,
-        tier,
-        provider: 'paystack',
-        amount: orderResult.amount,
-        currency: orderResult.currency,
-        billingCycle: pricing.billingCycle,
-        providerReference: orderResult.reference
-      });
-
-      user = await UserConfig.findByIdAndUpdate(
-        userId,
-        {
-          subscription: {
-            ...pendingSubscription,
-            provider: 'paystack',
-            providerOrderId: orderResult.reference
-          },
-          updatedAt: new Date()
-        },
-        { new: true }
-      );
-
-      if (!user && !isDbReady()) {
-        user = devUserStore.upsertUser(userId, {
-          subscription: {
-            ...pendingSubscription,
-            provider: 'paystack',
-            providerOrderId: orderResult.reference
-          }
-        });
-      }
-
-      return res.json({
-        success: true,
-        message: 'Paystack checkout session created',
-        user: sanitizeUser(user),
-        checkoutId: orderResult.reference,
-        reference: orderResult.reference,
-        accessCode: orderResult.accessCode,
-        checkoutUrl: orderResult.authorizationUrl,
-        publicKey: PaystackService.getPublicKey(),
-        amount: orderResult.amount,
-        currency: orderResult.currency,
-        billingCycle: pricing.billingCycle,
-        mockMode: isMockPaymentsAllowed() && !PaystackService.isConfigured()
-      });
-    }
-
     return res.status(400).json({ message: 'Unsupported payment provider.' });
   } catch (error) {
     console.error('Subscribe error:', error);
@@ -875,14 +730,89 @@ app.post('/api/subscribe', requireAuth, subscribeValidators, validateRequest, as
 
 
 app.get('/api/subscription/me', requireAuth, (req, res) => {
-  const tier = req.user.subscription?.tier || 'basic';
+  const subscription = getEffectiveSubscription(req.user);
+  const tier = subscription?.tier || 'basic';
   res.json({
     user: sanitizeUser(req.user),
-    tierFeatures: getTierFeatures(req.user.subscription),
-    tierDisplayName: getTierDisplayName(tier),
-    allowedCurrencyPairs: getAllowedCurrencyPairs(req.user.subscription),
-    allowedTimeframes: getAllowedTimeframes(req.user.subscription)
+    subscription,
+    tierFeatures: getTierFeatures(subscription),
+    tierDisplayName: subscription.adminBypass
+      ? subscription.planLabel || 'Administrator'
+      : getTierDisplayName(tier),
+    allowedCurrencyPairs: getAllowedCurrencyPairs(subscription),
+    allowedTimeframes: getAllowedTimeframes(subscription)
   });
+});
+
+/** Manual M-Pesa Till — user submits "I Have Paid" (pending verification, no access yet). */
+app.post('/api/payments/manual/submit', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const result = await ActivationService.submitManualPaymentRequest({
+      userId: req.userId,
+      tier: body.tier || body.planId,
+      billingCycle: body.billingCycle,
+      mpesaCode: body.mpesaCode || body.paymentReference,
+      phoneNumber: body.phoneNumber || body.phone,
+      amount: body.amount,
+      notes: body.notes,
+      screenshotUrl: body.screenshotUrl || body.screenshot
+    });
+    res.status(201).json({
+      message: 'Payment submitted. Awaiting verification.',
+      status: 'pending',
+      payment: {
+        id: String(result.payment._id),
+        status: result.payment.status,
+        mpesaCode: result.payment.providerReference,
+        amount: result.payment.amount,
+        currency: result.payment.currency,
+        tier: result.payment.tier,
+        createdAt: result.payment.createdAt
+      },
+      subscription: result.subscription,
+      user: sanitizeUser(result.user)
+    });
+  } catch (error) {
+    console.error('Manual payment submit error:', error);
+    res.status(error.status || 500).json({
+      message: error.message || 'Unable to submit payment.'
+    });
+  }
+});
+
+app.get('/api/payments/manual/mine', requireAuth, async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.json({ payments: [] });
+    }
+    const PaymentTransaction = require('./models/PaymentTransaction');
+    const rows = await PaymentTransaction.find({
+      userId: req.userId,
+      $or: [{ provider: 'manual_mpesa' }, { paymentMethod: 'manual_mpesa' }]
+    })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+    res.json({
+      payments: rows.map(row => ({
+        id: String(row._id),
+        status: row.status,
+        tier: row.tier,
+        amount: row.amount,
+        currency: row.currency,
+        mpesaCode: row.providerReference,
+        phoneNumber: row.phoneNumber,
+        notes: row.notes || '',
+        createdAt: row.createdAt,
+        activationDate: row.activationDate || null,
+        completedAt: row.completedAt || null
+      }))
+    });
+  } catch (error) {
+    console.error('Manual payment list error:', error);
+    res.status(500).json({ message: 'Unable to load payment requests.' });
+  }
 });
 
 app.post('/api/payments/mock/confirm', requireAuth, requireMockPayments, async (req, res) => {
@@ -1172,182 +1102,6 @@ app.post('/api/payments/binance/mock-complete', requireAuth, requireMockPayments
   }
 });
 
-app.get('/api/payments/sasapay/status/:checkoutRequestId', requireAuth, async (req, res) => {
-  try {
-    const { checkoutRequestId } = req.params;
-    const transaction = await getPaymentStatus(checkoutRequestId, 'sasapay', req.userId);
-
-    if (!transaction) {
-      return res.status(404).json({ message: 'Payment not found' });
-    }
-
-    res.json({
-      status: transaction.status,
-      tier: transaction.tier,
-      failureReason: transaction.failureReason,
-      subscriptionActive: req.user.subscription?.status === 'active'
-    });
-  } catch (error) {
-    console.error('SasaPay status error:', error);
-    res.status(500).json({ message: 'Unable to check payment status', error: error.message });
-  }
-});
-
-app.post('/api/payments/sasapay/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
-  try {
-    const { checkoutRequestId, tier, billingCycle } = req.body;
-
-    if (!checkoutRequestId || !tier) {
-      return res.status(400).json({ message: 'checkoutRequestId and tier are required' });
-    }
-
-    const transaction = await getPaymentStatus(checkoutRequestId, 'sasapay', req.userId);
-    if (!transaction || transaction.status !== 'pending') {
-      return res.status(400).json({ message: 'No pending SasaPay payment found' });
-    }
-
-    await completePaymentTransaction(checkoutRequestId, 'sasapay', { rawPayload: { mock: true } });
-
-    const user = await activateSubscription(
-      req.userId,
-      buildActivationOptions(req.user, {
-        tier,
-        provider: 'sasapay',
-        providerOrderId: checkoutRequestId,
-        billingCycle
-      }),
-      io
-    );
-
-    res.json({
-      success: true,
-      message: 'SasaPay payment confirmed (mock mode)',
-      user: sanitizeUser(user)
-    });
-  } catch (error) {
-    console.error('SasaPay mock complete error:', error);
-    res.status(500).json({ message: 'Unable to confirm SasaPay payment', error: error.message });
-  }
-});
-
-app.get('/api/payments/paystack/status/:reference', requireAuth, async (req, res) => {
-  try {
-    const { reference } = req.params;
-    const transaction = await getPaymentStatus(reference, 'paystack', req.userId);
-
-    if (!transaction) {
-      return res.status(404).json({ message: 'Payment not found' });
-    }
-
-    res.json({
-      status: transaction.status,
-      tier: transaction.tier,
-      failureReason: transaction.failureReason,
-      subscriptionActive: req.user.subscription?.status === 'active'
-    });
-  } catch (error) {
-    console.error('Paystack status error:', error);
-    res.status(500).json({ message: 'Unable to check payment status', error: error.message });
-  }
-});
-
-app.get('/api/payments/paystack/callback', async (req, res) => {
-  const frontendUrl = FRONTEND_URL;
-
-  try {
-    const reference = req.query.reference || req.query.trxref;
-    if (!reference) {
-      return res.redirect(`${frontendUrl}?paystack=error&message=missing_reference`);
-    }
-
-    const verified = await PaystackService.verifyTransaction(String(reference));
-    if (!PaystackService.isSuccessful(verified)) {
-      await completePaymentTransaction(String(reference), 'paystack', {
-        rawPayload: verified,
-        failureReason: verified.gateway_response || verified.status || 'Payment not successful'
-      });
-      return res.redirect(`${frontendUrl}?paystack=error&message=payment_not_successful`);
-    }
-
-    const meta = PaystackService.parseMetadata(verified);
-    let transaction = await findPaymentByReference(String(reference), 'paystack');
-
-    if (!transaction && meta.userId && meta.tier) {
-      await createPaymentTransaction({
-        userId: meta.userId,
-        tier: meta.tier,
-        provider: 'paystack',
-        amount: (verified.amount || 0) / 100,
-        currency: verified.currency || 'KES',
-        providerReference: String(reference)
-      });
-      transaction = await findPaymentByReference(String(reference), 'paystack');
-    }
-
-    if (!transaction) {
-      return res.redirect(`${frontendUrl}?paystack=error&message=unknown_order`);
-    }
-
-    if (transaction.status !== 'completed') {
-      await completePaymentTransaction(String(reference), 'paystack', { rawPayload: verified });
-      const payer = await UserConfig.findById(transaction.userId);
-      await activateSubscription(
-        transaction.userId,
-        buildActivationOptions(payer, {
-          tier: meta.tier || transaction.tier,
-          provider: 'paystack',
-          providerOrderId: String(reference),
-          providerCustomerId: verified.customer?.customer_code,
-          billingCycle: meta.billingCycle || payer?.subscription?.billingCycle
-        }),
-        io
-      );
-    }
-
-    return res.redirect(`${frontendUrl}?paystack=success&tier=${meta.tier || transaction.tier}`);
-  } catch (error) {
-    console.error('Paystack callback error:', error);
-    return res.redirect(`${frontendUrl}?paystack=error&message=${encodeURIComponent(error.message)}`);
-  }
-});
-
-app.post('/api/payments/paystack/mock-complete', requireAuth, requireMockPayments, async (req, res) => {
-  try {
-    const { reference, tier, billingCycle } = req.body;
-
-    if (!reference || !tier) {
-      return res.status(400).json({ message: 'reference and tier are required' });
-    }
-
-    const transaction = await getPaymentStatus(reference, 'paystack', req.userId);
-    if (!transaction || transaction.status !== 'pending') {
-      return res.status(400).json({ message: 'No pending Paystack payment found' });
-    }
-
-    await completePaymentTransaction(reference, 'paystack', { rawPayload: { mock: true } });
-
-    const user = await activateSubscription(
-      req.userId,
-      buildActivationOptions(req.user, {
-        tier,
-        provider: 'paystack',
-        providerOrderId: reference,
-        billingCycle
-      }),
-      io
-    );
-
-    res.json({
-      success: true,
-      message: 'Paystack payment confirmed (mock mode — local/dev only)',
-      user: sanitizeUser(user)
-    });
-  } catch (error) {
-    console.error('Paystack mock complete error:', error);
-    res.status(500).json({ message: 'Unable to confirm Paystack payment', error: error.message });
-  }
-});
-
 app.get('/api/subscription/:username', requireAuth, async (req, res) => {
   try {
     const { username } = req.params;
@@ -1365,7 +1119,7 @@ app.get('/api/subscription/:username', requireAuth, async (req, res) => {
 
     res.json({
       username,
-      subscription: user.subscription || { status: 'inactive', tier: 'basic' }
+      subscription: getEffectiveSubscription(user)
     });
   } catch (error) {
     console.error('Get subscription error:', error);
@@ -1525,100 +1279,6 @@ app.post('/api/webhook/binance', async (req, res) => {
   } catch (error) {
     console.error('Binance Pay webhook error:', error);
     res.status(500).json({ returnCode: 'FAIL', returnMessage: error.message });
-  }
-});
-
-app.post('/api/webhook/sasapay', webhookLimiter, async (req, res) => {
-  try {
-    const auth = verifyProviderPaymentWebhook(req, 'sasapay');
-    if (!auth.ok) {
-      console.warn('SasaPay webhook rejected:', auth.reason, auth.ip || '');
-      return res.status(401).json({ ResultCode: 1, ResultDesc: 'Unauthorized' });
-    }
-
-    console.log('SasaPay webhook received:', JSON.stringify(req.body));
-    const callback = SasaPayService.parseCallback(req.body);
-
-    if (!callback?.checkoutRequestId) {
-      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
-    }
-
-    const transaction = await findPaymentByReference(callback.checkoutRequestId, 'sasapay');
-    if (!transaction) {
-      console.warn('SasaPay callback for unknown transaction:', callback.checkoutRequestId);
-      return res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
-    }
-
-    if (callback.success) {
-      await completePaymentTransaction(callback.checkoutRequestId, 'sasapay', { rawPayload: callback });
-      const payer = await UserConfig.findById(transaction.userId);
-      await activateSubscription(
-        transaction.userId,
-        buildActivationOptions(payer, {
-          tier: transaction.tier,
-          provider: 'sasapay',
-          providerOrderId: callback.checkoutRequestId,
-          providerCustomerId: callback.transactionCode
-        }),
-        io
-      );
-    } else {
-      await completePaymentTransaction(callback.checkoutRequestId, 'sasapay', {
-        rawPayload: callback,
-        failureReason: callback.resultDesc || 'SasaPay payment failed'
-      });
-    }
-
-    res.status(200).json({ ResultCode: 0, ResultDesc: 'Accepted' });
-  } catch (error) {
-    console.error('SasaPay webhook error:', error);
-    res.status(200).json({ ResultCode: 1, ResultDesc: 'Error' });
-  }
-});
-
-app.post('/api/webhook/paystack', webhookLimiter, async (req, res) => {
-  try {
-    const verification = PaystackService.verifyWebhookSignature(req);
-    if (!verification.ok) {
-      console.warn('Paystack webhook rejected:', verification.reason);
-      return res.status(verification.reason === 'paystack_not_configured' ? 503 : 401).json({
-        message: 'Invalid Paystack webhook signature'
-      });
-    }
-
-    const parsed = PaystackService.parseWebhookEvent(req.body);
-    console.log('Paystack webhook received:', parsed.event, parsed.reference);
-
-    if (parsed.event === 'charge.success' && parsed.reference) {
-      const transaction = await findPaymentByReference(String(parsed.reference), 'paystack');
-      if (!transaction) {
-        console.warn('Paystack webhook for unknown transaction:', parsed.reference);
-        return res.status(200).json({ received: true });
-      }
-
-      if (transaction.status === 'pending') {
-        await completePaymentTransaction(String(parsed.reference), 'paystack', {
-          rawPayload: req.body
-        });
-        const payer = await UserConfig.findById(transaction.userId);
-        await activateSubscription(
-          transaction.userId,
-          buildActivationOptions(payer, {
-            tier: parsed.tier || transaction.tier,
-            provider: 'paystack',
-            providerOrderId: String(parsed.reference),
-            providerCustomerId: parsed.customerCode,
-            billingCycle: parsed.billingCycle || payer?.subscription?.billingCycle
-          }),
-          io
-        );
-      }
-    }
-
-    return res.status(200).json({ received: true });
-  } catch (error) {
-    console.error('Paystack webhook error:', error);
-    return res.status(500).json({ message: 'Paystack webhook processing failed' });
   }
 });
 
@@ -2411,21 +2071,39 @@ listenOnPort(activePort);
 server.on('listening', () => {
   console.log(`Backend listening on http://${host}:${activePort}`);
   console.log(`Domain: ${APP_DOMAIN} | API: ${PUBLIC_BACKEND_URL} | Frontend: ${FRONTEND_URL}`);
-  MarketScannerService.startAutoScanner(io);
   WeightLearningService.initWeightLearning().catch(err => {
     console.error('[WeightLearning] Boot init error (scanner continues):', err.message);
   });
+  // Load persisted admin scanner/strategy/regime config before starting the scanner
+  // so all traders share the same global runtime settings after restart.
+  const bootScanner = () => {
+    try {
+      MarketScannerService.startAutoScanner(io);
+    } catch (err) {
+      console.error('[Scanner] startAutoScanner error:', err.message);
+    }
+  };
   try {
     const { initStrategyRuntimeConfig } = require('./utils/strategyRuntimeConfig');
-    initStrategyRuntimeConfig().catch(err => {
-      console.error('[StrategyRuntime] Boot init error (env defaults kept):', err.message);
-    });
+    initStrategyRuntimeConfig()
+      .then(() => bootScanner())
+      .catch(err => {
+        console.error('[StrategyRuntime] Boot init error (env defaults kept):', err.message);
+        bootScanner();
+      });
   } catch (err) {
     console.error('[StrategyRuntime] Module load error:', err.message);
+    bootScanner();
   }
   if (TelegramService.isConfigured()) {
     TelegramService.ensureDeliveryMode().catch(err => {
       console.error('[Telegram] Delivery mode setup failed:', err.message);
     });
+  }
+  // Hourly: revoke access when subscription.current_period_end (expiryDate) has passed.
+  try {
+    ActivationService.startExpiryJob(io);
+  } catch (err) {
+    console.error('[Activation] Failed to start expiry job:', err.message);
   }
 });

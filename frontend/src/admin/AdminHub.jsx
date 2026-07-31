@@ -6,6 +6,7 @@ import AdminUsers from './AdminUsers';
 import AdminScanner from './AdminScanner';
 import AdminSignals from './AdminSignals';
 import AdminPayments from './AdminPayments';
+import AdminActivations from './AdminActivations';
 import AdminReferrals from './AdminReferrals';
 import AdminAuditLog from './AdminAuditLog';
 
@@ -13,11 +14,13 @@ export default function AdminHub({ initialTab = 'dashboard' }) {
   const { user } = useAuth();
   const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
   const resolvedInitial =
-    initialTab === 'scanner' && !canManageScanner ? 'dashboard' : initialTab;
+    (initialTab === 'scanner' || initialTab === 'activations') && !canManageScanner
+      ? 'dashboard'
+      : initialTab;
   const [activeTab, setActiveTab] = useState(resolvedInitial);
 
   useEffect(() => {
-    if (activeTab === 'scanner' && !canManageScanner) {
+    if ((activeTab === 'scanner' || activeTab === 'activations') && !canManageScanner) {
       setActiveTab('dashboard');
     }
   }, [activeTab, canManageScanner]);
@@ -28,6 +31,7 @@ export default function AdminHub({ initialTab = 'dashboard' }) {
       {activeTab === 'users' && <AdminUsers />}
       {activeTab === 'signals' && <AdminSignals />}
       {activeTab === 'scanner' && canManageScanner && <AdminScanner />}
+      {activeTab === 'activations' && canManageScanner && <AdminActivations />}
       {activeTab === 'payments' && <AdminPayments />}
       {activeTab === 'referrals' && <AdminReferrals />}
       {activeTab === 'audit' && <AdminAuditLog />}

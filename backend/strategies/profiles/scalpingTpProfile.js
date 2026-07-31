@@ -1,5 +1,6 @@
 /**
  * Scalping Strategy TP Profile — nearby liquidity, tight ATR/pip caps.
+ * Official defaults for Restore Default Scalping Settings.
  * Optimised for Entry TF 1m/3m/5m, HTF 15m. Expected TP1 ~20–30 pips.
  */
 
@@ -8,10 +9,10 @@ const SCALPING_TP_PROFILE = Object.freeze({
   model: 'smart_scoring',
   enableSmartTpScoring: true,
   enableDynamicTp: true,
-  atrCaps: Object.freeze([0.7, 1.3, 2.0]),
+  atrCaps: Object.freeze([0.8, 1.4, 2.0]),
   maxAtrMultiplier: 2.0,
   maxTpDistancePips: 30,
-  minScore: 0,
+  minScore: 60,
   scoreProximity: 5,
   allowRrFallback: true,
   /** Prefer nearby; weekly/monthly only when nothing nearby remains. */

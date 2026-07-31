@@ -14,21 +14,45 @@ function isDbReady() {
 
 async function activateSubscription(
   userId,
-  { tier, provider, providerOrderId, providerCustomerId, billingCycle = 'monthly', periodDays },
+  {
+    tier,
+    provider,
+    providerOrderId,
+    providerCustomerId,
+    billingCycle = 'monthly',
+    periodDays,
+    paymentSource,
+    activatedBy,
+    startDate
+  },
   io
 ) {
   const normalizedCycle = normalizeBillingCycle(billingCycle);
   const days =
     periodDays || (normalizedCycle === 'yearly' ? 365 : SUBSCRIPTION_PERIOD_DAYS);
-  const periodEnd = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const start = startDate ? new Date(startDate) : new Date();
+  const periodEnd = new Date(start.getTime() + days * 24 * 60 * 60 * 1000);
+
+  let resolvedPaymentSource = paymentSource;
+  if (!resolvedPaymentSource) {
+    try {
+      resolvedPaymentSource = require('./ActivationService').mapPaymentSource(provider);
+    } catch {
+      resolvedPaymentSource = undefined;
+    }
+  }
+
   const subscription = {
     tier,
     status: 'active',
     provider,
+    paymentSource: resolvedPaymentSource,
     providerOrderId,
     providerCustomerId: providerCustomerId || undefined,
     billingCycle: normalizedCycle,
+    startDate: start,
     current_period_end: periodEnd,
+    activatedBy: activatedBy || undefined,
     updatedAt: new Date()
   };
 

@@ -7,11 +7,6 @@ const { getMarketDataHub } = require('./MarketDataHubService');
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const { normalizeSymbol } = require('../config/symbols');
 const { toUserFacingMarketDataError } = require('../utils/marketDataCache');
-const {
-  chartLevelKey,
-  detectTradeOutcome,
-  attachActivation
-} = require('../utils/tradeLevelLifecycle');
 const { getDefaultRegistry, SCALPING_ID, DAYTRADING_ID } = require('../strategies');
 const {
   getScannerEngine,
@@ -22,7 +17,6 @@ const {
 const candleBuffers = new Map();
 const lastEmittedBar = new Map();
 const pendingSetups = new Map();
-const activeChartLevels = new Map();
 let autoScanTimer = null;
 let ioRef = null;
 let scanRotationIndex = 0;
@@ -65,39 +59,6 @@ function shouldEmit(symbol, barTime) {
   }
   lastEmittedBar.set(key, now);
   return true;
-}
-
-function storeActiveChartLevel(symbol, interval, entry, barTime) {
-  const key = chartLevelKey(symbol, interval);
-  activeChartLevels.set(key, attachActivation(entry, barTime));
-}
-
-function getActiveChartLevel(symbol, interval) {
-  return activeChartLevels.get(chartLevelKey(symbol, interval)) || null;
-}
-
-function clearActiveChartLevel(symbol, interval) {
-  activeChartLevels.delete(chartLevelKey(symbol, interval));
-}
-
-function resolveActiveLevelOutcome(symbol, interval, candles) {
-  const active = getActiveChartLevel(symbol, interval);
-  if (!active) return { active: null, closed: null };
-
-  const hit = detectTradeOutcome(active, candles);
-  if (!hit) return { active, closed: null };
-
-  clearActiveChartLevel(symbol, interval);
-  return {
-    active: null,
-    closed: {
-      ...active,
-      outcome: hit.outcome,
-      outcomeR: hit.outcomeR,
-      tradeStatus: hit.outcome === 'sl' ? 'lost' : 'won',
-      closedAt: new Date().toISOString()
-    }
-  };
 }
 
 async function publishEntrySignal(io, symbol, detection) {
@@ -330,24 +291,52 @@ async function runFullScan(_io) {
   }));
 }
 
+async function runAutoScanTick(io) {
+  const symbols = PATTERN_SCANNER_CONFIG.symbols || [];
+  if (!symbols.length) return;
+
+  const batchSize = Math.max(1, Number(PATTERN_SCANNER_CONFIG.scanBatchSize) || 5);
+  const start = scanRotationIndex % symbols.length;
+  const batch = [];
+  for (let i = 0; i < batchSize && i < symbols.length; i += 1) {
+    batch.push(symbols[(start + i) % symbols.length]);
+  }
+  scanRotationIndex = (start + batch.length) % symbols.length;
+
+  // Internal rotation only — scanSymbol refuses provider-candle publish (TradingView-only signals).
+  await Promise.allSettled(batch.map(symbol => scanSymbol(io, symbol)));
+}
+
 function startAutoScanner(io) {
   ioRef = io;
-  // Keep boot/admin plumbing; timer must stay off — TV webhooks publish production signals.
   // Chart/cache polling lives in MarketDataHubService and is unaffected.
+  // Production signals still publish only via TradingView webhooks (publishEntrySignal is locked).
   if (autoScanTimer) {
     clearInterval(autoScanTimer);
     autoScanTimer = null;
   }
   if (!PATTERN_SCANNER_CONFIG.autoScanEnabled) {
     console.log(
-      '[Scanner] Auto-scan disabled — TradingView webhooks are the sole signal source; ' +
+      '[Scanner] Auto-scan disabled — TradingView webhooks remain the sole signal source; ' +
         'live providers are chart-only'
     );
     return;
   }
-  // Even if env flips on, do not publish from live candles.
-  console.warn(
-    '[Scanner] SCANNER_AUTO_ENABLED=true ignored for signal publishing — architecture is TradingView-only'
+
+  const intervalMs = Math.max(
+    60_000,
+    Number(PATTERN_SCANNER_CONFIG.autoScanIntervalMs) || 60_000
+  );
+  const tick = () => {
+    runAutoScanTick(ioRef || io).catch(err => {
+      console.error('[Scanner] Auto-scan tick error:', err.message);
+    });
+  };
+  tick();
+  autoScanTimer = setInterval(tick, intervalMs);
+  console.log(
+    `[Scanner] Auto-scan timer started (every ${intervalMs}ms) — ` +
+      'internal rotation only; TradingView webhooks remain the sole signal publisher'
   );
 }
 
@@ -405,8 +394,8 @@ async function analyzeSymbol(symbol, interval = '1h') {
 
 function getScannerStatus() {
   return {
-    autoScanEnabled: false,
-    autoScanRunning: false,
+    autoScanEnabled: Boolean(PATTERN_SCANNER_CONFIG.autoScanEnabled),
+    autoScanRunning: Boolean(autoScanTimer),
     autoScanIntervalMs: PATTERN_SCANNER_CONFIG.autoScanIntervalMs,
     scanBatchSize: PATTERN_SCANNER_CONFIG.scanBatchSize,
     architecture: 'tradingview_webhook_distribution',
@@ -416,7 +405,7 @@ function getScannerStatus() {
       usesLiveMarketData: false,
       publishesSignals: false,
       endpoints: ['GET /api/scanner/analyze', 'POST /api/scanner/run'],
-      note: 'Manual/analyze/run do not generate trading signals from providers'
+      note: 'Manual/analyze/run/auto-scan do not generate trading signals from providers'
     },
     tradingViewWebhook: {
       publishOnly: true,
@@ -443,7 +432,7 @@ function getScannerStatus() {
  * Validates + publishes alerts to sockets / Telegram / storage.
  * NEVER calls hub.getCandles, fetchHistoricalData, indicator, liquidity, or FVG pipelines.
  * Live market-data providers are chart-only — they must never generate trading signals.
- * Timer auto-scan remains off; scanSymbol / analyzeSymbol / runFullScan do not publish.
+ * Timer auto-scan may run for internal rotation; scanSymbol / analyzeSymbol / runFullScan do not publish.
  */
 async function publishTradingViewAlert(io, rawBody, inMemorySignals = []) {
   return TradingViewService.publishWebhookEvent(io, rawBody, inMemorySignals);

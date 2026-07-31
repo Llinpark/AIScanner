@@ -120,7 +120,8 @@ function pickTakeProfitAdminPatch(patchTp, atrCapsFallback) {
     out.atrCaps = parseNumberList(patchTp.atrCaps, atrCapsFallback);
   }
   if (patchTp.maxAtrMultiplier !== undefined) {
-    out.maxAtrMultiplier = Number(patchTp.maxAtrMultiplier);
+    const n = Number(patchTp.maxAtrMultiplier);
+    out.maxAtrMultiplier = Number.isFinite(n) ? Math.max(0, n) : 0;
   }
   if (patchTp.maxTpDistancePips !== undefined) {
     const v = Number(patchTp.maxTpDistancePips);
@@ -151,7 +152,8 @@ function pickTakeProfitAdminPatch(patchTp, atrCapsFallback) {
     out.scoreWeights = {};
     for (const key of TP_SCORE_WEIGHT_KEYS) {
       if (patchTp.scoreWeights[key] !== undefined) {
-        out.scoreWeights[key] = Number(patchTp.scoreWeights[key]);
+        const n = Number(patchTp.scoreWeights[key]);
+        out.scoreWeights[key] = Number.isFinite(n) ? Math.max(0, n) : 0;
       }
     }
   }
@@ -266,19 +268,21 @@ function pickScalpingAdminPatch(patch = {}) {
     out.stop = {};
     if (patch.stop.model !== undefined) out.stop.model = String(patch.stop.model);
     if (patch.stop.bufferAtrRatio !== undefined) {
-      out.stop.bufferAtrRatio = Number(patch.stop.bufferAtrRatio);
+      const n = Number(patch.stop.bufferAtrRatio);
+      out.stop.bufferAtrRatio = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
   }
 
   if (patch.takeProfit && typeof patch.takeProfit === 'object') {
-    const tp = pickTakeProfitAdminPatch(patch.takeProfit, [0.7, 1.3, 2.0]);
+    const tp = pickTakeProfitAdminPatch(patch.takeProfit, [...SCALPING_TP_PROFILE.atrCaps]);
     if (tp) out.takeProfit = tp;
   }
 
   if (patch.fvg && typeof patch.fvg === 'object') {
     out.fvg = {};
     if (patch.fvg.minGapToAtrRatio !== undefined) {
-      out.fvg.minGapToAtrRatio = Number(patch.fvg.minGapToAtrRatio);
+      const n = Number(patch.fvg.minGapToAtrRatio);
+      out.fvg.minGapToAtrRatio = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
   }
 
@@ -294,7 +298,8 @@ function pickScalpingAdminPatch(patch = {}) {
       out.confidence.weights = {};
       for (const key of SCALPING_WEIGHT_KEYS) {
         if (patch.confidence.weights[key] !== undefined) {
-          out.confidence.weights[key] = Number(patch.confidence.weights[key]);
+          const n = Number(patch.confidence.weights[key]);
+          out.confidence.weights[key] = Number.isFinite(n) ? Math.max(0, n) : 0;
         }
       }
     }
@@ -302,11 +307,11 @@ function pickScalpingAdminPatch(patch = {}) {
 
   if (patch.filters && typeof patch.filters === 'object') {
     out.filters = {};
-    if (patch.filters.maxSpreadPips !== undefined) {
-      out.filters.maxSpreadPips = Number(patch.filters.maxSpreadPips);
-    }
+    const { pickMaxSpreadAdminPatch } = require('./maxSpreadLimits');
+    Object.assign(out.filters, pickMaxSpreadAdminPatch(patch.filters));
     if (patch.filters.minAtrPips !== undefined) {
-      out.filters.minAtrPips = Number(patch.filters.minAtrPips);
+      const n = Number(patch.filters.minAtrPips);
+      out.filters.minAtrPips = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
     if (patch.filters.rejectOnMajorNews !== undefined) {
       out.filters.rejectOnMajorNews = Boolean(patch.filters.rejectOnMajorNews);
@@ -321,7 +326,7 @@ function pickDaytradingAdminPatch(patch = {}) {
   const out = {};
 
   if (patch.enabled !== undefined) out.enabled = Boolean(patch.enabled);
-  if (patch.htfTimeframe !== undefined) out.htfTimeframe = String(patch.htfTimeframe).trim() || '4h';
+  if (patch.htfTimeframe !== undefined) out.htfTimeframe = String(patch.htfTimeframe).trim() || '1h';
   if (patch.refineHtfTimeframe !== undefined) {
     out.refineHtfTimeframe = String(patch.refineHtfTimeframe).trim() || '1h';
   }
@@ -337,7 +342,7 @@ function pickDaytradingAdminPatch(patch = {}) {
     out.entry = {};
     if (patch.entry.model !== undefined) out.entry.model = String(patch.entry.model);
     if (patch.entry.maxWaitBars !== undefined) {
-      out.entry.maxWaitBars = Math.max(4, parseInt(patch.entry.maxWaitBars, 10) || 16);
+      out.entry.maxWaitBars = Math.max(4, parseInt(patch.entry.maxWaitBars, 10) || 15);
     }
   }
 
@@ -345,22 +350,25 @@ function pickDaytradingAdminPatch(patch = {}) {
     out.stop = {};
     if (patch.stop.model !== undefined) out.stop.model = String(patch.stop.model);
     if (patch.stop.bufferAtrRatio !== undefined) {
-      out.stop.bufferAtrRatio = Number(patch.stop.bufferAtrRatio);
+      const n = Number(patch.stop.bufferAtrRatio);
+      out.stop.bufferAtrRatio = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
     if (patch.stop.maxStopAtrMult !== undefined) {
-      out.stop.maxStopAtrMult = Number(patch.stop.maxStopAtrMult);
+      const n = Number(patch.stop.maxStopAtrMult);
+      out.stop.maxStopAtrMult = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
   }
 
   if (patch.takeProfit && typeof patch.takeProfit === 'object') {
-    const tp = pickTakeProfitAdminPatch(patch.takeProfit, [1.5, 2.5, 3.5]);
+    const tp = pickTakeProfitAdminPatch(patch.takeProfit, [...DAY_TRADING_TP_PROFILE.atrCaps]);
     if (tp) out.takeProfit = tp;
   }
 
   if (patch.fvg && typeof patch.fvg === 'object') {
     out.fvg = {};
     if (patch.fvg.minGapToAtrRatio !== undefined) {
-      out.fvg.minGapToAtrRatio = Number(patch.fvg.minGapToAtrRatio);
+      const n = Number(patch.fvg.minGapToAtrRatio);
+      out.fvg.minGapToAtrRatio = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
   }
 
@@ -376,7 +384,8 @@ function pickDaytradingAdminPatch(patch = {}) {
       out.confidence.weights = {};
       for (const key of DAYTRADING_WEIGHT_KEYS) {
         if (patch.confidence.weights[key] !== undefined) {
-          out.confidence.weights[key] = Number(patch.confidence.weights[key]);
+          const n = Number(patch.confidence.weights[key]);
+          out.confidence.weights[key] = Number.isFinite(n) ? Math.max(0, n) : 0;
         }
       }
     }
@@ -384,11 +393,11 @@ function pickDaytradingAdminPatch(patch = {}) {
 
   if (patch.filters && typeof patch.filters === 'object') {
     out.filters = {};
-    if (patch.filters.maxSpreadPips !== undefined) {
-      out.filters.maxSpreadPips = Number(patch.filters.maxSpreadPips);
-    }
+    const { pickMaxSpreadAdminPatch } = require('./maxSpreadLimits');
+    Object.assign(out.filters, pickMaxSpreadAdminPatch(patch.filters));
     if (patch.filters.minAtrPips !== undefined) {
-      out.filters.minAtrPips = Number(patch.filters.minAtrPips);
+      const n = Number(patch.filters.minAtrPips);
+      out.filters.minAtrPips = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
     if (patch.filters.rejectOnMajorNews !== undefined) {
       out.filters.rejectOnMajorNews = Boolean(patch.filters.rejectOnMajorNews);
@@ -470,6 +479,8 @@ function toAdminScalpingView(cfg) {
     },
     filters: {
       maxSpreadPips: cfg.filters?.maxSpreadPips,
+      maxSpreadPipsByClass: { ...(cfg.filters?.maxSpreadPipsByClass || {}) },
+      maxSpreadPipsBySymbol: { ...(cfg.filters?.maxSpreadPipsBySymbol || {}) },
       minAtrPips: cfg.filters?.minAtrPips,
       rejectOnMajorNews: Boolean(cfg.filters?.rejectOnMajorNews)
     }
@@ -514,6 +525,8 @@ function toAdminDaytradingView(cfg) {
     },
     filters: {
       maxSpreadPips: cfg.filters?.maxSpreadPips,
+      maxSpreadPipsByClass: { ...(cfg.filters?.maxSpreadPipsByClass || {}) },
+      maxSpreadPipsBySymbol: { ...(cfg.filters?.maxSpreadPipsBySymbol || {}) },
       minAtrPips: cfg.filters?.minAtrPips,
       rejectOnMajorNews: Boolean(cfg.filters?.rejectOnMajorNews),
       newsWindowMinutes: cfg.filters?.newsWindowMinutes,
@@ -651,19 +664,27 @@ async function persistStrategyConfig({ updatedBy } = {}) {
     return null;
   }
   const { getMarketRegimeOverrides } = require('./marketRegimeConfig');
+  const { getCoreScannerOverrides } = require('./scannerRuntimeConfig');
   const StrategyRuntimeConfig = require('../models/StrategyRuntimeConfig');
+  const coreScanner = getCoreScannerOverrides();
+  const $set = {
+    scalping: scalpingOverrides,
+    daytrading: daytradingOverrides,
+    profiles: profileOverrides,
+    activeStrategy,
+    marketRegime: getMarketRegimeOverrides(),
+    updatedAt: new Date(),
+    updatedBy: updatedBy || null
+  };
+  // Only write coreScanner when we have tracked overrides — never replace a
+  // previously saved admin value with an empty object.
+  if (coreScanner && Object.keys(coreScanner).length > 0) {
+    $set.coreScanner = coreScanner;
+  }
   const doc = await StrategyRuntimeConfig.findOneAndUpdate(
     { key: DOC_KEY },
     {
-      $set: {
-        scalping: scalpingOverrides,
-        daytrading: daytradingOverrides,
-        profiles: profileOverrides,
-        activeStrategy,
-        marketRegime: getMarketRegimeOverrides(),
-        updatedAt: new Date(),
-        updatedBy: updatedBy || null
-      },
+      $set,
       $unset: { legacyEnabled: 1 }
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
@@ -694,6 +715,16 @@ async function loadPersistedStrategyConfig() {
     } catch (_) {
       /* market regime optional at boot */
     }
+    try {
+      const { loadCoreScannerOverrides } = require('./scannerRuntimeConfig');
+      // Only apply when a saved coreScanner object exists — never invent/overwrite
+      // an admin's missing field with a blind write on load.
+      if (doc.coreScanner && typeof doc.coreScanner === 'object') {
+        loadCoreScannerOverrides(doc.coreScanner);
+      }
+    } catch (_) {
+      /* core scanner optional at boot */
+    }
   }
   rebuildDefaultRegistry();
   return getStrategyAdminConfig();
@@ -710,7 +741,9 @@ function resetStrategyRuntimeConfigForTests() {
 async function initStrategyRuntimeConfig() {
   try {
     await loadPersistedStrategyConfig();
-    console.log('[StrategyRuntime] Loaded strategy overrides and rebuilt registry.');
+    console.log(
+      '[StrategyRuntime] Loaded strategy, market regime, and core scanner overrides; rebuilt registry.'
+    );
   } catch (err) {
     console.error('[StrategyRuntime] Boot init error (env defaults kept):', err.message);
     rebuildDefaultRegistry();

@@ -3,9 +3,9 @@ import { subscriptionApi } from '../services/api';
 import { redirectToCheckout } from '../utils/safeRedirect';
 import { useAuth } from '../context/AuthContext';
 
-const PHONE_PROVIDERS = new Set(['mpesa', 'sasapay']);
-const LIVE_PROVIDERS = ['paystack', 'paypal'];
-const DEV_EXTRA_PROVIDERS = ['mpesa', 'sasapay', 'binance', 'mock'];
+const PHONE_PROVIDERS = new Set(['mpesa']);
+const LIVE_PROVIDERS = ['paypal'];
+const DEV_EXTRA_PROVIDERS = ['mpesa', 'binance', 'mock'];
 
 function normalizeCheckoutBillingCycle(cycle) {
   return cycle === 'yearly' ? 'yearly' : 'monthly';
@@ -24,23 +24,20 @@ export default function Checkout({
   const { user, updateUser } = useAuth();
   const mockPaymentsAllowed = Boolean(paymentMethods?.mockPaymentsAllowed);
   const availableProviders = useMemo(() => {
-    // Live site: Paystack + PayPal when configured (never mock).
+    // Live site: PayPal when configured (never mock).
     // Local/dev with mockPaymentsAllowed may also show legacy providers for testing.
     if (!mockPaymentsAllowed) {
       return LIVE_PROVIDERS.filter(option => {
-        if (option === 'paystack') {
-          return paymentMethods?.paystack?.configured !== false;
-        }
         if (option === 'paypal') {
           return paymentMethods?.paypal?.configured === true;
         }
         return false;
       });
     }
-    return ['paystack', 'paypal', ...DEV_EXTRA_PROVIDERS];
+    return ['paypal', ...DEV_EXTRA_PROVIDERS];
   }, [mockPaymentsAllowed, paymentMethods]);
 
-  const [provider, setProvider] = useState(paymentMethods?.defaultProvider || 'paystack');
+  const [provider, setProvider] = useState(paymentMethods?.defaultProvider || 'paypal');
   const [phone, setPhone] = useState(user?.phone || '');
   const [loading, setLoading] = useState(false);
   const [paymentState, setPaymentState] = useState('pending');
@@ -48,14 +45,13 @@ export default function Checkout({
   const [checkoutRequestId, setCheckoutRequestId] = useState('');
   const [paypalOrderId, setPaypalOrderId] = useState('');
   const [binanceTradeNo, setBinanceTradeNo] = useState('');
-  const [paystackReference, setPaystackReference] = useState('');
   const [isMockMode, setIsMockMode] = useState(false);
   const [error, setError] = useState('');
   const pollRef = useRef(null);
 
   useEffect(() => {
     if (!availableProviders.includes(provider)) {
-      setProvider(availableProviders[0] || 'paystack');
+      setProvider(availableProviders[0] || 'paypal');
     }
   }, [availableProviders, provider]);
 
@@ -86,12 +82,8 @@ export default function Checkout({
         let response;
         if (providerName === 'mpesa') {
           response = await subscriptionApi.getMpesaStatus(referenceId);
-        } else if (providerName === 'sasapay') {
-          response = await subscriptionApi.getSasaPayStatus(referenceId);
         } else if (providerName === 'binance') {
           response = await subscriptionApi.getBinanceStatus(referenceId);
-        } else if (providerName === 'paystack') {
-          response = await subscriptionApi.getPaystackStatus(referenceId);
         } else {
           return;
         }
@@ -135,7 +127,7 @@ export default function Checkout({
       if (provider === 'mock') {
         setMockPaymentId(response.data.mockPaymentId);
         setPaymentState('initiated');
-      } else if (provider === 'mpesa' || provider === 'sasapay') {
+      } else if (provider === 'mpesa') {
         const requestId = response.data.checkoutRequestId || response.data.stkRequestId;
         setCheckoutRequestId(requestId);
         setPaymentState('initiated');
@@ -163,17 +155,6 @@ export default function Checkout({
           redirectToCheckout(response.data.checkoutUrl);
         } else {
           throw new Error('Binance Pay checkout URL not available');
-        }
-      } else if (provider === 'paystack') {
-        const reference = response.data.reference || response.data.checkoutId;
-        setPaystackReference(reference);
-
-        if (response.data.mockMode) {
-          setPaymentState('initiated');
-        } else if (response.data.checkoutUrl) {
-          redirectToCheckout(response.data.checkoutUrl);
-        } else {
-          throw new Error('Paystack checkout URL not available');
         }
       }
     } catch (err) {
@@ -224,26 +205,6 @@ export default function Checkout({
     }
   };
 
-  const handleConfirmSasaPayMock = async () => {
-    try {
-      setLoading(true);
-      const response = await subscriptionApi.confirmSasaPayMock({
-        checkoutRequestId,
-        tier,
-        billingCycle
-      });
-
-      updateUser(response.data.user);
-      await onSubscriptionUpdated?.();
-      setPaymentState('confirmed');
-    } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to confirm SasaPay payment.');
-      setPaymentState('error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleConfirmPaypalMock = async () => {
     try {
       setLoading(true);
@@ -284,30 +245,8 @@ export default function Checkout({
     }
   };
 
-  const handleConfirmPaystackMock = async () => {
-    try {
-      setLoading(true);
-      const response = await subscriptionApi.confirmPaystackMock({
-        reference: paystackReference,
-        tier,
-        billingCycle
-      });
-
-      updateUser(response.data.user);
-      await onSubscriptionUpdated?.();
-      setPaymentState('confirmed');
-    } catch (err) {
-      setError(err.response?.data?.message || err.message || 'Failed to confirm Paystack payment.');
-      setPaymentState('error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const providerLabels = {
-    paystack: 'Paystack (Card / Mobile Money)',
     mpesa: 'M-Pesa (Till 5337170)',
-    sasapay: 'SasaPay (M-Pesa / Airtel / SasaPay wallet)',
     binance: `Binance Pay (USDT ${binanceAmount}/${periodLabel})`,
     paypal: 'PayPal / Card',
     mock: 'Mock Payment (Local Test Only)'
@@ -344,11 +283,6 @@ export default function Checkout({
               )}
             </p>
           )}
-          {provider === 'paystack' && (
-            <p>
-              <strong>Paystack:</strong> KES {pricing.price.toLocaleString()}/{periodLabel} via card or mobile money
-            </p>
-          )}
         </div>
 
         {paymentState === 'pending' && (
@@ -373,7 +307,7 @@ export default function Checkout({
 
             {PHONE_PROVIDERS.has(provider) && (
               <div className="form-group">
-                <label>Phone Number ({provider === 'sasapay' ? 'SasaPay' : 'M-Pesa'})</label>
+                <label>Phone Number (M-Pesa)</label>
                 <input
                   type="tel"
                   placeholder="254712345678 or 0712345678"
@@ -381,11 +315,7 @@ export default function Checkout({
                   onChange={e => setPhone(e.target.value)}
                   required
                 />
-                <small>
-                  {provider === 'sasapay'
-                    ? 'You will receive a SasaPay prompt on your phone to approve the payment.'
-                    : 'Payment will be sent to Till number 5337170'}
-                </small>
+                <small>Payment will be sent to Till number 5337170</small>
               </div>
             )}
 
@@ -433,27 +363,6 @@ export default function Checkout({
           </div>
         )}
 
-        {paymentState === 'initiated' && provider === 'sasapay' && (
-          <div className="sasapay-flow">
-            <div className="info-box">
-              <h3>SasaPay Payment in Progress</h3>
-              <p>A payment request has been sent to {phone}.</p>
-              <p>Approve the prompt on your phone to complete payment in KES.</p>
-              {!isMockMode && <p>Waiting for payment confirmation…</p>}
-              {isMockMode && mockPaymentsAllowed && (
-                <p>
-                  <em>Mock mode — SasaPay credentials not configured. Click below to simulate payment.</em>
-                </p>
-              )}
-            </div>
-            {isMockMode && mockPaymentsAllowed && (
-              <button type="button" className="btn-confirm" onClick={handleConfirmSasaPayMock} disabled={loading}>
-                {loading ? 'Confirming…' : 'Simulate SasaPay Payment'}
-              </button>
-            )}
-          </div>
-        )}
-
         {paymentState === 'initiated' && provider === 'paypal' && (
           <div className="paypal-flow">
             <div className="info-box">
@@ -495,29 +404,6 @@ export default function Checkout({
             {isMockMode && mockPaymentsAllowed && (
               <button type="button" className="btn-confirm" onClick={handleConfirmBinanceMock} disabled={loading}>
                 {loading ? 'Confirming…' : 'Simulate Binance Pay Payment'}
-              </button>
-            )}
-          </div>
-        )}
-
-        {paymentState === 'initiated' && provider === 'paystack' && (
-          <div className="paystack-flow">
-            <div className="info-box">
-              <h3>Paystack Payment</h3>
-              {isMockMode && mockPaymentsAllowed ? (
-                <>
-                  <p>
-                    <em>Local mock — Paystack keys not configured.</em>
-                  </p>
-                  <p>Click below to simulate a successful Paystack payment (dev only).</p>
-                </>
-              ) : (
-                <p>Complete payment on Paystack. Your subscription activates automatically after confirmation.</p>
-              )}
-            </div>
-            {isMockMode && mockPaymentsAllowed && (
-              <button type="button" className="btn-confirm" onClick={handleConfirmPaystackMock} disabled={loading}>
-                {loading ? 'Confirming…' : 'Simulate Paystack Payment'}
               </button>
             )}
           </div>

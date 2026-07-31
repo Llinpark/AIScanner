@@ -163,10 +163,19 @@ export default function SignalHistory({ tierLimits, onAddToJournal }) {
   };
 
   const historyDays = tierLimits.historyDays || 7;
-  const emptyMessage = useMemo(
-    () => (loading ? 'Loading…' : 'No TradingView signals match your filters.'),
-    [loading]
+  const hasActiveFilters = Boolean(
+    filters.symbol || filters.direction || filters.outcome || filters.alertType
   );
+  const emptyMessage = useMemo(() => {
+    if (loading) return 'Loading…';
+    if (total === 0 && !hasActiveFilters) {
+      return `No TradingView webhook signals in the last ${historyDays} days yet. Insights fills from live TradingView alerts (not auto-scan). After your Pine strategy fires an alert to the webhook, history, analytics, and journal prefill will populate here.`;
+    }
+    if (signals.length === 0 && hasActiveFilters) {
+      return 'No TradingView signals match your filters.';
+    }
+    return 'No TradingView signals to show.';
+  }, [loading, total, hasActiveFilters, historyDays, signals.length]);
 
   return (
     <div className="insights-section">
