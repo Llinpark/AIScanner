@@ -1,5 +1,5 @@
-//@version=5
-strategy("KachingScanner Alert Bridge", overlay=true)
+//@version=6
+strategy("KachingScanner Alert Bridge", overlay=true, margin_long=100, margin_short=100)
 
 // Example input fields for alerts
 symbolName = syminfo.ticker

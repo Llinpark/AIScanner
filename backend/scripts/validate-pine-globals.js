@@ -110,6 +110,29 @@ function validateScript(script, label) {
   return errors;
 }
 
+function validateLocalArchive(errors) {
+  const fs = require('fs');
+  const path = require('path');
+  const botPath = path.join(__dirname, '..', 'tradingview-bot.pine');
+  const bot = fs.readFileSync(botPath, 'utf8');
+  if (!bot.includes('//@version=6')) {
+    errors.push('tradingview-bot.pine: expected //@version=6');
+  }
+  if (!bot.includes('tradeState') || !bot.includes('lineAge')) {
+    errors.push('tradingview-bot.pine: missing tradeState/lineAge state machine');
+  }
+  for (const fn of extractFunctions(bot)) {
+    fn.bodyLines.forEach((bodyLine, idx) => {
+      const match = bodyLine.match(ASSIGN_RE);
+      if (match) {
+        errors.push(
+          `tradingview-bot.pine: function ${fn.name}() line ${fn.startLine + idx} assigns global '${match[1]}' via ${match[2]}`
+        );
+      }
+    });
+  }
+}
+
 function main() {
   const user = {
     _id: '507f1f77bcf86cd799439011',
@@ -123,6 +146,7 @@ function main() {
     const generated = P.generateForUser(user, { strategy });
     errors.push(...validateScript(generated.script, strategy));
   }
+  validateLocalArchive(errors);
 
   if (errors.length) {
     console.error(JSON.stringify({ ok: false, errors }, null, 2));
@@ -133,7 +157,7 @@ function main() {
     JSON.stringify(
       {
         ok: true,
-        checkedStrategies: ['daytrading', 'scalping'],
+        checkedStrategies: ['daytrading', 'scalping', 'tradingview-bot.pine'],
         forbiddenGlobals: FORBIDDEN_GLOBALS.length,
         note: 'No global scalar reassignments detected inside Pine functions'
       },
