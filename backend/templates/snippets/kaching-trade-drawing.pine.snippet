@@ -1,14 +1,32 @@
 // ===== TRADE DRAWING ENGINE (shared) =====
-// Smart label placement keeps price anchors exact while shifting label boxes in bar/tick space.
+// Pine state machine: scalar globals are updated ONLY in the main execution scope.
+// Drawing collections live in arrays — helpers may mutate array *contents* (push/set/clear)
+// and call *.delete() on drawing IDs, but must never reassign global scalars (:= / += / -=).
+
+TRADE_IDLE = 0
+TRADE_ACTIVE = 1
+
 var array<line> tradeLevelLines = array.new_line()
 var array<label> tradeLevelLabels = array.new_label()
 var array<line> tradeLeaderLines = array.new_line()
-var label lbBadge = na
-var box fvgZone = na
-var float activeSl = na
-var float activeTp3 = na
+var array<string> tradeLevelTags = array.new_string()
+var array<label> tradeBadges = array.new_label()
+var array<box> tradeZones = array.new_box()
+
+var int tradeState = 0
+var int lineAge = 0
+var int signalBar = na
+var string activeSignalId = na
 var string activeDirection = na
-var bool tradeActive = false
+var float activeEntry = na
+var float activeSl = na
+var float activeTp1 = na
+var float activeTp2 = na
+var float activeTp3 = na
+var float activeGapTop = na
+var float activeGapBot = na
+var bool tp1Done = false
+var bool tp2Done = false
 
 smartLabelGapPrice() =>
     math.max(syminfo.mintick * smartLabelMinVerticalTicks, syminfo.mintick)
@@ -16,7 +34,11 @@ smartLabelGapPrice() =>
 smartLabelOffsetBars(int step) =>
     math.max(minHorizontalGapBars * step, 1)
 
-clearPreviousTrade() =>
+makeSignalId(string direction) =>
+    str.tostring(time) + "_" + direction + "_" + str.tostring(bar_index)
+
+// Deletes drawings and clears array slots only — no scalar global reassignment.
+clearTradeDrawings() =>
     if array.size(tradeLevelLines) > 0
         for i = 0 to array.size(tradeLevelLines) - 1
             line.delete(array.get(tradeLevelLines, i))
@@ -26,15 +48,29 @@ clearPreviousTrade() =>
     if array.size(tradeLevelLabels) > 0
         for i = 0 to array.size(tradeLevelLabels) - 1
             label.delete(array.get(tradeLevelLabels, i))
+    if array.size(tradeBadges) > 0
+        for i = 0 to array.size(tradeBadges) - 1
+            label.delete(array.get(tradeBadges, i))
+    if array.size(tradeZones) > 0
+        for i = 0 to array.size(tradeZones) - 1
+            box.delete(array.get(tradeZones, i))
     array.clear(tradeLevelLines)
     array.clear(tradeLeaderLines)
     array.clear(tradeLevelLabels)
-    if not na(lbBadge)
-        label.delete(lbBadge)
-    if not na(fvgZone)
-        box.delete(fvgZone)
-    lbBadge := na
-    fvgZone := na
+    array.clear(tradeLevelTags)
+    array.clear(tradeBadges)
+    array.clear(tradeZones)
+
+removeTradeLevelByTag(string tag) =>
+    idx = array.indexof(tradeLevelTags, tag)
+    if idx >= 0
+        line.delete(array.get(tradeLevelLines, idx))
+        line.delete(array.get(tradeLeaderLines, idx))
+        label.delete(array.get(tradeLevelLabels, idx))
+        array.remove(tradeLevelLines, idx)
+        array.remove(tradeLeaderLines, idx)
+        array.remove(tradeLevelLabels, idx)
+        array.remove(tradeLevelTags, idx)
 
 drawSmartLevel(int x1, int x2, float anchorPrice, float labelPrice, string tag, color lineCol, color bgCol, color txtCol, bool placeRight, int stackStep) =>
     levelLine = line.new(x1, anchorPrice, x2, anchorPrice, xloc=xloc.bar_index, extend=extend.none, color=lineCol, width=2, style=line.style_solid)
@@ -46,6 +82,7 @@ drawSmartLevel(int x1, int x2, float anchorPrice, float labelPrice, string tag, 
     array.push(tradeLevelLines, levelLine)
     array.push(tradeLeaderLines, leaderLine)
     array.push(tradeLevelLabels, levelLabel)
+    array.push(tradeLevelTags, tag)
 
 resolveLabelLayout(array<float> anchors) =>
     count = array.size(anchors)
@@ -53,39 +90,40 @@ resolveLabelLayout(array<float> anchors) =>
     layoutSide = array.new_int(count, 1)
     layoutStep = array.new_int(count, 0)
     gapPrice = smartLabelGapPrice()
-    for idx = 0 to count - 1
-        anchor = array.get(anchors, idx)
-        y = anchor
-        rightConflicts = 0
-        if idx > 0
-            for prev = 0 to idx - 1
-                prevY = array.get(layoutY, prev)
-                if math.abs(y - prevY) < gapPrice
-                    moveUp = y >= prevY
-                    if not moveUp and anchor == prevY
-                        moveUp := true
-                    y := prevY + (moveUp ? gapPrice : -gapPrice)
-                    rightConflicts += 1
-        spillLeft = rightConflicts >= 2 and idx >= 2
-        if spillLeft
-            y := anchor
+    if count > 0
+        for idx = 0 to count - 1
+            anchor = array.get(anchors, idx)
+            y = anchor
+            rightConflicts = 0
             if idx > 0
                 for prev = 0 to idx - 1
                     prevY = array.get(layoutY, prev)
-                    prevSide = array.get(layoutSide, prev)
-                    if prevSide == -1 and math.abs(y - prevY) < gapPrice
-                        moveUpLeft = y >= prevY
-                        if not moveUpLeft and anchor == prevY
-                            moveUpLeft := true
-                        y := prevY + (moveUpLeft ? gapPrice : -gapPrice)
-            array.set(layoutSide, idx, -1)
-        array.set(layoutY, idx, y)
-        array.set(layoutStep, idx, rightConflicts)
+                    if math.abs(y - prevY) < gapPrice
+                        moveUp = y >= prevY
+                        if not moveUp and anchor == prevY
+                            moveUp := true
+                        y := prevY + (moveUp ? gapPrice : -gapPrice)
+                        rightConflicts += 1
+            spillLeft = rightConflicts >= 2 and idx >= 2
+            if spillLeft
+                y := anchor
+                if idx > 0
+                    for prev = 0 to idx - 1
+                        prevY = array.get(layoutY, prev)
+                        prevSide = array.get(layoutSide, prev)
+                        if prevSide == -1 and math.abs(y - prevY) < gapPrice
+                            moveUpLeft = y >= prevY
+                            if not moveUpLeft and anchor == prevY
+                                moveUpLeft := true
+                            y := prevY + (moveUpLeft ? gapPrice : -gapPrice)
+                array.set(layoutSide, idx, -1)
+            array.set(layoutY, idx, y)
+            array.set(layoutStep, idx, rightConflicts)
     [layoutY, layoutSide, layoutStep]
 
-drawTradeSet(float entryPrice, float slPrice, float tp1Price, float tp2Price, float tp3Price, bool isLong) =>
+paintTradeSet(float entryPrice, float slPrice, float tp1Price, float tp2Price, float tp3Price, bool isLong) =>
     x1 = bar_index
-    x2 = bar_index + levelExtendBars
+    x2 = bar_index + 1
     anchorPrices = array.from(entryPrice, slPrice, tp1Price, tp2Price, tp3Price)
     tags = array.from(isLong ? "Buy" : "Sell", "SL", "TP1", "TP2", "TP3")
     lineColors = array.from(isLong ? colBuy : colSell, isLong ? colSlBuy : colSlSell, colTpNear, colTpNear, colTpFar)
@@ -106,34 +144,95 @@ drawTradeSet(float entryPrice, float slPrice, float tp1Price, float tp2Price, fl
              array.get(layoutStep, idx)
          )
 
-drawBuySignal(float ee, float ssl, float t1, float t2, float t3) =>
-    clearPreviousTrade()
-    lbBadge := label.new(bar_index, low, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.normal)
+// Drawing-only arm helper: mutates arrays / creates drawings. Caller assigns scalars in main scope.
+armTradeDrawings(float ee, float ssl, float t1, float t2, float t3, bool isLong, float gapTop, float gapBot) =>
+    clearTradeDrawings()
+    badgeY = isLong ? low : high
+    badgeTxt = isLong ? "Kaching Buy" : "Kaching Sell"
+    badgeStyle = isLong ? label.style_label_up : label.style_label_down
+    badgeCol = isLong ? colBuy : colSell
+    array.push(tradeBadges, label.new(bar_index, badgeY, badgeTxt, xloc=xloc.bar_index, yloc=yloc.price, style=badgeStyle, color=badgeCol, textcolor=color.white, size=size.normal))
     if SHOW_FVG_ZONE
-        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, bgcolor=colLongZoneBg)
+        zoneBorder = isLong ? colLongZoneBorder : colShortZoneBorder
+        zoneBg = isLong ? colLongZoneBg : colShortZoneBg
+        array.push(tradeZones, box.new(bar_index - 2, math.max(gapTop, gapBot), bar_index + 5, math.min(gapTop, gapBot), border_color=zoneBorder, bgcolor=zoneBg))
     if SHOW_TRADE_LINES
-        drawTradeSet(ee, ssl, t1, t2, t3, true)
-        activeDirection := "long"
-        activeSl := ssl
-        activeTp3 := t3
-        tradeActive := true
+        paintTradeSet(ee, ssl, t1, t2, t3, isLong)
 
-drawSellSignal(float ee, float ssl, float t1, float t2, float t3) =>
-    clearPreviousTrade()
-    lbBadge := label.new(bar_index, high, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.normal)
-    if SHOW_FVG_ZONE
-        fvgZone := box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, bgcolor=colShortZoneBg)
-    if SHOW_TRADE_LINES
-        drawTradeSet(ee, ssl, t1, t2, t3, false)
-        activeDirection := "short"
-        activeSl := ssl
-        activeTp3 := t3
-        tradeActive := true
+// Grow level lines toward signalBar + levelExtendBars while the trade is live.
+extendTradeLines() =>
+    if array.size(tradeLevelLines) > 0 and not na(signalBar)
+        maxX = signalBar + levelExtendBars
+        x2 = math.max(signalBar + 1, math.min(bar_index + 1, maxX))
+        for i = 0 to array.size(tradeLevelLines) - 1
+            ln = array.get(tradeLevelLines, i)
+            if not na(ln)
+                line.set_x2(ln, x2)
 
-if tradeActive and barstate.isconfirmed
+// ===== TRADE LIFECYCLE (main scope — scalar updates happen here) =====
+newTradeState = tradeState
+newLineAge = lineAge
+newTp1Done = tp1Done
+newTp2Done = tp2Done
+clearActiveScalars = false
+
+if tradeState == TRADE_ACTIVE and barstate.isconfirmed
+    newLineAge += 1
+    extendTradeLines()
     longTrade = activeDirection == "long"
     hitSl = longTrade ? low <= activeSl : high >= activeSl
-    hitTp3 = longTrade ? high >= activeTp3 : low <= activeTp3
-    if hitSl or hitTp3
-        clearPreviousTrade()
-        tradeActive := false
+    hitTp1 = not tp1Done and not na(activeTp1) and (longTrade ? high >= activeTp1 : low <= activeTp1)
+    hitTp2 = not tp2Done and not na(activeTp2) and (longTrade ? high >= activeTp2 : low <= activeTp2)
+    hitTp3 = not na(activeTp3) and (longTrade ? high >= activeTp3 : low <= activeTp3)
+    expired = newLineAge >= tradeMaxAgeBars
+
+    if hitSl
+        alert(buildPayload("stop_loss", activeDirection, activeEntry, activeSl, activeTp1, activeTp2, activeTp3, activeGapTop, activeGapBot, 0.0), alert.freq_once_per_bar)
+        clearTradeDrawings()
+        newTradeState := TRADE_IDLE
+        newLineAge := 0
+        newTp1Done := false
+        newTp2Done := false
+        clearActiveScalars := true
+    else
+        if hitTp1
+            newTp1Done := true
+            removeTradeLevelByTag("TP1")
+            alert(buildPayload("take_profit_1", activeDirection, activeEntry, activeSl, activeTp1, activeTp2, activeTp3, activeGapTop, activeGapBot, 0.0), alert.freq_once_per_bar)
+        if hitTp2
+            newTp2Done := true
+            removeTradeLevelByTag("TP2")
+            alert(buildPayload("take_profit_2", activeDirection, activeEntry, activeSl, activeTp1, activeTp2, activeTp3, activeGapTop, activeGapBot, 0.0), alert.freq_once_per_bar)
+        if hitTp3
+            removeTradeLevelByTag("TP3")
+            alert(buildPayload("take_profit_3", activeDirection, activeEntry, activeSl, activeTp1, activeTp2, activeTp3, activeGapTop, activeGapBot, 0.0), alert.freq_once_per_bar)
+            clearTradeDrawings()
+            newTradeState := TRADE_IDLE
+            newLineAge := 0
+            newTp1Done := false
+            newTp2Done := false
+            clearActiveScalars := true
+        else if expired
+            clearTradeDrawings()
+            newTradeState := TRADE_IDLE
+            newLineAge := 0
+            newTp1Done := false
+            newTp2Done := false
+            clearActiveScalars := true
+
+tradeState := newTradeState
+lineAge := newLineAge
+tp1Done := newTp1Done
+tp2Done := newTp2Done
+
+if clearActiveScalars
+    signalBar := na
+    activeSignalId := na
+    activeDirection := na
+    activeEntry := na
+    activeSl := na
+    activeTp1 := na
+    activeTp2 := na
+    activeTp3 := na
+    activeGapTop := na
+    activeGapBot := na
