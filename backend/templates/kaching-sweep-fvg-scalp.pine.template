@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
 
 // Generated for: {{SUBSCRIBER_LABEL}}
@@ -18,6 +18,7 @@ CONFIRM_TV_USERNAME = input.string("", "Confirm your TradingView username", grou
 SHOW_TRADE_LINES = true
 SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
 levelExtendBars = input.int(22, "Trade level length (bars)", minval=15, maxval=30, group="KachingFx Display", tooltip="How far Entry/SL/TP lines extend right from the signal candle. Keeps the chart clean — never full-width.")
+tradeMaxAgeBars = input.int(80, "Trade overlay expiry (bars)", minval=20, maxval=300, group="KachingFx Display", tooltip="Clear Entry/SL/TP overlays if the trade is still open after this many bars (lineAge expiry).")
 smartLabelMinVerticalTicks = input.int(12, "Smart label min vertical gap (ticks)", minval=2, maxval=250, group="KachingFx Display", tooltip="Minimum price-space gap between trade labels before lower-priority labels are shifted.")
 minHorizontalGapBars = input.int(2, "Smart label min horizontal gap (bars)", minval=1, maxval=8, group="KachingFx Display", tooltip="Horizontal spacing used for staggered smart labels and left/right spillover.")
 
@@ -308,7 +309,22 @@ if fireLong
     conf = confScore() / 100.0
     msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf)
     alert(msg, alert.freq_once_per_bar)
-    drawBuySignal(ee, ssl, t1, t2, t3)
+    // Arm drawings via array helpers; assign trade scalars only in main scope (Pine v6).
+    armTradeDrawings(ee, ssl, t1, t2, t3, true, fvgTop, fvgBot)
+    tradeState := TRADE_ACTIVE
+    lineAge := 0
+    signalBar := bar_index
+    activeSignalId := makeSignalId("long")
+    activeDirection := "long"
+    activeEntry := ee
+    activeSl := ssl
+    activeTp1 := t1
+    activeTp2 := t2
+    activeTp3 := t3
+    activeGapTop := fvgTop
+    activeGapBot := fvgBot
+    tp1Done := false
+    tp2Done := false
     fvgBar := na
     dispBar := na
 
@@ -319,6 +335,20 @@ if fireShort
     conf = confScore() / 100.0
     msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf)
     alert(msg, alert.freq_once_per_bar)
-    drawSellSignal(ee, ssl, t1, t2, t3)
+    armTradeDrawings(ee, ssl, t1, t2, t3, false, fvgTop, fvgBot)
+    tradeState := TRADE_ACTIVE
+    lineAge := 0
+    signalBar := bar_index
+    activeSignalId := makeSignalId("short")
+    activeDirection := "short"
+    activeEntry := ee
+    activeSl := ssl
+    activeTp1 := t1
+    activeTp2 := t2
+    activeTp3 := t3
+    activeGapTop := fvgTop
+    activeGapBot := fvgBot
+    tp1Done := false
+    tp2Done := false
     fvgBar := na
     dispBar := na

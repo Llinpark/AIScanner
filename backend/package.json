@@ -11,7 +11,8 @@
     "test:strategies": "node --test strategies/__tests__/**/*.test.js",
     "test:utils": "node --test utils/__tests__/**/*.test.js",
     "test:regime": "node --test utils/__tests__/marketRegimeService.test.js",
-    "test:patterns": "node scripts/verify-patterns.js"
+    "test:patterns": "node scripts/verify-patterns.js",
+    "test:pine": "node scripts/validate-pine-globals.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

@@ -282,7 +282,7 @@ function generateForUser(user, options = {}) {
     instructions: [
       instructionLead,
       `In TradingView script settings, enter your TradingView username exactly: ${tvUsername}. Signals stay locked until it matches.`,
-      'When a signal fires, TradingView shows Kaching Buy/Sell plus short Entry/SL/TP1–3 levels with prices (latest trade only). Adjust “Trade level length (bars)” under KachingFx Display (default 22).',
+      'When a signal fires, TradingView shows Kaching Buy/Sell plus short Entry/SL/TP1–3 levels with prices (latest trade only). Adjust “Trade level length (bars)” and overlay expiry under KachingFx Display. Lines grow with the trade; TP1→TP2→TP3 / SL alerts update the overlay.',
       `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
       'Switch strategies with ?strategy=daytrading | scalping.',
