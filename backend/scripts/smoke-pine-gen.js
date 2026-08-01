@@ -5,12 +5,15 @@ process.env.WEBHOOK_SIGNING_SECRET =
 
 const P = require('../services/PineScriptGeneratorService');
 
-const day = P.generateForUser({
-  _id: '507f1f77bcf86cd799439011',
-  email: 't@test.com',
-  tradingviewUsername: 'demo_trader',
-  subscription: { tier: 'professional', status: 'active' }
-});
+const day = P.generateForUser(
+  {
+    _id: '507f1f77bcf86cd799439011',
+    email: 't@test.com',
+    tradingviewUsername: 'demo_trader',
+    subscription: { tier: 'professional', status: 'active' }
+  },
+  { strategy: 'daytrading' }
+);
 
 const scalp = P.generateForUser(
   {

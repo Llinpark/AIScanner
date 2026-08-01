@@ -30,8 +30,8 @@ function bootstrapStrategyProfiles(registry, options = {}) {
     if (!registry) target.clear();
   }
 
-  target.registerStrategy(createDayTradingProfile());
   target.registerStrategy(createScalpingProfile());
+  target.registerStrategy(createDayTradingProfile());
 
   if (includeStubs) {
     for (const stub of createStubProfiles()) {
@@ -52,9 +52,9 @@ function resetBootstrapFlag() {
 
 /**
  * Map admin activeStrategy short key → full strategy id via profile registry.
- * Falls back to daytrading id for unknown/stub prefer keys (BC).
+ * Falls back to scalping id for unknown/stub prefer keys.
  */
-function resolvePreferStrategyId(preferKey, fallbackId = 'liquidity_sweep_fvg_daytrading') {
+function resolvePreferStrategyId(preferKey, fallbackId = 'liquidity_sweep_fvg_scalp') {
   bootstrapStrategyProfiles();
   const registry = getProfileRegistry();
   const resolved = registry.resolveId(preferKey);

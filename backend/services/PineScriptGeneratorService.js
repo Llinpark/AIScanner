@@ -72,7 +72,7 @@ function renderTemplate(template, variables) {
  * @returns {'daytrading'|'scalping'}
  */
 function resolveStrategyKey(strategy) {
-  const key = String(strategy || process.env.PINE_DEFAULT_STRATEGY || 'daytrading').toLowerCase();
+  const key = String(strategy || process.env.PINE_DEFAULT_STRATEGY || 'scalping').toLowerCase();
   if (
     key === 'scalping' ||
     key === 'scalp' ||

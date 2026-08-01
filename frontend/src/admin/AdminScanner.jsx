@@ -14,19 +14,20 @@ import {
   DAYTRADING_CONFIDENCE_WEIGHTS
 } from '../constants/dayTradingDefaults';
 
-const LIVE_STRATEGY_KEYS = new Set(['daytrading', 'scalping']);
+const LIVE_STRATEGY_KEYS = new Set(['scalping', 'daytrading']);
+const DEFAULT_ACTIVE_STRATEGY = 'scalping';
 
 const FALLBACK_STRATEGY_CATALOG = [
   {
-    key: 'daytrading',
-    name: 'Liquidity Sweep + Fair Value Gap (Day Trading)',
+    key: 'scalping',
+    name: 'Liquidity Sweep + Fair Value Gap (Scalping)',
     status: 'live',
     configurable: true,
     enabled: true
   },
   {
-    key: 'scalping',
-    name: 'Liquidity Sweep + Fair Value Gap (Scalping)',
+    key: 'daytrading',
+    name: 'Liquidity Sweep + Fair Value Gap (Day Trading)',
     status: 'live',
     configurable: true,
     enabled: true
@@ -520,18 +521,12 @@ export default function AdminScanner() {
   const { user } = useAuth();
   const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
   const [form, setForm] = useState(null);
-  const [activeStrategy, setActiveStrategy] = useState('daytrading');
+  /** UI tab only — must not overwrite persisted prefer/activeStrategy on click. */
+  const [selectedTab, setSelectedTab] = useState(DEFAULT_ACTIVE_STRATEGY);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-
-  const syncActiveStrategyFromConfig = config => {
-    const next = config?.activeStrategy;
-    if (LIVE_STRATEGY_KEYS.has(next)) {
-      setActiveStrategy(next);
-    }
-  };
 
   useEffect(() => {
     if (!canManageScanner) {
@@ -543,8 +538,11 @@ export default function AdminScanner() {
       .getScannerConfig()
       .then(res => {
         const config = res.data.config;
-        setForm(config);
-        syncActiveStrategyFromConfig(config);
+        const prefer = LIVE_STRATEGY_KEYS.has(config?.activeStrategy)
+          ? config.activeStrategy
+          : DEFAULT_ACTIVE_STRATEGY;
+        setForm({ ...config, activeStrategy: prefer });
+        setSelectedTab(prefer);
       })
       .catch(err => setError(err.response?.data?.message || 'Unable to load scanner config.'))
       .finally(() => setLoading(false));
@@ -621,11 +619,18 @@ export default function AdminScanner() {
   };
 
   const selectStrategyTab = strategyKey => {
-    setActiveStrategy(strategyKey);
-    // Only live strategies drive analyze prefer / persisted activeStrategy
-    if (LIVE_STRATEGY_KEYS.has(strategyKey)) {
-      setForm(prev => (prev ? { ...prev, activeStrategy: strategyKey } : prev));
-    }
+    // Tabs are for viewing/editing settings only. Prefer/active must change via
+    // explicit "Use as preferred" (or Restore Defaults) — never by browsing a tab.
+    setSelectedTab(strategyKey);
+  };
+
+  const setPreferredStrategy = strategyKey => {
+    if (!LIVE_STRATEGY_KEYS.has(strategyKey)) return;
+    setForm(prev => (prev ? { ...prev, activeStrategy: strategyKey } : prev));
+    setError('');
+    setMessage(
+      `${strategyKey === 'scalping' ? 'Scalping' : 'Day Trading'} set as preferred — click Save to persist globally.`
+    );
   };
 
   const updateStrategy = (strategyKey, updater) => {
@@ -667,7 +672,7 @@ export default function AdminScanner() {
         SCALPING_WEIGHT_KEYS
       )
     };
-    setActiveStrategy('scalping');
+    setSelectedTab('scalping');
     setForm(prev => ({
       ...prev,
       ...cloneDefaults(pack.core),
@@ -701,7 +706,7 @@ export default function AdminScanner() {
       ...strategy.confidence,
       weights: { ...DAYTRADING_CONFIDENCE_WEIGHTS }
     };
-    setActiveStrategy('daytrading');
+    setSelectedTab('daytrading');
     setForm(prev => ({
       ...prev,
       activeStrategy: 'daytrading',
@@ -771,11 +776,17 @@ export default function AdminScanner() {
         }
       }
 
-      const payload = { ...form, strategies, activeStrategy };
+      const prefer = LIVE_STRATEGY_KEYS.has(form.activeStrategy)
+        ? form.activeStrategy
+        : 'scalping';
+      const payload = { ...form, strategies, activeStrategy: prefer };
       const response = await adminApi.updateScannerConfig(payload);
       const config = response.data.config;
-      setForm(config);
-      syncActiveStrategyFromConfig(config);
+      const savedPrefer = LIVE_STRATEGY_KEYS.has(config?.activeStrategy)
+        ? config.activeStrategy
+        : prefer;
+      setForm({ ...config, activeStrategy: savedPrefer });
+      setSelectedTab(savedPrefer);
       setMessage(response.data.message || 'Scanner configuration saved.');
     } catch (err) {
       setError(err.response?.data?.message || 'Unable to save scanner config.');
@@ -799,8 +810,11 @@ export default function AdminScanner() {
     Array.isArray(form.strategyCatalog) && form.strategyCatalog.length
       ? form.strategyCatalog
       : FALLBACK_STRATEGY_CATALOG;
+  const preferredStrategy = LIVE_STRATEGY_KEYS.has(form.activeStrategy)
+    ? form.activeStrategy
+    : DEFAULT_ACTIVE_STRATEGY;
   const selectedCatalogEntry =
-    strategyCatalog.find(s => s.key === activeStrategy) || strategyCatalog[0] || null;
+    strategyCatalog.find(s => s.key === selectedTab) || strategyCatalog[0] || null;
   const selectedIsLive =
     selectedCatalogEntry &&
     (selectedCatalogEntry.status === 'live' || LIVE_STRATEGY_KEYS.has(selectedCatalogEntry.key));
@@ -975,9 +989,11 @@ export default function AdminScanner() {
       <section className="admin-form-section">
         <h4 className="admin-form-section-title">Strategies</h4>
         <p className="admin-form-note">
-          Strategies → select a profile → configure settings. Enable toggles apply only to live
-          profiles. Prefer / active strategy for analysis:{' '}
-          <strong>{LIVE_STRATEGY_KEYS.has(form.activeStrategy) ? form.activeStrategy : activeStrategy}</strong>
+          Strategies → select a profile tab to configure settings (tabs do not change prefer).
+          Enable toggles apply only to live profiles. Prefer / active strategy for analysis:{' '}
+          <strong>{preferredStrategy}</strong>
+          {preferredStrategy === 'scalping' ? ' (default)' : ''}. Use “Set as preferred” then Save
+          to change it permanently.
         </p>
 
         <div className="admin-strategy-toggle-row">
@@ -1014,10 +1030,10 @@ export default function AdminScanner() {
               key={entry.key}
               type="button"
               role="tab"
-              aria-selected={activeStrategy === entry.key}
-              className={`admin-strategy-tab${activeStrategy === entry.key ? ' is-active' : ''}${
+              aria-selected={selectedTab === entry.key}
+              className={`admin-strategy-tab${selectedTab === entry.key ? ' is-active' : ''}${
                 entry.status === 'stub' ? ' is-stub' : ''
-              }`}
+              }${preferredStrategy === entry.key ? ' is-preferred' : ''}`}
               onClick={() => selectStrategyTab(entry.key)}
             >
               {entry.name?.includes('Scalping')
@@ -1025,6 +1041,7 @@ export default function AdminScanner() {
                 : entry.name?.includes('Day Trading')
                   ? 'Day Trading'
                   : entry.name?.replace(/ Strategy$/, '') || entry.key}
+              {preferredStrategy === entry.key ? ' (preferred)' : ''}
             </button>
           ))}
         </div>
@@ -1042,9 +1059,19 @@ export default function AdminScanner() {
           </div>
         )}
 
-        {activeStrategy === 'daytrading' && (
+        {selectedTab === 'daytrading' && (
           <div className="admin-strategy-panel" role="tabpanel">
             <div className="admin-form-actions" style={{ marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-small admin-btn"
+                onClick={() => setPreferredStrategy('daytrading')}
+                disabled={preferredStrategy === 'daytrading'}
+              >
+                {preferredStrategy === 'daytrading'
+                  ? 'Preferred / active strategy'
+                  : 'Set Day Trading as preferred'}
+              </button>
               <button
                 type="button"
                 className="btn-small admin-btn"
@@ -1262,9 +1289,19 @@ export default function AdminScanner() {
           </div>
         )}
 
-        {activeStrategy === 'scalping' && (
+        {selectedTab === 'scalping' && (
           <div className="admin-strategy-panel" role="tabpanel">
             <div className="admin-form-actions" style={{ marginBottom: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn-small admin-btn"
+                onClick={() => setPreferredStrategy('scalping')}
+                disabled={preferredStrategy === 'scalping'}
+              >
+                {preferredStrategy === 'scalping'
+                  ? 'Preferred / active strategy'
+                  : 'Set Scalping as preferred'}
+              </button>
               <button
                 type="button"
                 className="btn-small admin-btn"

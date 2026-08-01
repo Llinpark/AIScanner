@@ -19,11 +19,19 @@ const StrategyRuntimeConfigSchema = new mongoose.Schema({
   daytrading: { type: mongoose.Schema.Types.Mixed, default: {} },
   /** Additive map: strategyKey → independent overrides for stubs / future profiles */
   profiles: { type: mongoose.Schema.Types.Mixed, default: {} },
-  /** Last strategy tab selected/saved in Admin Scanner Settings (live keys) */
+  /** Preferred / active strategy for analysis (live keys). Default scalping. */
   activeStrategy: {
     type: String,
     enum: ['scalping', 'daytrading'],
-    default: 'daytrading'
+    default: 'scalping'
+  },
+  /**
+   * True only after a Super Admin scanner-config save.
+   * Distinguishes intentional prefer from the legacy schema default (daytrading).
+   */
+  activeStrategyExplicit: {
+    type: Boolean,
+    default: false
   },
   /** Independent Market Regime Filter settings (pre-scan gate; not strategy-specific) */
   marketRegime: { type: mongoose.Schema.Types.Mixed, default: {} },

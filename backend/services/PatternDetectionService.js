@@ -252,13 +252,13 @@ function buildActionableNotes(detection, levels) {
 function scanLastCandles(candles, config = PATTERN_SCANNER_CONFIG, symbol = '', options = {}) {
   const registry = options.registry || getDefaultRegistry();
 
-  let activePrefer = DAYTRADING_ID;
+  let activePrefer = SCALPING_ID;
   try {
     const { getActiveStrategy } = require('../utils/strategyRuntimeConfig');
     const { resolvePreferStrategyId } = require('../strategies/engine');
-    activePrefer = resolvePreferStrategyId(getActiveStrategy(), DAYTRADING_ID);
+    activePrefer = resolvePreferStrategyId(getActiveStrategy(), SCALPING_ID);
   } catch (_) {
-    activePrefer = DAYTRADING_ID;
+    activePrefer = SCALPING_ID;
   }
 
   // Legacy flags still supported; resolve through profile registry when possible

@@ -7,7 +7,9 @@ const {
   getResolvedScalpingConfig,
   getResolvedDaytradingConfig,
   resetStrategyRuntimeConfigForTests,
-  normalizeActiveStrategy
+  normalizeActiveStrategy,
+  resolveLoadedActiveStrategy,
+  DEFAULT_ACTIVE_STRATEGY
 } = require('../strategyRuntimeConfig');
 const {
   applyScannerConfig,
@@ -28,8 +30,42 @@ describe('strategyRuntimeConfig persistence', () => {
     assert.equal(normalizeActiveStrategy('scalping'), 'scalping');
     assert.equal(normalizeActiveStrategy('daytrading'), 'daytrading');
     assert.equal(normalizeActiveStrategy('DAYTRADING'), 'daytrading');
-    assert.equal(normalizeActiveStrategy('nope', 'scalping'), 'scalping');
-    assert.equal(normalizeActiveStrategy(undefined), 'daytrading');
+    assert.equal(normalizeActiveStrategy('nope', 'daytrading'), 'daytrading');
+    assert.equal(normalizeActiveStrategy(undefined), 'scalping');
+  });
+
+  it('defaults prefer/active strategy to scalping when unset', () => {
+    assert.equal(DEFAULT_ACTIVE_STRATEGY, 'scalping');
+    assert.equal(getActiveStrategy(), 'scalping');
+    assert.equal(getScannerConfig().activeStrategy, 'scalping');
+  });
+
+  it('legacy Mongo daytrading without explicit flag loads as scalping', () => {
+    assert.equal(
+      resolveLoadedActiveStrategy({ activeStrategy: 'daytrading' }),
+      'scalping'
+    );
+    assert.equal(
+      resolveLoadedActiveStrategy({ activeStrategy: 'daytrading', activeStrategyExplicit: false }),
+      'scalping'
+    );
+  });
+
+  it('honors explicit Mongo daytrading prefer across profile patches', () => {
+    assert.equal(
+      resolveLoadedActiveStrategy({
+        activeStrategy: 'daytrading',
+        activeStrategyExplicit: true
+      }),
+      'daytrading'
+    );
+    applyScannerConfig({ activeStrategy: 'daytrading' });
+    assert.equal(getActiveStrategy(), 'daytrading');
+    applyScannerConfig({
+      strategies: { scalping: { htfTimeframe: '5m' } }
+    });
+    assert.equal(getActiveStrategy(), 'daytrading');
+    assert.equal(getScannerConfig().activeStrategy, 'daytrading');
   });
 
   it('persists activeStrategy in memory and returns it via scanner config', () => {

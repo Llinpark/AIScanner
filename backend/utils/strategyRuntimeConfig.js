@@ -24,6 +24,8 @@ const {
 const DOC_KEY = 'strategies';
 /** Live keys that drive analyze prefer (stubs cannot be active prefer). */
 const ACTIVE_STRATEGY_VALUES = Object.freeze(['scalping', 'daytrading']);
+/** Default prefer when no Super Admin choice has been persisted. */
+const DEFAULT_ACTIVE_STRATEGY = 'scalping';
 
 /** @type {Record<string, any>} */
 let scalpingOverrides = {};
@@ -33,9 +35,9 @@ let daytradingOverrides = {};
 /** @type {Record<string, any>} */
 let profileOverrides = {};
 /** @type {'scalping'|'daytrading'} */
-let activeStrategy = 'daytrading';
+let activeStrategy = DEFAULT_ACTIVE_STRATEGY;
 
-function normalizeActiveStrategy(value, fallback = 'daytrading') {
+function normalizeActiveStrategy(value, fallback = DEFAULT_ACTIVE_STRATEGY) {
   const v = String(value || '')
     .toLowerCase()
     .trim();
@@ -49,7 +51,7 @@ function normalizeActiveStrategy(value, fallback = 'daytrading') {
   } catch (_) {
     /* ignore */
   }
-  return ACTIVE_STRATEGY_VALUES.includes(fallback) ? fallback : 'daytrading';
+  return ACTIVE_STRATEGY_VALUES.includes(fallback) ? fallback : DEFAULT_ACTIVE_STRATEGY;
 }
 
 function getActiveStrategy() {
@@ -59,6 +61,18 @@ function getActiveStrategy() {
 function setActiveStrategy(value) {
   activeStrategy = normalizeActiveStrategy(value, activeStrategy);
   return activeStrategy;
+}
+
+/**
+ * Resolve prefer from a Mongo StrategyRuntimeConfig document.
+ * Legacy docs without activeStrategyExplicit ignore stored daytrading schema defaults.
+ */
+function resolveLoadedActiveStrategy(doc) {
+  if (!doc || typeof doc !== 'object') return DEFAULT_ACTIVE_STRATEGY;
+  if (doc.activeStrategyExplicit === true) {
+    return normalizeActiveStrategy(doc.activeStrategy, DEFAULT_ACTIVE_STRATEGY);
+  }
+  return DEFAULT_ACTIVE_STRATEGY;
 }
 
 const SCALPING_WEIGHT_KEYS = ['sweep', 'mss', 'displacement', 'fvg', 'retrace', 'engulfing', 'doji'];
@@ -672,6 +686,8 @@ async function persistStrategyConfig({ updatedBy } = {}) {
     daytrading: daytradingOverrides,
     profiles: profileOverrides,
     activeStrategy,
+    // Mark prefer as an explicit Super Admin save so boot never reverts to schema defaults.
+    activeStrategyExplicit: true,
     marketRegime: getMarketRegimeOverrides(),
     updatedAt: new Date(),
     updatedBy: updatedBy || null
@@ -706,7 +722,7 @@ async function loadPersistedStrategyConfig() {
       doc.daytrading && typeof doc.daytrading === 'object' ? { ...doc.daytrading } : {};
     profileOverrides =
       doc.profiles && typeof doc.profiles === 'object' ? { ...doc.profiles } : {};
-    activeStrategy = normalizeActiveStrategy(doc.activeStrategy, 'daytrading');
+    activeStrategy = resolveLoadedActiveStrategy(doc);
     try {
       const { loadMarketRegimeOverrides } = require('./marketRegimeConfig');
       loadMarketRegimeOverrides(
@@ -735,7 +751,7 @@ function resetStrategyRuntimeConfigForTests() {
   scalpingOverrides = {};
   daytradingOverrides = {};
   profileOverrides = {};
-  activeStrategy = 'daytrading';
+  activeStrategy = DEFAULT_ACTIVE_STRATEGY;
 }
 
 async function initStrategyRuntimeConfig() {
@@ -760,7 +776,9 @@ module.exports = {
   SCALPING_TP_SCORE_WEIGHTS,
   DAYTRADING_TP_SCORE_WEIGHTS,
   ACTIVE_STRATEGY_VALUES,
+  DEFAULT_ACTIVE_STRATEGY,
   normalizeActiveStrategy,
+  resolveLoadedActiveStrategy,
   getActiveStrategy,
   setActiveStrategy,
   getRegistryOptions,

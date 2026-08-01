@@ -123,8 +123,8 @@ describe('Strategy Engine architecture', () => {
     assert.equal(resolvePreferStrategyId('scalping'), SCALPING_ID);
     assert.equal(resolvePreferStrategyId('daytrading'), DAYTRADING_ID);
     assert.equal(resolvePreferStrategyId(SCALPING_ID), SCALPING_ID);
-    assert.equal(resolvePreferStrategyId('swing'), DAYTRADING_ID);
-    assert.equal(resolvePreferStrategyId('nope'), DAYTRADING_ID);
+    assert.equal(resolvePreferStrategyId('swing'), SCALPING_ID);
+    assert.equal(resolvePreferStrategyId('nope'), SCALPING_ID);
   });
 
   it('keeps scalping and daytrading admin configs independent via catalog', () => {
@@ -166,6 +166,8 @@ describe('Strategy Engine architecture', () => {
   });
 
   it('activeStrategy remains a live prefer key after stub catalog load', () => {
+    assert.equal(getActiveStrategy(), 'scalping');
+    applyStrategyConfig({ activeStrategy: 'daytrading' });
     assert.equal(getActiveStrategy(), 'daytrading');
     applyStrategyConfig({ activeStrategy: 'scalping' });
     assert.equal(getActiveStrategy(), 'scalping');

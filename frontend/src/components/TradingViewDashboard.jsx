@@ -83,7 +83,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   const [pineMeta, setPineMeta] = useState(null);
   const [pineCopyState, setPineCopyState] = useState('idle');
   const [pineLoadError, setPineLoadError] = useState('');
-  const [pineStrategy, setPineStrategy] = useState('daytrading');
+  const [pineStrategy, setPineStrategy] = useState('scalping');
   const pineScriptRef = useRef('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
   const [tvUsernameInput, setTvUsernameInput] = useState('');
