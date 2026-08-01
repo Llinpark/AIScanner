@@ -60,7 +60,11 @@ function createAdminRouter({ io } = {}) {
           failedPayments
         ] = await Promise.all([
           UserConfig.countDocuments(),
-          UserConfig.countDocuments({ 'subscription.status': 'active' }),
+          // Paid/approved subscribers only — admin role bypass must not inflate this metric.
+          UserConfig.countDocuments({
+            'subscription.status': 'active',
+            role: { $nin: ['admin', 'super_admin'] }
+          }),
           Signal.countDocuments(),
           Signal.countDocuments({ createdAt: { $gte: startOfDay } }),
           Signal.countDocuments({
