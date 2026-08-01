@@ -8,6 +8,7 @@ const { userHasTierFeature } = require('../utils/subscriptionAccess');
 const { computeRiskMetrics } = require('../utils/signalRisk');
 const { toMt5Symbol, mt5OrderType } = require('../utils/mt5Symbols');
 const { isEntryAlert } = require('../utils/signalOutcome');
+const { formatTvPrice } = require('../utils/priceFormat');
 
 const devExecutions = new Map();
 
@@ -473,9 +474,9 @@ function formatExecutionSummary(execution) {
   return [
     `Symbol: ${execution.symbol}`,
     `Direction: ${String(execution.direction).toUpperCase()}`,
-    `Entry: ${Number(execution.entry).toFixed(5)}`,
-    `SL: ${Number(execution.stopLoss).toFixed(5)}`,
-    `TP1: ${Number(execution.takeProfit1).toFixed(5)}`,
+    `Entry: ${formatTvPrice(execution.entry)}`,
+    `SL: ${formatTvPrice(execution.stopLoss)}`,
+    `TP1: ${formatTvPrice(execution.takeProfit1)}`,
     `Lot: ${Number(execution.lotSize).toFixed(2)}`
   ].join('\n');
 }

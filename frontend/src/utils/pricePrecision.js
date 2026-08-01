@@ -1,60 +1,71 @@
-const SYMBOL_PRICE_FORMAT = {
-  'XAU/USD': { precision: 2, minMove: 0.01 },
-  XAUUSD: { precision: 2, minMove: 0.01 },
-  'XAG/USD': { precision: 3, minMove: 0.001 },
-  XAGUSD: { precision: 3, minMove: 0.001 },
-  US30: { precision: 2, minMove: 0.01 },
-  US100: { precision: 2, minMove: 0.01 },
-  'BTC/USD': { precision: 2, minMove: 0.01 },
-  USDBTC: { precision: 2, minMove: 0.01 },
-  BTCUSD: { precision: 2, minMove: 0.01 }
-};
+/**
+ * Universal instrument price formatting — no symbol whitelist / forex-only decimals.
+ * Prefer an explicit mintick; otherwise infer step from price magnitude.
+ */
 
-function normalizeInstrumentSymbol(symbol) {
-  const raw = String(symbol || '')
-    .trim()
-    .toUpperCase()
-    .replace(/\s+/g, '');
-
-  if (!raw) return '';
-  if (SYMBOL_PRICE_FORMAT[raw]) return raw;
-  if (raw.includes('/')) return raw;
-  if (raw === 'US30' || raw === 'US100') return raw;
-  if (raw.length === 6) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
-  return raw;
+/** Decimal places implied by a mintick/step: 0.00001→5, 0.01→2, 1→0. */
+export function decimalsFromMintick(mintick) {
+  let tick = Math.abs(Number(mintick));
+  if (!Number.isFinite(tick) || tick <= 0) return 8;
+  let decimals = 0;
+  while (tick < 1 && decimals < 12) {
+    tick *= 10;
+    decimals += 1;
+    if (Math.abs(tick - Math.round(tick)) < 1e-8) break;
+  }
+  return decimals;
 }
 
-export function getPricePrecision(symbol) {
-  const normalized = normalizeInstrumentSymbol(symbol);
-  const compact = normalized.replace('/', '');
-
-  if (SYMBOL_PRICE_FORMAT[normalized]) {
-    return SYMBOL_PRICE_FORMAT[normalized];
-  }
-  if (SYMBOL_PRICE_FORMAT[compact]) {
-    return SYMBOL_PRICE_FORMAT[compact];
-  }
-  if (normalized.includes('JPY')) {
-    return { precision: 3, minMove: 0.001 };
-  }
-  if (/^[A-Z]{3}\/[A-Z]{3}$/.test(normalized)) {
-    return { precision: 5, minMove: 0.00001 };
-  }
-
-  return { precision: 5, minMove: 0.00001 };
+/** Infer mintick from a sample price when TV mintick is unavailable. */
+export function inferMintickFromPrice(value) {
+  const n = Math.abs(Number(value));
+  if (!Number.isFinite(n) || n === 0) return 1e-5;
+  if (n >= 1000) return 0.01;
+  if (n >= 100) return 0.01;
+  if (n >= 10) return 0.001;
+  if (n >= 1) return 1e-5;
+  return 1e-6;
 }
 
-export function formatInstrumentPrice(value, symbol) {
-  if (!Number.isFinite(value)) return '—';
-  const { precision } = getPricePrecision(symbol);
-  return value.toFixed(precision);
+/**
+ * @param {number} value
+ * @param {number|string} [mintickOrHint] mintick number, or ignored symbol string (step inferred from value)
+ */
+export function getPricePrecision(valueOrMintick, maybeMintick) {
+  const asNumber = Number(valueOrMintick);
+  let mintick = Number(maybeMintick);
+  if (Number.isFinite(mintick) && mintick > 0) {
+    return { precision: decimalsFromMintick(mintick), minMove: mintick };
+  }
+  // Legacy call shape: getPricePrecision(symbol) — ignore symbol, use default FX-like step
+  // Prefer getPricePrecision(samplePrice) / formatInstrumentPrice(value, mintick).
+  if (!Number.isFinite(asNumber) || asNumber <= 0 || asNumber > 1) {
+    const sample = Number.isFinite(asNumber) && asNumber > 1 ? asNumber : 1.085;
+    mintick = inferMintickFromPrice(sample);
+  } else {
+    // valueOrMintick looks like a mintick itself
+    mintick = asNumber;
+  }
+  return { precision: decimalsFromMintick(mintick), minMove: mintick };
 }
 
-export function getChartPriceFormat(symbol) {
-  const { precision, minMove } = getPricePrecision(symbol);
+export function formatInstrumentPrice(value, mintickOrHint) {
+  if (!Number.isFinite(Number(value))) return '—';
+  const n = Number(value);
+  let mintick = Number(mintickOrHint);
+  if (!Number.isFinite(mintick) || mintick <= 0) {
+    mintick = inferMintickFromPrice(n);
+  }
+  return n.toFixed(decimalsFromMintick(mintick));
+}
+
+/** Lightweight Charts priceFormat from a sample price (not a symbol name). */
+export function getChartPriceFormat(samplePrice) {
+  const mintick = inferMintickFromPrice(samplePrice);
+  const precision = decimalsFromMintick(mintick);
   return {
     type: 'price',
     precision,
-    minMove
+    minMove: mintick
   };
 }

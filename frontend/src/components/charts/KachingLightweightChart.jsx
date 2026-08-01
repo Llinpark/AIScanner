@@ -255,14 +255,18 @@ export default function KachingLightweightChart({
     const series = seriesRef.current;
     if (!chart || !series || !symbol) return;
 
-    const priceFormat = getChartPriceFormat(symbol);
+    const sample =
+      Array.isArray(candles) && candles.length
+        ? Number(candles[candles.length - 1]?.close)
+        : NaN;
+    const priceFormat = getChartPriceFormat(sample);
     series.applyOptions({ priceFormat });
     chart.applyOptions({
       localization: {
-        priceFormatter: price => formatInstrumentPrice(price, symbol)
+        priceFormatter: price => formatInstrumentPrice(price, priceFormat.minMove)
       }
     });
-  }, [symbol]);
+  }, [symbol, candles]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -401,20 +405,20 @@ export default function KachingLightweightChart({
           <div className="kaching-chart-ohlc" aria-live="polite">
             <span className="ohlc-symbol">{ohlcLegend.symbol}</span>
             <span>
-              O <strong>{formatInstrumentPrice(ohlcLegend.open, symbol)}</strong>
+              O <strong>{formatInstrumentPrice(ohlcLegend.open)}</strong>
             </span>
             <span>
-              H <strong>{formatInstrumentPrice(ohlcLegend.high, symbol)}</strong>
+              H <strong>{formatInstrumentPrice(ohlcLegend.high)}</strong>
             </span>
             <span>
-              L <strong>{formatInstrumentPrice(ohlcLegend.low, symbol)}</strong>
+              L <strong>{formatInstrumentPrice(ohlcLegend.low)}</strong>
             </span>
             <span>
-              C <strong style={{ color: changeColor }}>{formatInstrumentPrice(ohlcLegend.close, symbol)}</strong>
+              C <strong style={{ color: changeColor }}>{formatInstrumentPrice(ohlcLegend.close)}</strong>
             </span>
             <span style={{ color: changeColor }}>
               {ohlcLegend.change >= 0 ? '+' : ''}
-              {formatInstrumentPrice(ohlcLegend.change, symbol)} ({ohlcLegend.changePct >= 0 ? '+' : ''}
+              {formatInstrumentPrice(ohlcLegend.change)} ({ohlcLegend.changePct >= 0 ? '+' : ''}
               {ohlcLegend.changePct.toFixed(2)}%)
             </span>
             <span>

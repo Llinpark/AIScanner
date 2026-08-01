@@ -1,3 +1,5 @@
+const { formatTvPrice } = require('./priceFormat');
+
 const KACHING_ALERT_NAMES = {
   entry: 'Kaching Entry',
   stop_loss: 'Kaching SL',
@@ -70,7 +72,14 @@ function validateKachingEntrySignal(signalData) {
 function formatKachingAlertMessage(signal) {
   const typeLabel = KACHING_ALERT_NAMES[signal.alertType] || KACHING_ALERT_NAMES.signal;
   const sl = signal.stop_loss ?? signal.stop_loss_1;
-  return `${typeLabel} ${String(signal.direction || 'neutral').toUpperCase()} ${signal.symbol} | ${KACHING_ALERT_NAMES.entry} ${signal.entry} | ${KACHING_ALERT_NAMES.stop_loss} ${sl} | ${KACHING_ALERT_NAMES.take_profit_1} ${signal.take_profit_1} | ${KACHING_ALERT_NAMES.take_profit_2} ${signal.take_profit_2} | ${KACHING_ALERT_NAMES.take_profit_3} ${signal.take_profit_3}`;
+  return (
+    `${typeLabel} ${String(signal.direction || 'neutral').toUpperCase()} ${signal.symbol}` +
+    ` | ${KACHING_ALERT_NAMES.entry} ${formatTvPrice(signal.entry)}` +
+    ` | ${KACHING_ALERT_NAMES.stop_loss} ${formatTvPrice(sl)}` +
+    ` | ${KACHING_ALERT_NAMES.take_profit_1} ${formatTvPrice(signal.take_profit_1)}` +
+    ` | ${KACHING_ALERT_NAMES.take_profit_2} ${formatTvPrice(signal.take_profit_2)}` +
+    ` | ${KACHING_ALERT_NAMES.take_profit_3} ${formatTvPrice(signal.take_profit_3)}`
+  );
 }
 
 module.exports = {

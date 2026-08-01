@@ -151,6 +151,11 @@ for (const [label, g] of [
   assert(!g.script.includes('symbolOk'), `${label}: must not gate on symbolOk`);
   assert(!/Unsupported Symbol/i.test(g.script), `${label}: must not show Unsupported Symbol banner`);
   assert(g.script.includes('syminfo.ticker'), `${label}: must use syminfo.ticker for TV instrument`);
+  assert(g.script.includes('format.mintick'), `${label}: must format prices via format.mintick`);
+  assert(!g.script.includes('priceDecimals'), `${label}: must not use symbol-specific priceDecimals`);
+  assert(!/str\.contains\(t,\s*"JPY"\)/.test(g.script), `${label}: must not hardcode JPY price precision`);
+  assert(!/str\.contains\(t,\s*"XAU"\)/.test(g.script), `${label}: must not hardcode XAU price precision`);
+
   assert(g.script.includes('tradeLabelYs'), `${label}: missing tradeLabelYs layout state`);
   assert(g.script.includes('tradeLayoutSide'), `${label}: missing tradeLayoutSide state`);
   assert(g.script.includes('line.set_xy1'), `${label}: missing live line glue set_xy1`);

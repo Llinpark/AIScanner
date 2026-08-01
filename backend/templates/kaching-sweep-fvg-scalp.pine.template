@@ -74,41 +74,17 @@ colShortZoneBorder = color.new(#dc2626, 30)
 
 atr14 = ta.atr(14)
 
+// Instrument tick magnitude for ATR/stop fallbacks only — never used to invent display decimals.
 pointSize() =>
-    tick = math.max(nz(syminfo.mintick, 0.0001), 1e-8)
-    t = str.upper(syminfo.ticker)
-    str.contains(t, "JPY") ? 0.01 :
-     str.contains(t, "XAU") or str.contains(t, "GOLD") ? 0.1 :
-     str.contains(t, "XAG") or str.contains(t, "SILVER") ? 0.01 :
-     close >= 1000 or tick >= 1.0 ? math.max(tick, 1.0) :
-     close >= 50 ? math.max(tick, 0.1) :
-     math.max(tick * 10, 0.0001)
+    math.max(nz(syminfo.mintick, 1e-8), 1e-8)
 
-// Display precision: Forex 5dp, JPY 3dp, Gold 2dp, else mintick-derived
-priceDecimals() =>
-    tick = math.max(nz(syminfo.mintick, 0.00001), 1e-8)
-    t = str.upper(syminfo.ticker)
-    str.contains(t, "JPY") ? 3 :
-     str.contains(t, "XAU") or str.contains(t, "GOLD") ? 2 :
-     str.contains(t, "XAG") or str.contains(t, "SILVER") ? 3 :
-     tick >= 1.0 ? 0 :
-     tick >= 0.1 ? 1 :
-     tick >= 0.01 ? 2 :
-     tick >= 0.001 ? 3 :
-     tick >= 0.0001 ? 4 :
-     5
-
+// ONE universal price→text formatter for every instrument (labels, alerts, webhooks).
+// Uses TradingView syminfo.mintick — format ONLY for display; never round before calculations.
 formatPrice(float px) =>
-    d = priceDecimals()
-    d == 0 ? str.tostring(math.round(px)) :
-     d == 1 ? str.tostring(px, "#.#") :
-     d == 2 ? str.tostring(px, "#.##") :
-     d == 3 ? str.tostring(px, "#.###") :
-     d == 4 ? str.tostring(px, "#.####") :
-     str.tostring(px, "#.#####")
+    str.tostring(px, format.mintick)
 
 fmtPx(float px) =>
-    str.tostring(px, format.mintick)
+    formatPrice(px)
 
 kachingAlertLabel(string alertType) =>
     alertType == "entry" ? "Kaching Entry" :

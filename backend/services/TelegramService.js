@@ -6,6 +6,7 @@ const { WEBHOOK_TELEGRAM_URL } = require('../config/appUrls');
 const { userHasTierFeature, getEffectiveSubscription, getTierDisplayName } = require('../utils/subscriptionAccess');
 const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { isEntryAlert } = require('../utils/signalOutcome');
+const { formatTvPrice } = require('../utils/priceFormat');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
 
 const LINK_CODE_TTL_MS = 15 * 60 * 1000;
@@ -183,11 +184,11 @@ function formatSignalMessage(signal, subscriber = null, { includeExecuteButton =
     `<b>${title}</b>`,
     `<b>Symbol:</b> ${escapeHtml(signal.symbol)}`,
     `<b>Direction:</b> ${escapeHtml(String(signal.direction || '').toUpperCase())}`,
-    `<b>Kaching Entry:</b> ${Number(signal.entry).toFixed(5)}`,
-    `<b>Kaching SL:</b> ${Number(sl).toFixed(5)}`,
-    `<b>Kaching TP1:</b> ${Number(signal.take_profit_1).toFixed(5)}`,
-    `<b>Kaching TP2:</b> ${Number(signal.take_profit_2).toFixed(5)}`,
-    `<b>Kaching TP3:</b> ${Number(signal.take_profit_3).toFixed(5)}`
+    `<b>Kaching Entry:</b> ${formatTvPrice(signal.entry)}`,
+    `<b>Kaching SL:</b> ${formatTvPrice(sl)}`,
+    `<b>Kaching TP1:</b> ${formatTvPrice(signal.take_profit_1)}`,
+    `<b>Kaching TP2:</b> ${formatTvPrice(signal.take_profit_2)}`,
+    `<b>Kaching TP3:</b> ${formatTvPrice(signal.take_profit_3)}`
   ];
 
   if (subscriber && userHasTierFeature(subscriber, 'autoLotSizing')) {

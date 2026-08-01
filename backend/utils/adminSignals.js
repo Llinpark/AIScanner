@@ -5,9 +5,9 @@ function buildEntryFingerprint(signal) {
   return [
     String(signal.symbol || '').toUpperCase(),
     String(signal.direction || '').toLowerCase(),
-    Number(signal.entry || 0).toFixed(5),
-    Number(signal.stop_loss || 0).toFixed(5),
-    Number(signal.take_profit_1 || 0).toFixed(5)
+    Number(signal.entry || 0).toFixed(10),
+    Number(signal.stop_loss || 0).toFixed(10),
+    Number(signal.take_profit_1 || 0).toFixed(10)
   ].join('|');
 }
 

@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const { FRONTEND_URL } = require('../config/appUrls');
+const { formatTvPrice } = require('./priceFormat');
 
 const APP_NAME = process.env.EMAIL_APP_NAME || 'KachingScanner';
 const EMAIL_FROM = process.env.EMAIL_FROM || `${APP_NAME} <noreply@kachingscanner.com>`;
@@ -177,11 +178,11 @@ async function sendTradeAlertEmail({ to, displayName, signal }) {
     `New ${APP_NAME} trade alert`,
     `Symbol: ${signal.symbol || '—'}`,
     `Direction: ${direction || '—'}`,
-    `Entry: ${signal.entry != null ? Number(signal.entry).toFixed(5) : '—'}`,
-    `SL: ${sl != null ? Number(sl).toFixed(5) : '—'}`,
-    `TP1: ${signal.take_profit_1 != null ? Number(signal.take_profit_1).toFixed(5) : '—'}`,
-    `TP2: ${signal.take_profit_2 != null ? Number(signal.take_profit_2).toFixed(5) : '—'}`,
-    `TP3: ${signal.take_profit_3 != null ? Number(signal.take_profit_3).toFixed(5) : '—'}`,
+    `Entry: ${formatTvPrice(signal.entry)}`,
+    `SL: ${formatTvPrice(sl)}`,
+    `TP1: ${formatTvPrice(signal.take_profit_1)}`,
+    `TP2: ${formatTvPrice(signal.take_profit_2)}`,
+    `TP3: ${formatTvPrice(signal.take_profit_3)}`,
     '',
     `Open your dashboard: ${FRONTEND_URL.replace(/\/$/, '')}`
   ];
@@ -196,11 +197,11 @@ async function sendTradeAlertEmail({ to, displayName, signal }) {
       <ul>
         <li><strong>Symbol:</strong> ${signal.symbol || '—'}</li>
         <li><strong>Direction:</strong> ${direction || '—'}</li>
-        <li><strong>Entry:</strong> ${signal.entry != null ? Number(signal.entry).toFixed(5) : '—'}</li>
-        <li><strong>SL:</strong> ${sl != null ? Number(sl).toFixed(5) : '—'}</li>
-        <li><strong>TP1:</strong> ${signal.take_profit_1 != null ? Number(signal.take_profit_1).toFixed(5) : '—'}</li>
-        <li><strong>TP2:</strong> ${signal.take_profit_2 != null ? Number(signal.take_profit_2).toFixed(5) : '—'}</li>
-        <li><strong>TP3:</strong> ${signal.take_profit_3 != null ? Number(signal.take_profit_3).toFixed(5) : '—'}</li>
+        <li><strong>Entry:</strong> ${formatTvPrice(signal.entry)}</li>
+        <li><strong>SL:</strong> ${formatTvPrice(sl)}</li>
+        <li><strong>TP1:</strong> ${formatTvPrice(signal.take_profit_1)}</li>
+        <li><strong>TP2:</strong> ${formatTvPrice(signal.take_profit_2)}</li>
+        <li><strong>TP3:</strong> ${formatTvPrice(signal.take_profit_3)}</li>
       </ul>
       <p><a href="${FRONTEND_URL.replace(/\/$/, '')}">Open your dashboard</a></p>
     `

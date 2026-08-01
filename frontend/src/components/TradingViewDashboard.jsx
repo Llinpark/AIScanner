@@ -7,6 +7,7 @@ import TradingViewSetup from './TradingViewSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
 import { alertMatchesSymbol } from '../constants/markets';
 import { isInsightsSignal } from '../utils/insightsSignal';
+import { formatInstrumentPrice } from '../utils/pricePrecision';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -33,11 +34,11 @@ function AlertCard({ alert, showConfidence, showNewsFilter, showTradeManagement 
       </div>
       <div className="alert-details">
         <DetailRow label="Symbol" value={alert.symbol} />
-        <DetailRow label="Kaching Entry" value={Number(alert.entry).toFixed(5)} />
-        <DetailRow label="Kaching SL" value={Number(alert.stop_loss_1 ?? alert.stop_loss).toFixed(5)} />
-        <DetailRow label="Kaching TP1" value={Number(alert.take_profit_1).toFixed(5)} />
-        <DetailRow label="Kaching TP2" value={Number(alert.take_profit_2).toFixed(5)} />
-        <DetailRow label="Kaching TP3" value={Number(alert.take_profit_3).toFixed(5)} />
+        <DetailRow label="Kaching Entry" value={formatInstrumentPrice(alert.entry)} />
+        <DetailRow label="Kaching SL" value={formatInstrumentPrice(alert.stop_loss_1 ?? alert.stop_loss)} />
+        <DetailRow label="Kaching TP1" value={formatInstrumentPrice(alert.take_profit_1)} />
+        <DetailRow label="Kaching TP2" value={formatInstrumentPrice(alert.take_profit_2)} />
+        <DetailRow label="Kaching TP3" value={formatInstrumentPrice(alert.take_profit_3)} />
         {showConfidence && alert.confidence > 0 && (
           <DetailRow label="Confidence" value={`${(alert.confidence * 100).toFixed(0)}%`} />
         )}
@@ -792,10 +793,10 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       {historicalData.slice(0, 20).map((candle, idx) => (
                         <tr key={idx}>
                           <td>{new Date(candle.time).toLocaleString()}</td>
-                          <td>{candle.open.toFixed(5)}</td>
-                          <td>{candle.high.toFixed(5)}</td>
-                          <td>{candle.low.toFixed(5)}</td>
-                          <td>{candle.close.toFixed(5)}</td>
+                          <td>{formatInstrumentPrice(candle.open)}</td>
+                          <td>{formatInstrumentPrice(candle.high)}</td>
+                          <td>{formatInstrumentPrice(candle.low)}</td>
+                          <td>{formatInstrumentPrice(candle.close)}</td>
                           <td>{(candle.volume / 1000000).toFixed(1)}M</td>
                         </tr>
                       ))}

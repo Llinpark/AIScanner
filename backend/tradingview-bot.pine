@@ -47,19 +47,16 @@ avgVol = ta.sma(volume, 20)
 hasUsableVolume = not na(avgVol) and avgVol > 0
 atr14 = ta.atr(14)
 
-// Adaptive pip/point size — FX pips, metal points, index points, crypto ticks.
+// Instrument tick magnitude for ATR/stop fallbacks only.
 pointSize() =>
-    tick = math.max(nz(syminfo.mintick, 0.0001), 1e-8)
-    t = str.upper(syminfo.ticker)
-    str.contains(t, "JPY") ? 0.01 :
-     str.contains(t, "XAU") or str.contains(t, "UAX") or str.contains(t, "GOLD") ? 0.1 :
-     str.contains(t, "XAG") or str.contains(t, "SILVER") ? 0.01 :
-     close >= 1000 or tick >= 1.0 ? math.max(tick, 1.0) :
-     close >= 50 ? math.max(tick, 0.1) :
-     math.max(tick * 10, 0.0001)
+    math.max(nz(syminfo.mintick, 1e-8), 1e-8)
+
+// Universal price→text via instrument mintick (any TradingView symbol).
+formatPrice(float px) =>
+    str.tostring(px, format.mintick)
 
 fmtPx(float px) =>
-    str.tostring(px, format.mintick)
+    formatPrice(px)
 
 kachingAlertLabel(string alertType) =>
     alertType == "entry" ? "Kaching Entry" :

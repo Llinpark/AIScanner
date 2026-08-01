@@ -18,6 +18,7 @@ import {
   getStatusDisplayLabel,
   hasAdminUnlimitedAccess
 } from '../utils/subscriptionDisplay';
+import { formatInstrumentPrice } from '../utils/pricePrecision';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -372,13 +373,13 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
                   <span>Source: {formatSignalSource()}</span>
                 </div>
                 <div className="signal-row">
-                  <span>Kaching Entry: {Number(signal.entry).toFixed(5)}</span>
-                  <span>Kaching SL: {Number(signal.stop_loss_1 ?? signal.stop_loss).toFixed(5)}</span>
+                  <span>Kaching Entry: {formatInstrumentPrice(signal.entry)}</span>
+                  <span>Kaching SL: {formatInstrumentPrice(signal.stop_loss_1 ?? signal.stop_loss)}</span>
                 </div>
                 <div className="signal-row">
-                  <span>Kaching TP1: {Number(signal.take_profit_1).toFixed(5)}</span>
-                  <span>Kaching TP2: {Number(signal.take_profit_2).toFixed(5)}</span>
-                  <span>Kaching TP3: {Number(signal.take_profit_3).toFixed(5)}</span>
+                  <span>Kaching TP1: {formatInstrumentPrice(signal.take_profit_1)}</span>
+                  <span>Kaching TP2: {formatInstrumentPrice(signal.take_profit_2)}</span>
+                  <span>Kaching TP3: {formatInstrumentPrice(signal.take_profit_3)}</span>
                 </div>
                 <div className="signal-footer">
                   {tierLimits.showConfidence && signal.confidence != null ? (
