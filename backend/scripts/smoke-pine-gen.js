@@ -147,9 +147,10 @@ for (const [label, g] of [
   assert(g.script.includes('signalUuid'), `${label}: missing signalUuid in payload`);
   assert(g.script.includes('array.set(tradeFlags'), `${label}: missing array-based trade flags`);
   assert(g.script.includes('tradeBadgeHold'), `${label}: missing tradeBadgeHold (no lbBadge scalar)`);
-  assert(g.script.includes('isSupportedSymbol'), `${label}: missing supported-symbol gate`);
-  assert(g.script.includes('canonicalSymbol'), `${label}: missing canonicalSymbol helper`);
-  assert(g.script.includes('symbolOk'), `${label}: missing symbolOk gate`);
+  assert(!g.script.includes('isSupportedSymbol'), `${label}: must not gate on isSupportedSymbol`);
+  assert(!g.script.includes('symbolOk'), `${label}: must not gate on symbolOk`);
+  assert(!/Unsupported Symbol/i.test(g.script), `${label}: must not show Unsupported Symbol banner`);
+  assert(g.script.includes('syminfo.ticker'), `${label}: must use syminfo.ticker for TV instrument`);
   assert(g.script.includes('tradeLabelYs'), `${label}: missing tradeLabelYs layout state`);
   assert(g.script.includes('tradeLayoutSide'), `${label}: missing tradeLayoutSide state`);
   assert(g.script.includes('line.set_xy1'), `${label}: missing live line glue set_xy1`);
@@ -163,7 +164,7 @@ for (const [label, g] of [
   assert(!/\blbBadge\b/.test(g.script), `${label}: must not use lbBadge`);
   assert(!/\blblBadge\b/.test(g.script), `${label}: must not use lblBadge`);
   assert(!g.script.includes('SEND_CANDLE_FEED'), `${label}: must not include candle feed`);
-  assert(g.script.includes('licenseOk and symbolOk'), `${label}: missing license+symbol fire gate`);
+  assert(g.script.includes('licenseOk and entryTfOk'), `${label}: missing license+entryTf fire gate`);
   assert(g.script.includes('max_labels_count=500'), `${label}: max_labels_count should be 500`);
   assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);
   assert(g.script.includes('alert.freq_all'), `${label}: lifecycle alerts must use freq_all`);

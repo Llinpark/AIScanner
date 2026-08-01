@@ -1,7 +1,6 @@
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const {
   ALL_CURRENCY_PAIRS,
-  isSupportedScannerSymbol,
   normalizeSymbol
 } = require('../config/symbols');
 const {
@@ -32,7 +31,7 @@ function sanitizeAdminSymbols(symbols) {
   const seen = new Set();
   for (const raw of symbols) {
     const normalized = normalizeSymbol(raw);
-    if (!isSupportedScannerSymbol(normalized) || seen.has(normalized)) continue;
+    if (!normalized || seen.has(normalized)) continue;
     seen.add(normalized);
     next.push(normalized);
   }
@@ -54,6 +53,8 @@ function getScannerConfig() {
     autoScanIntervalMs: Number(PATTERN_SCANNER_CONFIG.autoScanIntervalMs),
     scanBatchSize: Number(PATTERN_SCANNER_CONFIG.scanBatchSize),
     symbols: [...(PATTERN_SCANNER_CONFIG.symbols || ALL_CURRENCY_PAIRS)],
+    // Preferred Admin UI defaults only — not a hard ingest allowlist.
+    preferredSymbols: [...ALL_CURRENCY_PAIRS],
     supportedSymbols: [...ALL_CURRENCY_PAIRS],
     activeStrategy: getActiveStrategy(),
     // BC: nested settings keyed by scalping | daytrading

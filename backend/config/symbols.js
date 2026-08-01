@@ -1,9 +1,8 @@
-// Canonical KachingScanner market symbols.
-// Platform invariant: ONLY these assets may generate / accept / display trade signals.
-// TradingView chart ticker is still the runtime source for prices, but unsupported
-// instruments (Deriv / Jump / Volatility / crypto / extras) are rejected end-to-end.
+// Preferred KachingScanner market catalog for Admin UI / subscription tier defaults.
+// TradingView chart ticker is the runtime source of truth — ANY instrument may signal.
+// Webhooks and Pine never reject symbols for missing this list.
 
-const SUPPORTED_SCANNER_SYMBOLS = Object.freeze({
+const PREFERRED_SCANNER_SYMBOLS = Object.freeze({
   'EUR/USD': { basePrice: 1.085, category: 'forex', compact: 'EURUSD' },
   'GBP/USD': { basePrice: 1.268, category: 'forex', compact: 'GBPUSD' },
   'USD/JPY': { basePrice: 149.5, category: 'forex', compact: 'USDJPY' },
@@ -14,21 +13,24 @@ const SUPPORTED_SCANNER_SYMBOLS = Object.freeze({
   US100: { basePrice: 18250, category: 'index', compact: 'US100' }
 });
 
-/** Chart / scanner / webhook catalog — supported assets only. */
-const MARKET_SYMBOLS = SUPPORTED_SCANNER_SYMBOLS;
+/** @deprecated Use PREFERRED_SCANNER_SYMBOLS — kept for import BC. */
+const SUPPORTED_SCANNER_SYMBOLS = PREFERRED_SCANNER_SYMBOLS;
 
-/** Ordered list used by Admin Scanner defaults and tier catalogs. */
-const ALL_CURRENCY_PAIRS = Object.freeze(Object.keys(SUPPORTED_SCANNER_SYMBOLS));
+/** Chart / scanner preferred catalog — not a hard allowlist. */
+const MARKET_SYMBOLS = PREFERRED_SCANNER_SYMBOLS;
 
-/** Compact codes (EURUSD, US30, …) for Pine / webhook payloads. */
+/** Ordered preferred list used by Admin Scanner defaults and tier catalogs. */
+const ALL_CURRENCY_PAIRS = Object.freeze(Object.keys(PREFERRED_SCANNER_SYMBOLS));
+
+/** Compact codes (EURUSD, US30, …) for common FX/index aliases. */
 const SUPPORTED_COMPACT_SYMBOLS = Object.freeze(
-  Object.values(SUPPORTED_SCANNER_SYMBOLS).map(s => s.compact)
+  Object.values(PREFERRED_SCANNER_SYMBOLS).map(s => s.compact)
 );
 
-const SUPPORTED_SYMBOL_SET = new Set([
-  ...ALL_CURRENCY_PAIRS,
-  ...SUPPORTED_COMPACT_SYMBOLS
-]);
+const PREFERRED_SYMBOL_SET = new Set([...ALL_CURRENCY_PAIRS, ...SUPPORTED_COMPACT_SYMBOLS]);
+
+/** @deprecated Use PREFERRED_SYMBOL_SET. */
+const SUPPORTED_SYMBOL_SET = PREFERRED_SYMBOL_SET;
 
 /** ISO-style codes used only to decide whether to insert a slash in 6-letter FX tickers. */
 const FX_CURRENCY_CODES = new Set([
@@ -58,12 +60,11 @@ const FX_CURRENCY_CODES = new Set([
 ]);
 
 /**
- * Aliases map broker / TV variants → canonical app form (slash FX / US30 / US100).
- * Only aliases that resolve into SUPPORTED_SCANNER_SYMBOLS are accepted by isSupportedScannerSymbol.
+ * Aliases map common broker / TV variants → preferred app form (slash FX / US30 / US100).
+ * Unknown instruments pass through unchanged after light sanitization.
  */
 const SYMBOL_ALIASES = Object.freeze({
   XAUUSD: 'XAU/USD',
-  // Common mistype / broker variant seen on some feeds
   UAXUSD: 'XAU/USD',
   EURUSD: 'EUR/USD',
   GBPUSD: 'GBP/USD',
@@ -82,37 +83,68 @@ const SYMBOL_ALIASES = Object.freeze({
   DOW: 'US30'
 });
 
+const DOTTED_BROKER_SUFFIX_RE = /\.(FOREX|CASH|SPOT|MINI|CFD|PRO|FX|I|M|P)$/i;
+const KNOWN_COMPACT_BASE_RE =
+  /^(US30|US100|XAUUSD|NAS100|USTEC|NDX|NDXUSD|US100USD|DJ30|DJIA|US30USD|DOW)$/;
+
 /**
- * Sanitize / normalize a TradingView / broker / provider ticker.
- * Does NOT enforce the supported-asset allowlist — use isSupportedScannerSymbol for that.
- * Handles FX:EURUSD, OANDA:GBPUSD, TVC:DJI, EURUSD, EUR/USD, etc.
+ * Strip exchange prefixes + common broker/TV suffixes to a clean ticker core.
+ * Does NOT reject unknown instruments.
  */
-function normalizeSymbol(symbol) {
+function stripTradingViewBrokerDecorators(symbol) {
   let raw = String(symbol || '')
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '');
   if (!raw) return '';
 
-  // Strip exchange / broker prefixes (FX:EURUSD, TVC:DJI, BINANCE:BTCUSDT)
   if (raw.includes(':')) {
     const parts = raw.split(':').filter(Boolean);
     raw = parts[parts.length - 1];
   }
 
-  // Strip common TradingView / feed / continuous-contract suffixes
   raw = raw.replace(/!$/g, '');
-  raw = raw.replace(/\.(P|FX|FOREX|CASH|CFD|PRO|MINI|SPOT)$/i, '');
+  let prev = '';
+  while (raw !== prev) {
+    prev = raw;
+    raw = raw.replace(DOTTED_BROKER_SUFFIX_RE, '');
+  }
 
-  // Allowlist of safe ticker characters
+  // Keep letters/digits and common ticker punctuation (spaces already removed).
   raw = raw.replace(/[^A-Z0-9._\-\/]/g, '');
+  if (!raw) return '';
+
+  if (/[MI]$/.test(raw) && raw.length >= 5) {
+    const base = raw.slice(0, -1);
+    const alreadyKnown =
+      SYMBOL_ALIASES[raw] || MARKET_SYMBOLS[raw] || PREFERRED_SYMBOL_SET.has(raw);
+    if (
+      !alreadyKnown &&
+      (SYMBOL_ALIASES[base] ||
+        MARKET_SYMBOLS[base] ||
+        PREFERRED_SYMBOL_SET.has(base) ||
+        /^[A-Z]{6}$/.test(base) ||
+        KNOWN_COMPACT_BASE_RE.test(base))
+    ) {
+      raw = base;
+    }
+  }
+
+  return raw;
+}
+
+/**
+ * Sanitize / normalize a TradingView / broker / provider ticker.
+ * Known FX aliases map to slash form; all other TV instruments pass through.
+ */
+function normalizeSymbol(symbol) {
+  let raw = stripTradingViewBrokerDecorators(symbol);
   if (!raw) return '';
 
   if (SYMBOL_ALIASES[raw]) return SYMBOL_ALIASES[raw];
   if (MARKET_SYMBOLS[raw]) return raw;
   if (raw.includes('/')) return raw;
 
-  // Only insert FX slash when both legs look like currency codes (avoid SPX500 → SPX/500)
   if (/^[A-Z]{6}$/.test(raw)) {
     const a = raw.slice(0, 3);
     const b = raw.slice(3);
@@ -124,27 +156,22 @@ function normalizeSymbol(symbol) {
   return raw;
 }
 
-/** Explicit reject patterns — never trade / display these as scanner assets. */
-const UNSUPPORTED_SYMBOL_RE =
-  /\b(DERIV|DERIVE|JUMP|VOLATILITY|BOOM|CRASH|STEP\s*INDEX|RANGE\s*BREAK|SYNTH|BTC|ETH|XBT|USDT|XAG|SILVER|NZD|CHF|GBP\/?JPY|EUR\/?GBP|EUR\/?JPY)\b/i;
-
 /**
- * True only for the eight Admin-supported KachingScanner assets (and their aliases).
- * Rejects Deriv / Jump / Volatility / BTC / crypto / unlisted FX / etc.
+ * Compact form for display / matching (EURUSD, XAUUSD, or raw TV ticker).
  */
-function isSupportedScannerSymbol(symbol) {
-  const raw = String(symbol || '').trim();
-  if (!raw) return false;
-  if (UNSUPPORTED_SYMBOL_RE.test(raw.replace(/[_-]+/g, ' '))) return false;
-  const key = normalizeSymbol(symbol);
-  if (!key) return false;
-  if (UNSUPPORTED_SYMBOL_RE.test(key.replace(/\//g, ' '))) return false;
-  if (SUPPORTED_SYMBOL_SET.has(key)) return true;
-  const compact = key.replace(/\//g, '');
-  return SUPPORTED_SYMBOL_SET.has(compact);
+function normalizeTradingViewSymbol(symbol) {
+  return toCompactSymbol(symbol);
 }
 
-/** Compact webhook / Pine form: EURUSD, XAUUSD, US30, US100. */
+/**
+ * True for any non-empty TradingView / broker ticker.
+ * No hard allowlist — TV chart OHLC is the source of truth.
+ */
+function isSupportedScannerSymbol(symbol) {
+  return Boolean(normalizeSymbol(symbol));
+}
+
+/** Compact webhook form when catalogued; otherwise cleaned ticker. */
 function toCompactSymbol(symbol) {
   const key = normalizeSymbol(symbol);
   if (!key) return '';
@@ -185,13 +212,16 @@ function getSymbolAssetClass(symbol) {
 }
 
 module.exports = {
+  PREFERRED_SCANNER_SYMBOLS,
   SUPPORTED_SCANNER_SYMBOLS,
   SUPPORTED_COMPACT_SYMBOLS,
   MARKET_SYMBOLS,
   ALL_CURRENCY_PAIRS,
   SYMBOL_ALIASES,
   FX_CURRENCY_CODES,
+  stripTradingViewBrokerDecorators,
   normalizeSymbol,
+  normalizeTradingViewSymbol,
   isSupportedScannerSymbol,
   toCompactSymbol,
   getBasePrice,

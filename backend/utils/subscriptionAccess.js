@@ -4,7 +4,7 @@ const {
   TIER_DISPLAY_NAMES,
   ALL_CURRENCY_PAIRS
 } = require('../config/subscriptions');
-const { normalizeSymbol, isSupportedScannerSymbol, ALL_CURRENCY_PAIRS: SUPPORTED_PAIRS } = require('../config/symbols');
+const { normalizeSymbol, ALL_CURRENCY_PAIRS: SUPPORTED_PAIRS } = require('../config/symbols');
 const { isAdmin, isSuperAdmin } = require('./adminAccess');
 const { isWebhookInsightsSignal } = require('./insightsSignalFilter');
 
@@ -127,8 +127,8 @@ function getTierDisplayName(tierKey) {
 
 function getAllowedCurrencyPairs(subscription) {
   const pairs = getTierFeatures(subscription).currencyPairs || SUPPORTED_PAIRS || ALL_CURRENCY_PAIRS;
-  // Never expose unsupported catalog symbols even if a stale tier config still lists them.
-  return pairs.map(normalizeSymbol).filter(isSupportedScannerSymbol);
+  // Preferred UI / tier catalog only — not a hard reject list for TV webhooks.
+  return pairs.map(normalizeSymbol).filter(Boolean);
 }
 
 const { normalizeInterval } = require('./marketIntervals');
@@ -138,25 +138,25 @@ function getAllowedTimeframes(subscription) {
 }
 
 /**
- * Chart / scanner catalog gate — limited to supported Admin Scanner assets.
+ * In-app chart / provider catalog gate (preferred tier pairs for Lightweight Charts).
+ * Does NOT gate TradingView webhook ingest or Pine analysis.
  */
 function isCurrencyPairAllowed(symbol, subscription) {
-  if (!isSupportedScannerSymbol(symbol)) return false;
   const normalized = normalizeSymbol(symbol);
+  if (!normalized) return false;
   return getAllowedCurrencyPairs(subscription).includes(normalized);
 }
 
 /**
- * Legacy flag — platform no longer accepts arbitrary TV instruments.
- * Kept for API shape; always false for entitlement expansion.
+ * TradingView instruments are unrestricted — any chart OHLC may produce signals.
  */
 function allowsAnyTradingViewInstrument(_subscription) {
-  return false;
+  return true;
 }
 
-/** TradingView webhook distribution: supported Admin assets only. */
-function isTradingViewSymbolAllowed(symbol, subscription) {
-  return isCurrencyPairAllowed(symbol, subscription);
+/** TradingView webhook distribution: accept any non-empty TV symbol. */
+function isTradingViewSymbolAllowed(symbol, _subscription) {
+  return Boolean(normalizeSymbol(symbol));
 }
 
 function isTimeframeAllowed(interval, subscription) {
@@ -251,23 +251,12 @@ function sanitizeSignalForTier(signal, subscription) {
 /**
  * Tier read filter for user-facing signal feeds.
  * Always drops legacy scanner / SMC pipeline rows.
- * TradingView webhook symbols pass through regardless of chart-catalog pair lists.
+ * TradingView webhook symbols pass through for any instrument (no symbol allowlist).
  */
-function filterSignalsForTier(signals, subscription) {
-  const features = getTierFeatures(subscription);
-  const allowedPairs = getAllowedCurrencyPairs(subscription);
-  const tvPassThrough = allowsAnyTradingViewInstrument(subscription);
-  const premiumAllMarkets = Boolean(features.multiMarketScanner);
-
+function filterSignalsForTier(signals, _subscription) {
   return signals.filter(signal => {
-    // Mandatory: never surface legacy pipeline / live_scan rows on dashboard feeds.
     if (!isWebhookInsightsSignal(signal)) return false;
-
-    const normalized = normalizeSymbol(signal.symbol);
-    if (!normalized) return false;
-    if (tvPassThrough) return true;
-    if (premiumAllMarkets) return true;
-    return allowedPairs.includes(normalized);
+    return Boolean(normalizeSymbol(signal.symbol));
   });
 }
 

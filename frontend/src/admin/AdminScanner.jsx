@@ -126,8 +126,10 @@ const SPREAD_OVERRIDE_SYMBOLS = [
   'US100'
 ];
 
-/** Platform allowlist — Admin Scanner may only enable a subset of these. */
-const SUPPORTED_ADMIN_SYMBOLS = [...SPREAD_OVERRIDE_SYMBOLS];
+/** Preferred Admin Scanner symbols for auto-scan UI (not a hard webhook/Pine allowlist). */
+const PREFERRED_ADMIN_SYMBOLS = [...SPREAD_OVERRIDE_SYMBOLS];
+/** @deprecated Use PREFERRED_ADMIN_SYMBOLS */
+const SUPPORTED_ADMIN_SYMBOLS = PREFERRED_ADMIN_SYMBOLS;
 
 const TP_SCORE_WEIGHT_FIELDS = [
   { key: 'internal_liquidity', label: 'Weight for Internal Liquidity' },
@@ -865,9 +867,8 @@ export default function AdminScanner() {
           </Field>
         </div>
         <p className="admin-form-note">
-          Supported assets only (platform invariant): EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD,
-          XAU/USD, US30, US100. Unsupported symbols (Deriv / Jump / Volatility / crypto) are rejected
-          by Pine, webhook, and dashboard.
+          Preferred auto-scan symbols for in-app / provider charts. TradingView Pine and webhook ingest
+          accept any instrument — Forex, metals, crypto, indices, stocks, futures, CFDs, and synthetics.
         </p>
         <div className="admin-form-grid">
           {SUPPORTED_ADMIN_SYMBOLS.map(symbol => {

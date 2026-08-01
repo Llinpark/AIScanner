@@ -80,7 +80,7 @@ smartLabelOffsetBars(int step) =>
     math.max(minHorizontalGapBars * step, 1)
 
 makeSignalId() =>
-    canonicalSymbol() + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
+    syminfo.ticker + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
 
 // Pure layout helper — only mutates local arrays it creates.
 resolveLabelLayout(array<float> anchors) =>
@@ -159,50 +159,11 @@ buildTradeDrawings(float entryPrice, float slPrice, float tp1Price, float tp2Pri
         array.push(outLabels, lbl)
     [outLines, outLeaders, outLabels, layoutY, layoutSide, layoutStep]
 
-// ===================== MAIN-SCOPE: unsupported symbol hard wipe =====================
-// If the chart is switched to BTC/Deriv/Jump/etc., delete every drawing immediately.
-if tradeIsActive() and not symbolOk
-    if array.size(tradeLevelLines) > 0
-        for i = 0 to array.size(tradeLevelLines) - 1
-            line.delete(array.get(tradeLevelLines, i))
-    if array.size(tradeLeaderLines) > 0
-        for i = 0 to array.size(tradeLeaderLines) - 1
-            line.delete(array.get(tradeLeaderLines, i))
-    if array.size(tradeLevelLabels) > 0
-        for i = 0 to array.size(tradeLevelLabels) - 1
-            label.delete(array.get(tradeLevelLabels, i))
-    array.clear(tradeLevelLines)
-    array.clear(tradeLeaderLines)
-    array.clear(tradeLevelLabels)
-    if array.size(tradeBadgeHold) > 0
-        label.delete(array.get(tradeBadgeHold, 0))
-        array.clear(tradeBadgeHold)
-    if array.size(tradeFvgHold) > 0
-        box.delete(array.get(tradeFvgHold, 0))
-        array.clear(tradeFvgHold)
-    array.set(tradeFloats, 0, na)
-    array.set(tradeFloats, 1, na)
-    array.set(tradeFloats, 2, na)
-    array.set(tradeFloats, 3, na)
-    array.set(tradeFloats, 4, na)
-    array.set(tradeFloats, 5, na)
-    array.set(tradeFloats, 6, na)
-    for i = 0 to 4
-        array.set(tradeLabelYs, i, na)
-        array.set(tradeLayoutSide, i, 1)
-        array.set(tradeLayoutStep, i, 0)
-    array.set(tradeStrings, 0, "")
-    array.set(tradeStrings, 1, "")
-    array.set(tradeFlags, 0, 0)
-    array.set(tradeFlags, 1, 0)
-    array.set(tradeFlags, 2, 0)
-    array.set(tradeFlags, 3, 0)
-
 // ===================== MAIN-SCOPE: visual glue (every bar while active) =====================
 // Extends Entry/SL/TP lines to the live candle and repositions labels/leaders using
 // stored layout metadata. Must NOT wait for bar confirmation (avoids half-drawn lines).
 // No bgcolor() / barcolor() — never paint full-height vertical signal bands.
-if tradeIsActive() and symbolOk
+if tradeIsActive()
     rightX = bar_index
     entryX = tradeEntryBar()
     nLevels = array.size(tradeLevelLines)
@@ -230,7 +191,7 @@ if tradeIsActive() and symbolOk
         label.set_yloc(array.get(tradeBadgeHold, 0), yloc.price)
 
 // ===================== MAIN-SCOPE: confirmed lifecycle (TP/SL/expiry) =====================
-if tradeIsActive() and symbolOk and barstate.isconfirmed
+if tradeIsActive() and barstate.isconfirmed
     longTrade = tradeDirection() == "long"
     barsAlive = bar_index - tradeEntryBar()
     hitSlWick = longTrade ? low <= tradeSl() : high >= tradeSl()

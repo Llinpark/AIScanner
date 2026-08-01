@@ -1,5 +1,5 @@
-/** Supported KachingScanner assets ONLY (Admin invariant). */
-export const SUPPORTED_SCANNER_SYMBOLS = Object.freeze([
+/** Preferred Admin / UI catalog defaults (not a hard allowlist). */
+export const PREFERRED_SCANNER_SYMBOLS = Object.freeze([
   'EUR/USD',
   'GBP/USD',
   'USD/JPY',
@@ -9,6 +9,9 @@ export const SUPPORTED_SCANNER_SYMBOLS = Object.freeze([
   'US30',
   'US100'
 ]);
+
+/** @deprecated Use PREFERRED_SCANNER_SYMBOLS */
+export const SUPPORTED_SCANNER_SYMBOLS = PREFERRED_SCANNER_SYMBOLS;
 
 export const SUPPORTED_COMPACT_SYMBOLS = Object.freeze([
   'EURUSD',
@@ -40,9 +43,16 @@ const SYMBOL_ALIASES = {
   DOW: 'US30'
 };
 
-const SUPPORTED_SET = new Set([...SUPPORTED_SCANNER_SYMBOLS, ...SUPPORTED_COMPACT_SYMBOLS]);
+const PREFERRED_SET = new Set([...PREFERRED_SCANNER_SYMBOLS, ...SUPPORTED_COMPACT_SYMBOLS]);
 
-/** Normalize TV/broker symbols (FX:EURUSD, TVC:DJI, EURUSD) to app form. */
+const DOTTED_BROKER_SUFFIX_RE = /\.(FOREX|CASH|SPOT|MINI|CFD|PRO|FX|I|M|P)$/i;
+const KNOWN_COMPACT_BASE_RE =
+  /^(US30|US100|XAUUSD|NAS100|USTEC|NDX|NDXUSD|US100USD|DJ30|DJIA|US30USD|DOW)$/;
+
+/**
+ * Normalize TV/broker symbols for matching.
+ * Known FX aliases map to slash form; unknown TV tickers pass through.
+ */
 export function normalizeMarketSymbol(symbol) {
   let raw = String(symbol || '')
     .trim()
@@ -56,7 +66,25 @@ export function normalizeMarketSymbol(symbol) {
   }
 
   raw = raw.replace(/!$/g, '');
-  raw = raw.replace(/\.(P|FX|FOREX|CASH|CFD)$/i, '');
+  let prev = '';
+  while (raw !== prev) {
+    prev = raw;
+    raw = raw.replace(DOTTED_BROKER_SUFFIX_RE, '');
+  }
+
+  if (/[MI]$/.test(raw) && raw.length >= 5) {
+    const base = raw.slice(0, -1);
+    const alreadyKnown = SYMBOL_ALIASES[raw] || PREFERRED_SET.has(raw);
+    if (
+      !alreadyKnown &&
+      (SYMBOL_ALIASES[base] ||
+        PREFERRED_SET.has(base) ||
+        /^[A-Z]{6}$/.test(base) ||
+        KNOWN_COMPACT_BASE_RE.test(base))
+    ) {
+      raw = base;
+    }
+  }
 
   if (SYMBOL_ALIASES[raw]) return SYMBOL_ALIASES[raw];
   if (raw.includes('/')) return raw;
@@ -65,19 +93,20 @@ export function normalizeMarketSymbol(symbol) {
   return raw;
 }
 
-const UNSUPPORTED_SYMBOL_RE =
-  /\b(DERIV|DERIVE|JUMP|VOLATILITY|BOOM|CRASH|STEP\s*INDEX|RANGE\s*BREAK|SYNTH|BTC|ETH|XBT|USDT|XAG|SILVER|NZD|CHF)\b/i;
-
-/** Platform allowlist — Deriv / Jump / Volatility / BTC / crypto never pass. */
-export function isSupportedScannerSymbol(symbol) {
-  const raw = String(symbol || '').trim();
-  if (!raw) return false;
-  if (UNSUPPORTED_SYMBOL_RE.test(raw.replace(/[_-]+/g, ' '))) return false;
+/** Compact form for display / matching. */
+export function normalizeTradingViewSymbol(symbol) {
   const key = normalizeMarketSymbol(symbol);
-  if (!key) return false;
-  if (UNSUPPORTED_SYMBOL_RE.test(key.replace(/\//g, ' '))) return false;
-  if (SUPPORTED_SET.has(key)) return true;
-  return SUPPORTED_SET.has(key.replace(/\//g, ''));
+  if (!key) return '';
+  if (key === 'US30' || key === 'US100') return key;
+  return key.replace(/\//g, '');
+}
+
+/**
+ * Any non-empty TradingView / broker ticker is valid.
+ * No hard allowlist — TV chart OHLC is the source of truth.
+ */
+export function isSupportedScannerSymbol(symbol) {
+  return Boolean(normalizeMarketSymbol(symbol));
 }
 
 export function alertMatchesSymbol(alert, selectedSymbol) {

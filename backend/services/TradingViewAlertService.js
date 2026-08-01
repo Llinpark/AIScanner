@@ -17,7 +17,7 @@ const {
 const SignalEnrichmentService = require('../services/SignalEnrichmentService');
 const TradeDeliveryService = require('../services/TradeDeliveryService');
 const TradeLifecycleService = require('../services/TradeLifecycleService');
-const { normalizeSymbol, isSupportedScannerSymbol } = require('../config/symbols');
+const { normalizeSymbol } = require('../config/symbols');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -420,24 +420,8 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
 
   const baseData = buildSignalData(body);
 
-  // Platform invariant: reject Deriv / Jump / Volatility / any non-Admin asset.
-  if (!isSupportedScannerSymbol(baseData.symbol)) {
-    logSignalEvent('reject_unsupported_symbol', {
-      symbol: baseData.symbol,
-      timeframe: baseData.timeframe,
-      alertType: baseData.alertType,
-      reason: 'unsupported_scanner_symbol'
-    });
-    return {
-      mode: 'rejected',
-      publishOnly: true,
-      rejected: true,
-      reason: 'unsupported_scanner_symbol',
-      message:
-        `Unsupported symbol "${baseData.symbol}". KachingScanner accepts only ` +
-        'EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, XAUUSD, US30, US100.'
-    };
-  }
+  // Any TradingView instrument is accepted — chart OHLC is the source of truth.
+  // Symbol allowlists are not used for webhook ingest.
 
   // Single source of truth: registry + DB + state machine (symbol+timeframe+strategy).
   const lifecycle = await TradeLifecycleService.processIncomingTradeAlert(

@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
 import TradingViewSetup from './TradingViewSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
-import { alertMatchesSymbol, isSupportedScannerSymbol } from '../constants/markets';
+import { alertMatchesSymbol } from '../constants/markets';
 import { isInsightsSignal } from '../utils/insightsSignal';
 
 const ALERT_LABELS = {
@@ -354,9 +354,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
-    return merged.filter(
-      alert => isSupportedScannerSymbol(alert.symbol) && alertMatchesSymbol(alert, liveFilter)
-    );
+    return merged.filter(alert => alertMatchesSymbol(alert, liveFilter));
   }, [liveAlerts, alerts, liveFilter]);
 
   return (
@@ -364,9 +362,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       <div className="tv-header">
         <h2>TradingView Alert Setup</h2>
         <p>
-          Connect TradingView alerts for supported Admin Scanner assets (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD,
-          XAUUSD, US30, US100) to receive Entry, stop loss, and take-profit levels on your dashboard, Telegram, and
-          MT5. In-app charts are display-only and never block alerts.
+          Connect TradingView alerts for any chart instrument — Forex, metals, crypto, indices, stocks, futures,
+          CFDs, or synthetic indices. Receive Entry, stop loss, and take-profit levels on your dashboard, Telegram,
+          and MT5. In-app charts are display-only and never block alerts.
         </p>
       </div>
 

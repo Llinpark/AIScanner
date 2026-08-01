@@ -131,8 +131,9 @@ describe('Issues 5/8/11 — lifecycle, UUID sync, one-active registry', () => {
     assert.equal(found.signalUuid, 'us30-uuid');
   });
 
-  it('rejects unsupported symbols at platform gate', () => {
-    assert.equal(isSupportedScannerSymbol('Volatility 75 Index'), false);
-    assert.equal(isSupportedScannerSymbol('JUMP10'), false);
+  it('accepts any TradingView instrument at platform gate (no hard allowlist)', () => {
+    assert.equal(isSupportedScannerSymbol('Volatility 75 Index'), true);
+    assert.equal(isSupportedScannerSymbol('JUMP10'), true);
+    assert.equal(isSupportedScannerSymbol('BTCUSD'), true);
   });
 });

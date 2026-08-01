@@ -48,21 +48,8 @@ normalizeTvUser(string s) =>
 
 licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_USERNAME) == LICENSED_TV_USERNAME
 
-// Supported Admin Scanner assets ONLY — Deriv / Jump / Volatility / others never signal.
-canonicalSymbol() =>
-    t = str.upper(str.replace_all(syminfo.ticker, "/", ""))
-    t == "NAS100" or t == "USTEC" or t == "NDX" or t == "NDXUSD" or t == "US100USD" ? "US100" :
-     t == "DJ30" or t == "DJI" or t == "DJIA" or t == "DOW" or t == "US30USD" ? "US30" :
-     t
-
-isSupportedSymbol() =>
-    c = canonicalSymbol()
-    c == "EURUSD" or c == "GBPUSD" or c == "USDJPY" or c == "AUDUSD" or c == "USDCAD" or c == "XAUUSD" or c == "US30" or c == "US100"
-
-symbolOk = isSupportedSymbol()
-
+// Any TradingView instrument is valid — chart OHLC is the source of truth (no symbol allowlist).
 var label licenseLockLabel = na
-var label symbolLockLabel = na
 if barstate.islast
     if not licenseOk
         if na(licenseLockLabel)
@@ -72,14 +59,6 @@ if barstate.islast
     else if not na(licenseLockLabel)
         label.delete(licenseLockLabel)
         licenseLockLabel := na
-    if licenseOk and not symbolOk
-        if na(symbolLockLabel)
-            symbolLockLabel := label.new(bar_index, high, "KachingFx: unsupported symbol — use EURUSD GBPUSD USDJPY AUDUSD USDCAD XAUUSD US30 US100", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
-        else
-            label.set_xy(symbolLockLabel, bar_index, high)
-    else if not na(symbolLockLabel)
-        label.delete(symbolLockLabel)
-        symbolLockLabel := na
 
 // ===== COLORS (BUY vs SELL schemes) =====
 colBuy = #2563eb
@@ -149,7 +128,7 @@ buildHumanMessage(string direction, float entry, float sl, float tp1, float tp2,
 buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf, string signalId, string closedReason) =>
     msgText = alertType == "entry" ? buildHumanMessage(direction, entry, sl, tp1, tp2, tp3) : kachingAlertLabel(alertType)
     reasonJson = str.length(closedReason) > 0 ? ',"closedReason":"' + closedReason + '"' : ""
-    '{"symbol":"' + canonicalSymbol() + '","strategyName":"Liquidity Sweep + Fair Value Gap (Scalping)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_scalp","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + signalId + '","signalUuid":"' + signalId + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true' + reasonJson + '}'
+    '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Scalping)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_scalp","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + signalId + '","signalUuid":"' + signalId + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true' + reasonJson + '}'
 
 // ===== HTF LIQUIDITY SWEEP (15m context — never used for entry price) =====
 htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
@@ -326,9 +305,9 @@ entryTfOk = timeframe.isminutes and (timeframe.multiplier == 1 or timeframe.mult
 {{DRAWING_ENGINE}}
 
 // One active trade per chart: never fire/replace while a trade is still open.
-// Unsupported symbols (Deriv/Jump/Volatility/etc.) never arm trades or send webhooks.
-fireLong = licenseOk and symbolOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
-fireShort = licenseOk and symbolOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
+// Any TV instrument may arm trades / webhooks when license + structure conditions pass.
+fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
+fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
 
 if fireLong
     e = resolveEntry("long")
