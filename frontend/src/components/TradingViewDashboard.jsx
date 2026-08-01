@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import TelegramSetup from './TelegramSetup';
 import TradingViewSetup from './TradingViewSetup';
 import MarketChartPanel from './charts/MarketChartPanel';
-import { alertMatchesSymbol } from '../constants/markets';
+import { alertMatchesSymbol, isSupportedScannerSymbol } from '../constants/markets';
 import { isInsightsSignal } from '../utils/insightsSignal';
 
 const ALERT_LABELS = {
@@ -340,23 +340,23 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   };
 
   const displayAlerts = useMemo(() => {
-    // Backend returns TradingView webhook alerts for any instrument (chart catalog is
-    // separate). Only apply the user's manual symbol dropdown filter here — do not
-    // re-filter against the chart-catalog `symbols` list or exotic alerts disappear.
+    // Supported Admin assets only — unsupported TV symbols are rejected upstream.
     // Merge (instead of replace) so a single incoming live alert doesn't hide the
     // broader, properly tier-filtered history already loaded from the REST endpoint.
     const byId = new Map();
     for (const alert of alerts) {
-      byId.set(String(alert.id || alert._id), alert);
+      byId.set(String(alert.signalUuid || alert.id || alert._id), alert);
     }
     for (const alert of liveAlerts) {
-      byId.set(String(alert.id || alert._id), alert);
+      byId.set(String(alert.signalUuid || alert.id || alert._id), alert);
     }
     const merged = Array.from(byId.values()).sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
-    return merged.filter(alert => alertMatchesSymbol(alert, liveFilter));
+    return merged.filter(
+      alert => isSupportedScannerSymbol(alert.symbol) && alertMatchesSymbol(alert, liveFilter)
+    );
   }, [liveAlerts, alerts, liveFilter]);
 
   return (
@@ -364,8 +364,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
       <div className="tv-header">
         <h2>TradingView Alert Setup</h2>
         <p>
-          Connect TradingView alerts from any instrument to receive Entry, stop loss, and take-profit levels on your
-          dashboard, Telegram, and MT5. In-app charts are display-only and never block alerts.
+          Connect TradingView alerts for supported Admin Scanner assets (EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD,
+          XAUUSD, US30, US100) to receive Entry, stop loss, and take-profit levels on your dashboard, Telegram, and
+          MT5. In-app charts are display-only and never block alerts.
         </p>
       </div>
 
@@ -680,7 +681,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       <li>Alerts across all markets on your plan</li>
                     )}
                     {tierLimits.smartMoneyConcepts && (
-                      <li>Smart Money overlays on in-app Kaching charts (separate from TradingView levels)</li>
+                      <li>Smart Money Concepts drawings on TradingView (FVG, liquidity, BOS/CHoCH via Pine)</li>
                     )}
                     {tierLimits.mt5Execution && (
                       <li>Auto Trading via MT5 — connect in the Auto Trading tab</li>
@@ -718,17 +719,15 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
             <div className="history-section">
               <h3>Kaching Live Chart</h3>
               <p className="chart-subtitle">
-                Charts are for display only. Trade levels come from your TradingView alerts — chart outages never block
-                alerts.
+                Price chart only. Entry/SL/TP drawings live exclusively on TradingView — this dashboard never overlays
+                trade levels.
               </p>
               <MarketChartPanel
                 symbol={chartSymbol}
                 allowedSymbols={symbols}
                 onSymbolChange={setChartSymbol}
-                overlaySignals={[...liveAlerts, ...alerts]}
                 subscribed={subscribed}
                 liveEnabled
-                enableSmcOverlays={Boolean(tierLimits.smartMoneyConcepts)}
               />
             </div>
           )}

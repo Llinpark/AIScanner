@@ -181,7 +181,6 @@ function generateForUser(user, options = {}) {
   const subscription = getEffectiveSubscription(user);
   const tier = subscription.tier || 'basic';
   const webhookUrl = options.webhookUrl || WEBHOOK_TRADINGVIEW_URL;
-  const webhookSecret = options.webhookSecret || process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
   const strategyKey = resolveStrategyKey(options.strategy || options.strategyId);
 
   const tvUsername = resolveTradingViewUsername(user);
@@ -203,7 +202,8 @@ function generateForUser(user, options = {}) {
     SUBSCRIPTION_TIER: escapePineString(tierLabel),
     SCRIPT_ID: escapePineString(scriptId),
     WEBHOOK_URL: escapePineString(webhookUrl),
-    WEBHOOK_SECRET: escapePineString(webhookSecret),
+    // WEBHOOK_SECRET intentionally omitted — auth is licenseToken only (no master secret in Pine).
+    WEBHOOK_SECRET: '',
     LICENSE_TOKEN: escapePineString(licenseToken),
     TV_USERNAME: escapePineString(tvUsername),
     SUBSCRIBER_ID: escapePineString(userId)
@@ -281,11 +281,14 @@ function generateForUser(user, options = {}) {
     },
     instructions: [
       instructionLead,
+      'Supported symbols ONLY: EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, XAUUSD, US30, US100. Attach the script to those charts only — Deriv / Jump / Volatility / other symbols are blocked and will not alert.',
       `Confirm username is prefilled to ${tvUsername} under KachingFx License — leave it as-is to unlock. Override only if needed; signals stay locked until Confirm matches the licensed username.`,
-      'When a signal fires, TradingView shows Kaching Buy/Sell plus Entry/SL/TP1–3 levels with prices. Overlays stay until TP3, SL, candle expiry, or cancel — they do not disappear if a later setup fails.',
-      'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry). Lines keep extending while the trade is active.',
+      'When a signal fires, TradingView shows separate labels: Kaching Buy/Sell badge, plus Buy/Sell, SL, TP1, TP2, TP3 (each one object). Badge text never mixes with TP text.',
+      'Overlays stay until TP3, SL, candle expiry, or cancel — they do not disappear if a later setup fails. Lines extend to the live candle every bar while the trade is active.',
+      'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry).',
       `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
+      'After regenerating Pine, remove the old indicator from the chart, paste the new script, and recreate the alert so drawings and symbol gates take effect.',
       'Switch strategies with ?strategy=daytrading | scalping.',
       'After updating your TradingView username in the app, re-save, re-copy this script, and re-add it to the chart so the license token and prefilled Confirm match.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan) · TV: ${tvUsername}.`

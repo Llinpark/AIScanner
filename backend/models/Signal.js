@@ -63,11 +63,12 @@ const SignalSchema = new mongoose.Schema({
   strategyId: { type: String },
   strategyVersion: { type: Number },
   timeframe: { type: String },
-  /** DETECTED | CONFIRMED | ACTIVE | TP1 | TP2 | TP3 | SL | EXPIRED | CANCELLED */
+  /** DETECTED | CREATED | CONFIRMED | ACTIVE | TP1 | TP2 | TP3 | SL | EXPIRED | CANCELLED | COMPLETED */
   lifecycleStage: {
     type: String,
     enum: [
       'DETECTED',
+      'CREATED',
       'CONFIRMED',
       'ACTIVE',
       'TP1',
@@ -75,7 +76,8 @@ const SignalSchema = new mongoose.Schema({
       'TP3',
       'SL',
       'EXPIRED',
-      'CANCELLED'
+      'CANCELLED',
+      'COMPLETED'
     ],
     default: 'ACTIVE'
   },
@@ -147,5 +149,10 @@ const SignalSchema = new mongoose.Schema({
 
 SignalSchema.index({ symbol: 1, createdAt: -1 });
 SignalSchema.index({ alertType: 1, tradeStatus: 1 });
+SignalSchema.index({ symbol: 1, timeframe: 1, strategyName: 1, tradeStatus: 1 });
+SignalSchema.index(
+  { signalUuid: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { signalUuid: { $type: 'string' } } }
+);
 
 module.exports = mongoose.model('Signal', SignalSchema);

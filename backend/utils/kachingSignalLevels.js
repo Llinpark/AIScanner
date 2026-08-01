@@ -11,34 +11,30 @@ const KACHING_ALERT_NAMES = {
 
 const REQUIRED_ENTRY_FIELDS = ['entry', 'stop_loss', 'take_profit_1', 'take_profit_2', 'take_profit_3'];
 
-function parseNumber(value) {
+function parseOptionalNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
   const parsed = parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-function normalizeSignalLevels(body = {}, direction = 'neutral') {
-  const entry = parseNumber(body.entry ?? body.price);
-  const stop_loss = parseNumber(body.stop_loss ?? body.stop_loss_1 ?? body.sl);
-  const take_profit_1 = parseNumber(body.take_profit_1 ?? body.tp1);
-  const take_profit_2 = parseNumber(body.take_profit_2 ?? body.tp2);
-  const take_profit_3 = parseNumber(body.take_profit_3 ?? body.tp3);
-
-  const safeEntry = entry || 0;
-  const safeStop = stop_loss || (safeEntry ? safeEntry * (direction === 'short' ? 1.005 : 0.995) : 0);
-  const safeTp1 =
-    take_profit_1 || (safeEntry ? (direction === 'short' ? safeEntry * 0.99 : safeEntry * 1.01) : 0);
-  const safeTp2 =
-    take_profit_2 || (safeEntry ? (direction === 'short' ? safeEntry * 0.98 : safeEntry * 1.02) : 0);
-  const safeTp3 =
-    take_profit_3 || (safeEntry ? (direction === 'short' ? safeEntry * 0.965 : safeEntry * 1.035) : 0);
+/**
+ * Pass-through of TradingView webhook levels ONLY.
+ * NEVER invents Entry/SL/TP from direction heuristics.
+ */
+function normalizeSignalLevels(body = {}) {
+  const entry = parseOptionalNumber(body.entry ?? body.price);
+  const stop_loss = parseOptionalNumber(body.stop_loss ?? body.stop_loss_1 ?? body.sl);
+  const take_profit_1 = parseOptionalNumber(body.take_profit_1 ?? body.tp1);
+  const take_profit_2 = parseOptionalNumber(body.take_profit_2 ?? body.tp2);
+  const take_profit_3 = parseOptionalNumber(body.take_profit_3 ?? body.tp3);
 
   return {
-    entry: safeEntry,
-    stop_loss: safeStop,
-    stop_loss_1: safeStop,
-    take_profit_1: safeTp1,
-    take_profit_2: safeTp2,
-    take_profit_3: safeTp3
+    entry: entry ?? undefined,
+    stop_loss: stop_loss ?? undefined,
+    stop_loss_1: stop_loss ?? undefined,
+    take_profit_1: take_profit_1 ?? undefined,
+    take_profit_2: take_profit_2 ?? undefined,
+    take_profit_3: take_profit_3 ?? undefined
   };
 }
 
@@ -59,10 +55,14 @@ function validateKachingEntrySignal(signalData) {
     return;
   }
 
-  const missing = REQUIRED_ENTRY_FIELDS.filter(field => !parseNumber(signalData[field]));
+  const missing = REQUIRED_ENTRY_FIELDS.filter(field => {
+    const value = parseOptionalNumber(signalData[field]);
+    return value == null || value === 0;
+  });
   if (missing.length > 0) {
     throw new Error(
-      `Invalid Kaching entry signal: each entry must include Kaching Entry, Kaching SL, Kaching TP1, Kaching TP2, and Kaching TP3 (${missing.join(', ')} missing)`
+      `Invalid Kaching entry signal: TradingView must send Entry, SL, TP1, TP2, and TP3 ` +
+        `(${missing.join(', ')} missing). Levels are never invented server-side.`
     );
   }
 }

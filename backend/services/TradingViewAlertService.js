@@ -17,7 +17,7 @@ const {
 const SignalEnrichmentService = require('../services/SignalEnrichmentService');
 const TradeDeliveryService = require('../services/TradeDeliveryService');
 const TradeLifecycleService = require('../services/TradeLifecycleService');
-const { normalizeSymbol } = require('../config/symbols');
+const { normalizeSymbol, isSupportedScannerSymbol } = require('../config/symbols');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -241,59 +241,81 @@ async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
   };
 }
 
+/**
+ * One Pine signal → ONE Mongo Signal document → fan-out delivery.
+ * Never clones Signal docs per subscriber.
+ */
 async function broadcastToSubscribers(io, signalData, inMemorySignals = [], options = {}) {
   const subscribers = await findActiveSubscribers();
   const eligible = subscribers.filter(sub => subscriberAllowsSignal(sub, signalData));
 
-  if (options.existingSaved) {
-    const delivery = await deliverBroadcastToSubscribers(io, options.existingSaved, subscribers);
-    return { ...delivery, broadcastSaved: false, reusedExisting: true };
+  let saved = options.existingSaved || null;
+  let broadcastSaved = false;
+
+  if (!saved) {
+    // Persist once (broadcast record). Levels come only from TradingView payload.
+    const enriched = await SignalEnrichmentService.enrichFromTradingViewWebhook(
+      { ...signalData, isBroadcast: true },
+      {
+        fromTradingViewWebhook: true,
+        skipMarketData: true,
+        timeframe: signalData.timeframe || '1h'
+      }
+    );
+    saved = await saveSignal(enriched, inMemorySignals);
+    broadcastSaved = true;
   }
 
-  const results = [];
+  emitLifecycleSocket(io, saved, signalData.alertType);
 
   if (eligible.length === 0) {
-    // Still persist one broadcast record for audit when nobody is entitled.
-    const saved = await saveSignal({ ...signalData, isBroadcast: true }, inMemorySignals);
     if (subscribers.length === 0) {
       await deliverLiveAlert(io, saved);
     }
     return {
       delivered: 0,
       subscribers: [],
-      broadcastSaved: true,
-      skippedByEntitlement: subscribers.length
+      broadcastSaved,
+      skippedByEntitlement: subscribers.length,
+      signalUuid: saved.signalUuid || saved.signalId
     };
   }
 
   const settled = await mapWithConcurrency(eligible, FANOUT_CONCURRENCY, async subscriber => {
-    const mt5 = subscriber.mt5 || {};
-    const basePayload = { ...signalData, userId: subscriber.id, isBroadcast: true };
-
-    // Always metadata enrichment for distributed signals — never candles / live providers.
-    const enriched = await SignalEnrichmentService.enrichFromTradingViewWebhook(basePayload, {
-      fromTradingViewWebhook: true,
-      skipMarketData: true,
-      userId: subscriber.id,
-      subscriber,
-      accountBalance: mt5.accountBalance,
-      riskPercent: mt5.riskPercent || 1,
-      timeframe: signalData.timeframe || '1h'
-    });
-
-    const saved = await saveSignal(enriched, inMemorySignals);
-
     await deliverLiveAlert(io, saved, subscriber);
     return { userId: subscriber.id, email: subscriber.email };
   });
-  results.push(...settled.filter(Boolean));
+  const results = settled.filter(Boolean);
 
   return {
     delivered: results.length,
     subscribers: results,
-    broadcastSaved: true,
-    skippedByEntitlement: subscribers.length - eligible.length
+    broadcastSaved,
+    skippedByEntitlement: subscribers.length - eligible.length,
+    signalUuid: saved.signalUuid || saved.signalId
   };
+}
+
+function emitLifecycleSocket(io, signalDoc, alertType) {
+  if (!io || !signalDoc) return;
+  const payload = signalDoc.toObject ? signalDoc.toObject() : signalDoc;
+  const type = String(alertType || payload.alertType || '').toLowerCase();
+  const TradeLifecycle = require('./TradeLifecycleService');
+
+  if (TradeLifecycle.isEntryAlert(type)) {
+    io.emit('signal_created', payload);
+    io.emit('signal:update', payload); // legacy alias
+    return;
+  }
+  if (TradeLifecycle.isTerminalAlert(type)) {
+    io.emit('signal_closed', payload);
+    io.emit('signal:outcome', payload); // legacy alias
+    return;
+  }
+  if (TradeLifecycle.isOutcomeAlert(type) || TradeLifecycle.isPartialAlert(type)) {
+    io.emit('signal_updated', payload);
+    io.emit('signal:outcome', payload); // legacy alias
+  }
 }
 
 function buildSignalData(body) {
@@ -398,7 +420,26 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
 
   const baseData = buildSignalData(body);
 
-  // Single source of truth: registry + DB + state machine (symbol+timeframe keyed).
+  // Platform invariant: reject Deriv / Jump / Volatility / any non-Admin asset.
+  if (!isSupportedScannerSymbol(baseData.symbol)) {
+    logSignalEvent('reject_unsupported_symbol', {
+      symbol: baseData.symbol,
+      timeframe: baseData.timeframe,
+      alertType: baseData.alertType,
+      reason: 'unsupported_scanner_symbol'
+    });
+    return {
+      mode: 'rejected',
+      publishOnly: true,
+      rejected: true,
+      reason: 'unsupported_scanner_symbol',
+      message:
+        `Unsupported symbol "${baseData.symbol}". KachingScanner accepts only ` +
+        'EURUSD, GBPUSD, USDJPY, AUDUSD, USDCAD, XAUUSD, US30, US100.'
+    };
+  }
+
+  // Single source of truth: registry + DB + state machine (symbol+timeframe+strategy).
   const lifecycle = await TradeLifecycleService.processIncomingTradeAlert(
     baseData,
     inMemorySignals,
@@ -418,14 +459,22 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
 
   const { signalData, updatedEntry } = lifecycle;
 
-  if (updatedEntry) {
-    io.emit('signal:outcome', updatedEntry);
-  }
-
-  const delivery = await broadcastToSubscribers(io, signalData, inMemorySignals, {
-    fromTradingViewWebhook: true,
-    skipMarketData: true
-  });
+  // Outcomes update the single parent Signal; entries create one broadcast Signal.
+  const delivery = await broadcastToSubscribers(
+    io,
+    updatedEntry
+      ? {
+          ...(updatedEntry.toObject ? updatedEntry.toObject() : updatedEntry),
+          alertType: signalData.alertType
+        }
+      : signalData,
+    inMemorySignals,
+    {
+      fromTradingViewWebhook: true,
+      skipMarketData: true,
+      existingSaved: updatedEntry || undefined
+    }
+  );
 
   logSignalEvent('broadcast', {
     symbol: signalData.symbol,

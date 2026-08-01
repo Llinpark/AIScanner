@@ -3,9 +3,8 @@ const Signal = require('../models/Signal');
 const {
   isEntryAlert,
   isOutcomeAlert,
-  findOpenEntry,
-  applyOutcomeUpdate,
-  normalizeSymbol
+  findEntryBySignalUuid,
+  applyOutcomeUpdate
 } = require('../utils/signalOutcome');
 const {
   enrichSignal,
@@ -17,36 +16,35 @@ function isDbConnected() {
   return mongoose.connection.readyState === 1;
 }
 
+/**
+ * Outcome linking is UUID-only (spec). Never match by symbol/timeframe/latest.
+ */
+async function findEntryByUuidInDb(signalUuid) {
+  const id = String(signalUuid || '').trim();
+  if (!id || !isDbConnected()) return null;
+  return Signal.findOne({
+    $or: [{ signalUuid: id }, { signalId: id }, { signalGroupId: id }],
+    alertType: { $in: ['entry', 'signal'] }
+  }).lean();
+}
+
+/** @deprecated Prefer findEntryByUuidInDb — kept for registry hydrate only. */
 async function findOpenEntryInDb(symbol, timeframe) {
+  const { normalizeSymbol } = require('../utils/signalOutcome');
+  const { normalizeTimeframe } = require('../utils/activeSignalRegistry');
   const normalized = normalizeSymbol(symbol);
   const compact = normalized.replace('/', '');
-  const tf = timeframe != null && timeframe !== ''
-    ? String(timeframe).trim().toLowerCase()
-    : null;
+  const tf =
+    timeframe != null && timeframe !== '' ? normalizeTimeframe(timeframe) : null;
 
   const query = {
     alertType: { $in: ['entry', 'signal'] },
     tradeStatus: { $in: ['open', 'partial'] },
-    $or: [
-      { outcome: 'pending' },
-      { outcome: { $exists: false } },
-      { outcome: null },
-      { outcome: 'tp1' },
-      { outcome: 'tp2' }
-    ],
     symbol: { $regex: compact.replace('/', ''), $options: 'i' }
   };
+  if (tf) query.timeframe = { $regex: new RegExp(`^${tf}$`, 'i') };
 
-  if (tf) {
-    query.timeframe = { $regex: new RegExp(`^${tf}$`, 'i') };
-  }
-
-  const signals = await Signal.find(query)
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .lean();
-
-  return findOpenEntry(signals, symbol, timeframe);
+  return Signal.findOne(query).sort({ createdAt: -1 }).lean();
 }
 
 async function updateEntryOutcome(entry, alertType, inMemorySignals, closedReason) {
@@ -74,7 +72,6 @@ async function updateEntryOutcome(entry, alertType, inMemorySignals, closedReaso
     }
   }
 
-  // Debounced weight retrain on terminal closes (never throws into scanner path).
   try {
     if (saved?.outcome && ['tp1', 'tp2', 'tp3', 'sl', 'expired', 'cancelled'].includes(saved.outcome)) {
       scheduleRetrainOnOutcome(saved.outcome);
@@ -99,31 +96,41 @@ async function processSignalLifecycle(rawSignalData, inMemorySignals = [], optio
   const alertType = signalData.alertType || 'signal';
 
   if (isOutcomeAlert(alertType)) {
-    let entry = null;
-
-    if (isDbConnected()) {
-      entry = await findOpenEntryInDb(signalData.symbol, signalData.timeframe);
-    } else {
-      entry = findOpenEntry(inMemorySignals, signalData.symbol, signalData.timeframe);
-    }
-
-    if (entry) {
-      const entryId = entry._id || entry.id;
-      signalData.parentSignalId = entryId;
-      signalData.signalGroupId = entry.signalGroupId || entry.signalUuid || signalData.signalGroupId;
-      signalData.signalUuid = entry.signalUuid || signalData.signalUuid || signalData.signalId;
-      signalData.signalId = signalData.signalUuid;
-      // Never rewrite frozen levels from an outcome webhook onto the parent entry.
-      signalData.timeframe = signalData.timeframe || entry.timeframe;
-
-      const updatedEntry = await updateEntryOutcome(
-        entry,
-        alertType,
-        inMemorySignals,
-        signalData.closedReason
+    const uuid = signalData.signalUuid || signalData.signalId || signalData.signalGroupId;
+    if (!uuid) {
+      console.warn(
+        '[SignalOutcome] Outcome alert missing signalUuid/signalId — ignored (UUID-only linking)'
       );
-      return { signalData, updatedEntry, outcomeLinked: true };
+      return { signalData, updatedEntry: null, outcomeLinked: false };
     }
+
+    let entry = null;
+    if (isDbConnected()) {
+      entry = await findEntryByUuidInDb(uuid);
+    } else {
+      entry = findEntryBySignalUuid(inMemorySignals, uuid);
+    }
+
+    if (!entry) {
+      console.warn(`[SignalOutcome] No parent entry for signalUuid=${uuid}`);
+      return { signalData, updatedEntry: null, outcomeLinked: false };
+    }
+
+    const entryId = entry._id || entry.id;
+    signalData.parentSignalId = entryId;
+    signalData.signalGroupId = entry.signalGroupId || entry.signalUuid || uuid;
+    signalData.signalUuid = entry.signalUuid || uuid;
+    signalData.signalId = signalData.signalUuid;
+    signalData.timeframe = signalData.timeframe || entry.timeframe;
+    signalData.symbol = entry.symbol || signalData.symbol;
+
+    const updatedEntry = await updateEntryOutcome(
+      entry,
+      alertType,
+      inMemorySignals,
+      signalData.closedReason
+    );
+    return { signalData, updatedEntry, outcomeLinked: true };
   }
 
   if (isEntryAlert(alertType)) {
@@ -136,5 +143,6 @@ async function processSignalLifecycle(rawSignalData, inMemorySignals = [], optio
 module.exports = {
   processSignalLifecycle,
   findOpenEntryInDb,
+  findEntryByUuidInDb,
   updateEntryOutcome
 };

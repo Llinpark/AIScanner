@@ -3,9 +3,16 @@
 // TP3, SL, configurable candle expiry, or explicit cancel — NEVER because a
 // later setup scan fails or lines run out of fixed bar length.
 //
+// Label contract: ONE semantic object per label.
+//   Badge = "Kaching Buy" | "Kaching Sell" (never appends TP/SL text)
+//   Levels = "Buy"|"Sell", "SL", "TP1", "TP2", "TP3" (+ price only)
+//
+// Line contract: level lines always extend to the live bar while tradeActive.
+//
 // Pine v5/v6 HARD RULE: user functions MUST NOT modify global variables
 // (no := / += on globals, and no array.push/set/clear on global arrays).
 // Helpers below are PURE. All global mutations live in main-scope `if` blocks.
+// Previous-trade cleanup and active-trade close are INTENTIONALLY inlined (not functions).
 
 // Drawing collections — mutated ONLY in main-scope blocks below.
 var array<line> tradeLevelLines = array.new_line()
@@ -16,10 +23,15 @@ var array<box> tradeFvgHold = array.new_box()
 
 // Float state: [entry, sl, tp1, tp2, tp3, gapTop, gapBot]
 var array<float> tradeFloats = array.new_float(7, na)
+// Per-level label Y (may differ from anchor when smart-layout shifts)
+var array<float> tradeLabelYs = array.new_float(5, na)
 // String state: [direction, signalId]
 var array<string> tradeStrings = array.new_string(2, "")
 // Int flags: [active(0/1), entryBar, tp1Alerted(0/1), tp2Alerted(0/1)]
 var array<int> tradeFlags = array.new_int(4, 0)
+// Per-level layout: side (1=right, -1=left) and stack step for horizontal offset
+var array<int> tradeLayoutSide = array.new_int(5, 1)
+var array<int> tradeLayoutStep = array.new_int(5, 0)
 
 // ----- pure getters (read-only) -----
 tradeIsActive() =>
@@ -68,7 +80,7 @@ smartLabelOffsetBars(int step) =>
     math.max(minHorizontalGapBars * step, 1)
 
 makeSignalId() =>
-    str.upper(syminfo.ticker) + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
+    canonicalSymbol() + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
 
 // Pure layout helper — only mutates local arrays it creates.
 resolveLabelLayout(array<float> anchors) =>
@@ -105,15 +117,18 @@ resolveLabelLayout(array<float> anchors) =>
 
 // Pure: create one level's drawings and return them.
 buildSmartLevel(int x1, int x2, float anchorPrice, float labelPrice, string tag, color lineCol, color bgCol, color txtCol, bool placeRight, int stackStep) =>
-    levelLine = line.new(x1, anchorPrice, x2, anchorPrice, xloc=xloc.bar_index, extend=extend.none, color=lineCol, width=2, style=line.style_solid)
+    // Width 1 = thinnest Pine line — Entry/SL/TP must never render as thick bands.
+    levelLine = line.new(x1, anchorPrice, x2, anchorPrice, xloc=xloc.bar_index, extend=extend.none, color=lineCol, width=1, style=line.style_solid)
     labelAnchorX = placeRight ? x2 + smartLabelOffsetBars(stackStep + 1) : x1 - smartLabelOffsetBars(stackStep + 1)
     labelStyle = placeRight ? label.style_label_left : label.style_label_right
     leaderStartX = placeRight ? x2 : x1
-    leaderLine = line.new(leaderStartX, anchorPrice, labelAnchorX, labelPrice, xloc=xloc.bar_index, extend=extend.none, color=color.new(lineCol, 20), width=1, style=line.style_dotted)
-    levelLabel = label.new(labelAnchorX, labelPrice, tag + "  " + formatPrice(anchorPrice), xloc=xloc.bar_index, yloc=yloc.price, style=labelStyle, color=bgCol, textcolor=txtCol, size=size.normal)
+    leaderLine = line.new(leaderStartX, anchorPrice, labelAnchorX, labelPrice, xloc=xloc.bar_index, extend=extend.none, color=color.new(lineCol, 35), width=1, style=line.style_dotted)
+    // Tag is exactly one object name; price is display-only suffix — never mix TP into Buy badge.
+    // Never prefix with "Kaching Entry" here — badge owns the Kaching Buy/Sell identity.
+    levelLabel = label.new(labelAnchorX, labelPrice, tag + "  " + formatPrice(anchorPrice), xloc=xloc.bar_index, yloc=yloc.price, style=labelStyle, color=bgCol, textcolor=txtCol, size=size.small)
     [levelLine, leaderLine, levelLabel]
 
-// Pure: build all five trade levels into LOCAL arrays and return them.
+// Pure: build all five trade levels into LOCAL arrays and return them + layout metadata.
 buildTradeDrawings(float entryPrice, float slPrice, float tp1Price, float tp2Price, float tp3Price, bool isLong) =>
     x1 = bar_index
     x2 = bar_index + math.max(levelExtendBars, 1)
@@ -142,10 +157,80 @@ buildTradeDrawings(float entryPrice, float slPrice, float tp1Price, float tp2Pri
         array.push(outLines, lvl)
         array.push(outLeaders, leader)
         array.push(outLabels, lbl)
-    [outLines, outLeaders, outLabels]
+    [outLines, outLeaders, outLabels, layoutY, layoutSide, layoutStep]
 
-// ===================== MAIN-SCOPE: active trade lifecycle =====================
-if tradeIsActive() and barstate.isconfirmed
+// ===================== MAIN-SCOPE: unsupported symbol hard wipe =====================
+// If the chart is switched to BTC/Deriv/Jump/etc., delete every drawing immediately.
+if tradeIsActive() and not symbolOk
+    if array.size(tradeLevelLines) > 0
+        for i = 0 to array.size(tradeLevelLines) - 1
+            line.delete(array.get(tradeLevelLines, i))
+    if array.size(tradeLeaderLines) > 0
+        for i = 0 to array.size(tradeLeaderLines) - 1
+            line.delete(array.get(tradeLeaderLines, i))
+    if array.size(tradeLevelLabels) > 0
+        for i = 0 to array.size(tradeLevelLabels) - 1
+            label.delete(array.get(tradeLevelLabels, i))
+    array.clear(tradeLevelLines)
+    array.clear(tradeLeaderLines)
+    array.clear(tradeLevelLabels)
+    if array.size(tradeBadgeHold) > 0
+        label.delete(array.get(tradeBadgeHold, 0))
+        array.clear(tradeBadgeHold)
+    if array.size(tradeFvgHold) > 0
+        box.delete(array.get(tradeFvgHold, 0))
+        array.clear(tradeFvgHold)
+    array.set(tradeFloats, 0, na)
+    array.set(tradeFloats, 1, na)
+    array.set(tradeFloats, 2, na)
+    array.set(tradeFloats, 3, na)
+    array.set(tradeFloats, 4, na)
+    array.set(tradeFloats, 5, na)
+    array.set(tradeFloats, 6, na)
+    for i = 0 to 4
+        array.set(tradeLabelYs, i, na)
+        array.set(tradeLayoutSide, i, 1)
+        array.set(tradeLayoutStep, i, 0)
+    array.set(tradeStrings, 0, "")
+    array.set(tradeStrings, 1, "")
+    array.set(tradeFlags, 0, 0)
+    array.set(tradeFlags, 1, 0)
+    array.set(tradeFlags, 2, 0)
+    array.set(tradeFlags, 3, 0)
+
+// ===================== MAIN-SCOPE: visual glue (every bar while active) =====================
+// Extends Entry/SL/TP lines to the live candle and repositions labels/leaders using
+// stored layout metadata. Must NOT wait for bar confirmation (avoids half-drawn lines).
+// No bgcolor() / barcolor() — never paint full-height vertical signal bands.
+if tradeIsActive() and symbolOk
+    rightX = bar_index
+    entryX = tradeEntryBar()
+    nLevels = array.size(tradeLevelLines)
+    if nLevels > 0
+        for i = 0 to nLevels - 1
+            anchorY = array.get(tradeFloats, i)
+            labelY = nz(array.get(tradeLabelYs, i), anchorY)
+            side = array.get(tradeLayoutSide, i)
+            step = array.get(tradeLayoutStep, i)
+            placeRight = side == 1
+            labelX = placeRight ? rightX + smartLabelOffsetBars(step + 1) : entryX - smartLabelOffsetBars(step + 1)
+            // Keep horizontal level glued from entry bar → current bar at fixed price.
+            line.set_xy1(array.get(tradeLevelLines, i), entryX, anchorY)
+            line.set_xy2(array.get(tradeLevelLines, i), rightX, anchorY)
+            if array.size(tradeLeaderLines) > i
+                leaderStartX = placeRight ? rightX : entryX
+                line.set_xy1(array.get(tradeLeaderLines, i), leaderStartX, anchorY)
+                line.set_xy2(array.get(tradeLeaderLines, i), labelX, labelY)
+            if array.size(tradeLevelLabels) > i
+                label.set_xy(array.get(tradeLevelLabels, i), labelX, labelY)
+                label.set_yloc(array.get(tradeLevelLabels, i), yloc.price)
+    // Badge stays on the entry candle at entry price — never drifts / never rewrites text.
+    if array.size(tradeBadgeHold) > 0
+        label.set_xy(array.get(tradeBadgeHold, 0), entryX, tradeEntry())
+        label.set_yloc(array.get(tradeBadgeHold, 0), yloc.price)
+
+// ===================== MAIN-SCOPE: confirmed lifecycle (TP/SL/expiry) =====================
+if tradeIsActive() and symbolOk and barstate.isconfirmed
     longTrade = tradeDirection() == "long"
     barsAlive = bar_index - tradeEntryBar()
     hitSlWick = longTrade ? low <= tradeSl() : high >= tradeSl()
@@ -163,7 +248,8 @@ if tradeIsActive() and barstate.isconfirmed
     if closeNow
         if str.length(tradeSignalId()) > 0
             closeMsg = buildPayload(closeAlertType, tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), closeReason)
-            alert(closeMsg, alert.freq_once_per_bar)
+            alert(closeMsg, alert.freq_all)
+        // clearPreviousTrade (inlined) — delete every drawing object then reset state.
         if array.size(tradeLevelLines) > 0
             for i = 0 to array.size(tradeLevelLines) - 1
                 line.delete(array.get(tradeLevelLines, i))
@@ -189,6 +275,10 @@ if tradeIsActive() and barstate.isconfirmed
         array.set(tradeFloats, 4, na)
         array.set(tradeFloats, 5, na)
         array.set(tradeFloats, 6, na)
+        for i = 0 to 4
+            array.set(tradeLabelYs, i, na)
+            array.set(tradeLayoutSide, i, 1)
+            array.set(tradeLayoutStep, i, 0)
         array.set(tradeStrings, 0, "")
         array.set(tradeStrings, 1, "")
         array.set(tradeFlags, 0, 0)
@@ -196,28 +286,17 @@ if tradeIsActive() and barstate.isconfirmed
         array.set(tradeFlags, 2, 0)
         array.set(tradeFlags, 3, 0)
     else
+        // Partial TP alerts only — NEVER rewrite Buy/Sell badge text with TP markers.
         if hitTp1 and not tradeTp1Alerted()
             msgTp1 = buildPayload("take_profit_1", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp1")
-            alert(msgTp1, alert.freq_once_per_bar)
+            alert(msgTp1, alert.freq_all)
             array.set(tradeFlags, 2, 1)
-            if array.size(tradeBadgeHold) > 0
-                label.set_text(array.get(tradeBadgeHold, 0), longTrade ? "Kaching Buy · TP1" : "Kaching Sell · TP1")
+            // Soft-highlight TP1 label only (object remains "TP1").
+            if array.size(tradeLevelLabels) > 2
+                label.set_color(array.get(tradeLevelLabels, 2), color.new(colTpNear, 0))
         if hitTp2 and not tradeTp2Alerted()
             msgTp2 = buildPayload("take_profit_2", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp2")
-            alert(msgTp2, alert.freq_once_per_bar)
+            alert(msgTp2, alert.freq_all)
             array.set(tradeFlags, 3, 1)
-            if array.size(tradeBadgeHold) > 0
-                label.set_text(array.get(tradeBadgeHold, 0), longTrade ? "Kaching Buy · TP2" : "Kaching Sell · TP2")
-        // Keep overlays glued to the live bar while trade remains open.
-        rightX = bar_index + 1
-        if array.size(tradeLevelLines) > 0
-            for i = 0 to array.size(tradeLevelLines) - 1
-                line.set_x2(array.get(tradeLevelLines, i), rightX)
-        if array.size(tradeLeaderLines) > 0
-            for i = 0 to array.size(tradeLeaderLines) - 1
-                line.set_x2(array.get(tradeLeaderLines, i), rightX + smartLabelOffsetBars(i + 1))
-        if array.size(tradeLevelLabels) > 0
-            for i = 0 to array.size(tradeLevelLabels) - 1
-                label.set_x(array.get(tradeLevelLabels, i), rightX + smartLabelOffsetBars(i + 1))
-        if array.size(tradeBadgeHold) > 0
-            label.set_x(array.get(tradeBadgeHold, 0), bar_index)
+            if array.size(tradeLevelLabels) > 3
+                label.set_color(array.get(tradeLevelLabels, 3), color.new(colTpNear, 0))

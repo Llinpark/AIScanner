@@ -1,25 +1,34 @@
-// Canonical market symbols and mock price seeds for the scanner / chart catalog.
-// TradingView webhooks accept ANY instrument — this list is for chart feeds / demo seeds only.
-const MARKET_SYMBOLS = {
-  'EUR/USD': { basePrice: 1.085, category: 'forex' },
-  'GBP/USD': { basePrice: 1.268, category: 'forex' },
-  'XAU/USD': { basePrice: 2650, category: 'metal' },
-  'XAG/USD': { basePrice: 31.5, category: 'metal' },
-  'AUD/USD': { basePrice: 0.658, category: 'forex' },
-  'USD/JPY': { basePrice: 149.5, category: 'forex' },
-  'USD/CAD': { basePrice: 1.362, category: 'forex' },
-  'NZD/USD': { basePrice: 0.612, category: 'forex' },
-  'USD/CHF': { basePrice: 0.884, category: 'forex' },
-  'EUR/GBP': { basePrice: 0.855, category: 'forex' },
-  'EUR/JPY': { basePrice: 162.2, category: 'forex' },
-  'GBP/JPY': { basePrice: 189.6, category: 'forex' },
-  US30: { basePrice: 39100, category: 'index' },
-  US100: { basePrice: 18250, category: 'index' },
-  'BTC/USD': { basePrice: 97500, category: 'crypto' }
-};
+// Canonical KachingScanner market symbols.
+// Platform invariant: ONLY these assets may generate / accept / display trade signals.
+// TradingView chart ticker is still the runtime source for prices, but unsupported
+// instruments (Deriv / Jump / Volatility / crypto / extras) are rejected end-to-end.
 
-/** Chart / scanner catalog (not a webhook allowlist). */
-const ALL_CURRENCY_PAIRS = Object.keys(MARKET_SYMBOLS);
+const SUPPORTED_SCANNER_SYMBOLS = Object.freeze({
+  'EUR/USD': { basePrice: 1.085, category: 'forex', compact: 'EURUSD' },
+  'GBP/USD': { basePrice: 1.268, category: 'forex', compact: 'GBPUSD' },
+  'USD/JPY': { basePrice: 149.5, category: 'forex', compact: 'USDJPY' },
+  'AUD/USD': { basePrice: 0.658, category: 'forex', compact: 'AUDUSD' },
+  'USD/CAD': { basePrice: 1.362, category: 'forex', compact: 'USDCAD' },
+  'XAU/USD': { basePrice: 2650, category: 'metal', compact: 'XAUUSD' },
+  US30: { basePrice: 39100, category: 'index', compact: 'US30' },
+  US100: { basePrice: 18250, category: 'index', compact: 'US100' }
+});
+
+/** Chart / scanner / webhook catalog — supported assets only. */
+const MARKET_SYMBOLS = SUPPORTED_SCANNER_SYMBOLS;
+
+/** Ordered list used by Admin Scanner defaults and tier catalogs. */
+const ALL_CURRENCY_PAIRS = Object.freeze(Object.keys(SUPPORTED_SCANNER_SYMBOLS));
+
+/** Compact codes (EURUSD, US30, …) for Pine / webhook payloads. */
+const SUPPORTED_COMPACT_SYMBOLS = Object.freeze(
+  Object.values(SUPPORTED_SCANNER_SYMBOLS).map(s => s.compact)
+);
+
+const SUPPORTED_SYMBOL_SET = new Set([
+  ...ALL_CURRENCY_PAIRS,
+  ...SUPPORTED_COMPACT_SYMBOLS
+]);
 
 /** ISO-style codes used only to decide whether to insert a slash in 6-letter FX tickers. */
 const FX_CURRENCY_CODES = new Set([
@@ -48,25 +57,19 @@ const FX_CURRENCY_CODES = new Set([
   'CNY'
 ]);
 
-const SYMBOL_ALIASES = {
+/**
+ * Aliases map broker / TV variants → canonical app form (slash FX / US30 / US100).
+ * Only aliases that resolve into SUPPORTED_SCANNER_SYMBOLS are accepted by isSupportedScannerSymbol.
+ */
+const SYMBOL_ALIASES = Object.freeze({
   XAUUSD: 'XAU/USD',
   // Common mistype / broker variant seen on some feeds
   UAXUSD: 'XAU/USD',
-  XAGUSD: 'XAG/USD',
   EURUSD: 'EUR/USD',
   GBPUSD: 'GBP/USD',
   AUDUSD: 'AUD/USD',
   USDJPY: 'USD/JPY',
   USDCAD: 'USD/CAD',
-  NZDUSD: 'NZD/USD',
-  USDCHF: 'USD/CHF',
-  EURGBP: 'EUR/GBP',
-  EURJPY: 'EUR/JPY',
-  GBPJPY: 'GBP/JPY',
-  USDBTC: 'BTC/USD',
-  BTCUSD: 'BTC/USD',
-  BTCUSDT: 'BTC/USD',
-  'USD/BTC': 'BTC/USD',
   NAS100: 'US100',
   USTEC: 'US100',
   NDX: 'US100',
@@ -76,25 +79,13 @@ const SYMBOL_ALIASES = {
   DJI: 'US30',
   DJIA: 'US30',
   US30USD: 'US30',
-  DOW: 'US30',
-  GER40: 'GER40',
-  DE40: 'GER40',
-  UK100: 'UK100',
-  FTSE: 'UK100',
-  SPX500: 'SPX500',
-  SPX: 'SPX500',
-  ESP35: 'ESP35',
-  FRA40: 'FRA40',
-  JPN225: 'JPN225',
-  NI225: 'JPN225',
-  ETHUSD: 'ETH/USD',
-  ETHUSDT: 'ETH/USD'
-};
+  DOW: 'US30'
+});
 
 /**
- * Normalize TradingView / broker / provider symbols to a safe canonical form.
- * Unknown instruments pass through after sanitization — never rejected.
- * Handles FX:EURUSD, OANDA:GBPUSD, TVC:DJI, BINANCE:BTCUSDT.P, EURUSD, EUR/USD, etc.
+ * Sanitize / normalize a TradingView / broker / provider ticker.
+ * Does NOT enforce the supported-asset allowlist — use isSupportedScannerSymbol for that.
+ * Handles FX:EURUSD, OANDA:GBPUSD, TVC:DJI, EURUSD, EUR/USD, etc.
  */
 function normalizeSymbol(symbol) {
   let raw = String(symbol || '')
@@ -113,7 +104,7 @@ function normalizeSymbol(symbol) {
   raw = raw.replace(/!$/g, '');
   raw = raw.replace(/\.(P|FX|FOREX|CASH|CFD|PRO|MINI|SPOT)$/i, '');
 
-  // Allowlist of safe ticker characters (stocks like BRK.B, futures roots, etc.)
+  // Allowlist of safe ticker characters
   raw = raw.replace(/[^A-Z0-9._\-\/]/g, '');
   if (!raw) return '';
 
@@ -133,13 +124,41 @@ function normalizeSymbol(symbol) {
   return raw;
 }
 
+/** Explicit reject patterns — never trade / display these as scanner assets. */
+const UNSUPPORTED_SYMBOL_RE =
+  /\b(DERIV|DERIVE|JUMP|VOLATILITY|BOOM|CRASH|STEP\s*INDEX|RANGE\s*BREAK|SYNTH|BTC|ETH|XBT|USDT|XAG|SILVER|NZD|CHF|GBP\/?JPY|EUR\/?GBP|EUR\/?JPY)\b/i;
+
+/**
+ * True only for the eight Admin-supported KachingScanner assets (and their aliases).
+ * Rejects Deriv / Jump / Volatility / BTC / crypto / unlisted FX / etc.
+ */
+function isSupportedScannerSymbol(symbol) {
+  const raw = String(symbol || '').trim();
+  if (!raw) return false;
+  if (UNSUPPORTED_SYMBOL_RE.test(raw.replace(/[_-]+/g, ' '))) return false;
+  const key = normalizeSymbol(symbol);
+  if (!key) return false;
+  if (UNSUPPORTED_SYMBOL_RE.test(key.replace(/\//g, ' '))) return false;
+  if (SUPPORTED_SYMBOL_SET.has(key)) return true;
+  const compact = key.replace(/\//g, '');
+  return SUPPORTED_SYMBOL_SET.has(compact);
+}
+
+/** Compact webhook / Pine form: EURUSD, XAUUSD, US30, US100. */
+function toCompactSymbol(symbol) {
+  const key = normalizeSymbol(symbol);
+  if (!key) return '';
+  const meta = MARKET_SYMBOLS[key];
+  if (meta?.compact) return meta.compact;
+  return key.replace(/\//g, '');
+}
+
 function getBasePrice(symbol) {
   const key = normalizeSymbol(symbol);
   return MARKET_SYMBOLS[key]?.basePrice ?? 1.085;
 }
 
-const INDEX_SYMBOL_RE =
-  /^(US30|US100|NAS100|USTEC|NDX|DJ30|DJI|DJIA|DOW|SPX500|SPX|GER40|DE40|UK100|FTSE|JPN225|NI225|ESP35|FRA40|AU200|HK50)/i;
+const INDEX_SYMBOL_RE = /^(US30|US100|NAS100|USTEC|NDX|DJ30|DJI|DJIA|DOW)/i;
 
 /**
  * Classify a symbol for spread / risk defaults.
@@ -166,11 +185,15 @@ function getSymbolAssetClass(symbol) {
 }
 
 module.exports = {
+  SUPPORTED_SCANNER_SYMBOLS,
+  SUPPORTED_COMPACT_SYMBOLS,
   MARKET_SYMBOLS,
   ALL_CURRENCY_PAIRS,
   SYMBOL_ALIASES,
   FX_CURRENCY_CODES,
   normalizeSymbol,
+  isSupportedScannerSymbol,
+  toCompactSymbol,
   getBasePrice,
   getSymbolAssetClass
 };

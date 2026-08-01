@@ -206,8 +206,12 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
       };
     }
 
-    // Stale/invalid licenseToken: Pine still embeds TRADINGVIEW_WEBHOOK_SECRET — allow fallback.
-    if (verifyGlobalWebhookSecret(req, body, { allowInProduction: true })) {
+    // New Pine scripts do not embed a global webhook secret (licenseToken only).
+    // Legacy scripts may still send secret — allow only when explicitly enabled.
+    if (
+      process.env.ALLOW_LEGACY_WEBHOOK_SECRET === 'true' &&
+      verifyGlobalWebhookSecret(req, body, { allowInProduction: true })
+    ) {
       return {
         ok: true,
         mode: 'global_secret_fallback',

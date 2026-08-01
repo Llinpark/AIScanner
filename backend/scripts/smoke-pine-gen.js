@@ -59,6 +59,9 @@ function auditGlobalMutationInFunctions(script, label) {
     'tradeLeaderLines',
     'tradeBadgeHold',
     'tradeFvgHold',
+    'tradeLabelYs',
+    'tradeLayoutSide',
+    'tradeLayoutStep',
     'lnEntry',
     'lnSl',
     'lnTp1',
@@ -141,14 +144,29 @@ for (const [label, g] of [
   assert(g.script.includes('signalUuid'), `${label}: missing signalUuid in payload`);
   assert(g.script.includes('array.set(tradeFlags'), `${label}: missing array-based trade flags`);
   assert(g.script.includes('tradeBadgeHold'), `${label}: missing tradeBadgeHold (no lbBadge scalar)`);
+  assert(g.script.includes('isSupportedSymbol'), `${label}: missing supported-symbol gate`);
+  assert(g.script.includes('canonicalSymbol'), `${label}: missing canonicalSymbol helper`);
+  assert(g.script.includes('symbolOk'), `${label}: missing symbolOk gate`);
+  assert(g.script.includes('tradeLabelYs'), `${label}: missing tradeLabelYs layout state`);
+  assert(g.script.includes('tradeLayoutSide'), `${label}: missing tradeLayoutSide state`);
+  assert(g.script.includes('line.set_xy1'), `${label}: missing live line glue set_xy1`);
+  assert(g.script.includes('line.set_xy2'), `${label}: missing live line glue set_xy2`);
+  assert(!g.script.includes('Kaching Buy · TP1'), `${label}: must not mix Buy badge with TP1 text`);
+  assert(!g.script.includes('Kaching Buy · TP2'), `${label}: must not mix Buy badge with TP2 text`);
   assert(!g.script.includes('drawBuySignal'), `${label}: drawBuySignal must be inlined at main scope`);
   assert(!g.script.includes('drawSellSignal'), `${label}: drawSellSignal must be inlined at main scope`);
-  assert(!g.script.includes('closeActiveTrade'), `${label}: closeActiveTrade must be inlined at main scope`);
-  assert(!g.script.includes('clearPreviousTrade'), `${label}: clearPreviousTrade must be inlined at main scope`);
+  assert(!g.script.includes('function closeActiveTrade'), `${label}: closeActiveTrade must be inlined at main scope`);
+  assert(!g.script.includes('function clearPreviousTrade'), `${label}: clearPreviousTrade must be inlined at main scope`);
   assert(!/\blbBadge\b/.test(g.script), `${label}: must not use lbBadge`);
   assert(!/\blblBadge\b/.test(g.script), `${label}: must not use lblBadge`);
   assert(!g.script.includes('SEND_CANDLE_FEED'), `${label}: must not include candle feed`);
-  assert(g.script.includes('licenseOk and'), `${label}: missing license gate`);
+  assert(g.script.includes('licenseOk and symbolOk'), `${label}: missing license+symbol fire gate`);
+  assert(g.script.includes('max_labels_count=500'), `${label}: max_labels_count should be 500`);
+  assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);
+  assert(g.script.includes('alert.freq_all'), `${label}: lifecycle alerts must use freq_all`);
+  assert(g.script.includes('licenseToken'), `${label}: missing licenseToken auth`);
+  assert(!g.script.includes('"secret":'), `${label}: must not embed global webhook secret in payload`);
+  assert(!g.script.includes('WEBHOOK_SECRET = "'), `${label}: must not bake WEBHOOK_SECRET into Pine`);
   assert(
     g.script.includes('CONFIRM_TV_USERNAME = input.string("demo_trader"'),
     `${label}: CONFIRM_TV_USERNAME must be prefilled with licensed username`

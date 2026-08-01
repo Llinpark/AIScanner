@@ -4,7 +4,7 @@ const {
   TIER_DISPLAY_NAMES,
   ALL_CURRENCY_PAIRS
 } = require('../config/subscriptions');
-const { normalizeSymbol } = require('../config/symbols');
+const { normalizeSymbol, isSupportedScannerSymbol, ALL_CURRENCY_PAIRS: SUPPORTED_PAIRS } = require('../config/symbols');
 const { isAdmin, isSuperAdmin } = require('./adminAccess');
 const { isWebhookInsightsSignal } = require('./insightsSignalFilter');
 
@@ -126,8 +126,9 @@ function getTierDisplayName(tierKey) {
 }
 
 function getAllowedCurrencyPairs(subscription) {
-  const pairs = getTierFeatures(subscription).currencyPairs || ALL_CURRENCY_PAIRS;
-  return pairs.map(normalizeSymbol);
+  const pairs = getTierFeatures(subscription).currencyPairs || SUPPORTED_PAIRS || ALL_CURRENCY_PAIRS;
+  // Never expose unsupported catalog symbols even if a stale tier config still lists them.
+  return pairs.map(normalizeSymbol).filter(isSupportedScannerSymbol);
 }
 
 const { normalizeInterval } = require('./marketIntervals');
@@ -137,55 +138,36 @@ function getAllowedTimeframes(subscription) {
 }
 
 /**
- * Chart / scanner catalog gate — still limited by tier currencyPairs.
- * Do NOT use this to reject TradingView webhook symbols.
+ * Chart / scanner catalog gate — limited to supported Admin Scanner assets.
  */
 function isCurrencyPairAllowed(symbol, subscription) {
-  const features = getTierFeatures(subscription);
-  // Premium multi-market: chart catalog is advisory; any symbol is allowed for charts too.
-  if (features.anyTradingViewInstrument && features.multiMarketScanner) {
-    return Boolean(normalizeSymbol(symbol));
-  }
+  if (!isSupportedScannerSymbol(symbol)) return false;
   const normalized = normalizeSymbol(symbol);
   return getAllowedCurrencyPairs(subscription).includes(normalized);
 }
 
 /**
- * TradingView webhook path: subscribers with TV alerts accept any sanitized instrument.
- * Source of truth is the TradingView chart symbol, not ALL_CURRENCY_PAIRS.
+ * Legacy flag — platform no longer accepts arbitrary TV instruments.
+ * Kept for API shape; always false for entitlement expansion.
  */
-function allowsAnyTradingViewInstrument(subscription) {
-  const features = getTierFeatures(subscription);
-  if (features.anyTradingViewInstrument != null) {
-    return Boolean(features.anyTradingViewInstrument);
-  }
-  return Boolean(features.tradingViewAlerts);
+function allowsAnyTradingViewInstrument(_subscription) {
+  return false;
 }
 
+/** TradingView webhook distribution: supported Admin assets only. */
 function isTradingViewSymbolAllowed(symbol, subscription) {
-  if (!allowsAnyTradingViewInstrument(subscription)) {
-    return isCurrencyPairAllowed(symbol, subscription);
-  }
-  return Boolean(normalizeSymbol(symbol));
+  return isCurrencyPairAllowed(symbol, subscription);
 }
 
 function isTimeframeAllowed(interval, subscription) {
-  const features = getTierFeatures(subscription);
-  // Premium (all timeframes) / TV pass-through: do not hard-block exotic chart TFs on webhook path.
-  if (features.anyTradingViewInstrument && features.multiMarketScanner) {
-    return true;
-  }
   const canonical = normalizeInterval(interval);
   return getAllowedTimeframes(subscription).some(
     allowed => normalizeInterval(allowed) === canonical
   );
 }
 
-/** Timeframe check for TV webhook distribution — chart TF is source of truth when TV-entitled. */
+/** Timeframe check for TV webhook distribution. */
 function isTradingViewTimeframeAllowed(interval, subscription) {
-  if (allowsAnyTradingViewInstrument(subscription)) {
-    return true;
-  }
   return isTimeframeAllowed(interval, subscription);
 }
 

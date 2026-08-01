@@ -1,20 +1,33 @@
+/** Supported KachingScanner assets ONLY (Admin invariant). */
+export const SUPPORTED_SCANNER_SYMBOLS = Object.freeze([
+  'EUR/USD',
+  'GBP/USD',
+  'USD/JPY',
+  'AUD/USD',
+  'USD/CAD',
+  'XAU/USD',
+  'US30',
+  'US100'
+]);
+
+export const SUPPORTED_COMPACT_SYMBOLS = Object.freeze([
+  'EURUSD',
+  'GBPUSD',
+  'USDJPY',
+  'AUDUSD',
+  'USDCAD',
+  'XAUUSD',
+  'US30',
+  'US100'
+]);
+
 const SYMBOL_ALIASES = {
   XAUUSD: 'XAU/USD',
-  XAGUSD: 'XAG/USD',
   EURUSD: 'EUR/USD',
   GBPUSD: 'GBP/USD',
   AUDUSD: 'AUD/USD',
   USDJPY: 'USD/JPY',
   USDCAD: 'USD/CAD',
-  NZDUSD: 'NZD/USD',
-  USDCHF: 'USD/CHF',
-  EURGBP: 'EUR/GBP',
-  EURJPY: 'EUR/JPY',
-  GBPJPY: 'GBP/JPY',
-  USDBTC: 'BTC/USD',
-  BTCUSD: 'BTC/USD',
-  BTCUSDT: 'BTC/USD',
-  'USD/BTC': 'BTC/USD',
   NAS100: 'US100',
   USTEC: 'US100',
   NDX: 'US100',
@@ -26,6 +39,8 @@ const SYMBOL_ALIASES = {
   US30USD: 'US30',
   DOW: 'US30'
 };
+
+const SUPPORTED_SET = new Set([...SUPPORTED_SCANNER_SYMBOLS, ...SUPPORTED_COMPACT_SYMBOLS]);
 
 /** Normalize TV/broker symbols (FX:EURUSD, TVC:DJI, EURUSD) to app form. */
 export function normalizeMarketSymbol(symbol) {
@@ -48,6 +63,21 @@ export function normalizeMarketSymbol(symbol) {
   if (raw === 'US30' || raw === 'US100') return raw;
   if (/^[A-Z]{6}$/.test(raw)) return `${raw.slice(0, 3)}/${raw.slice(3)}`;
   return raw;
+}
+
+const UNSUPPORTED_SYMBOL_RE =
+  /\b(DERIV|DERIVE|JUMP|VOLATILITY|BOOM|CRASH|STEP\s*INDEX|RANGE\s*BREAK|SYNTH|BTC|ETH|XBT|USDT|XAG|SILVER|NZD|CHF)\b/i;
+
+/** Platform allowlist — Deriv / Jump / Volatility / BTC / crypto never pass. */
+export function isSupportedScannerSymbol(symbol) {
+  const raw = String(symbol || '').trim();
+  if (!raw) return false;
+  if (UNSUPPORTED_SYMBOL_RE.test(raw.replace(/[_-]+/g, ' '))) return false;
+  const key = normalizeMarketSymbol(symbol);
+  if (!key) return false;
+  if (UNSUPPORTED_SYMBOL_RE.test(key.replace(/\//g, ' '))) return false;
+  if (SUPPORTED_SET.has(key)) return true;
+  return SUPPORTED_SET.has(key.replace(/\//g, ''));
 }
 
 export function alertMatchesSymbol(alert, selectedSymbol) {

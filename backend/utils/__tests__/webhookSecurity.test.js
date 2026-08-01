@@ -89,7 +89,7 @@ describe('verifyTradingViewWebhook', () => {
     assert.equal(auth.reason, 'inactive_subscription');
   });
 
-  it('falls back to embedded global secret when licenseToken is stale', async () => {
+  it('rejects stale licenseToken without ALLOW_LEGACY even if secret is present', async () => {
     const auth = await verifyTradingViewWebhook(
       reqWithBody({
         symbol: 'XAUUSD',
@@ -102,8 +102,35 @@ describe('verifyTradingViewWebhook', () => {
       async () => null
     );
 
-    assert.equal(auth.ok, true);
-    assert.equal(auth.mode, 'global_secret_fallback');
+    assert.equal(auth.ok, false);
+    assert.equal(auth.reason, 'invalid_license_token');
+  });
+
+  it('allows legacy global-secret fallback when ALLOW_LEGACY is enabled', async () => {
+    process.env.ALLOW_LEGACY_WEBHOOK_SECRET = 'true';
+    delete require.cache[require.resolve('../webhookSecurity')];
+    ({ generateLicenseToken, verifyTradingViewWebhook } = require('../webhookSecurity'));
+
+    try {
+      const auth = await verifyTradingViewWebhook(
+        reqWithBody({
+          symbol: 'XAUUSD',
+          alertType: 'entry',
+          userId: '64b0f0f0f0f0f0f0f0f0f0f2',
+          tradingviewUsername: 'someone',
+          licenseToken: 'kls_v1.invalid.token',
+          secret: 'test-tv-webhook-secret'
+        }),
+        async () => null
+      );
+
+      assert.equal(auth.ok, true);
+      assert.equal(auth.mode, 'global_secret_fallback');
+    } finally {
+      delete process.env.ALLOW_LEGACY_WEBHOOK_SECRET;
+      delete require.cache[require.resolve('../webhookSecurity')];
+      ({ generateLicenseToken, verifyTradingViewWebhook } = require('../webhookSecurity'));
+    }
   });
 
   it('does not accept anonymous global secret in production without ALLOW_LEGACY', async () => {

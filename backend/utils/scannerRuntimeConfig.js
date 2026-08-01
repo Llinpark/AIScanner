@@ -1,5 +1,10 @@
 const { PATTERN_SCANNER_CONFIG } = require('../config/patternScanner');
 const {
+  ALL_CURRENCY_PAIRS,
+  isSupportedScannerSymbol,
+  normalizeSymbol
+} = require('../config/symbols');
+const {
   getStrategyAdminConfig,
   getStrategyCatalog,
   getActiveStrategy,
@@ -17,9 +22,22 @@ const DEFAULT_AUTO_SCAN_INTERVAL_MS = 60_000;
 /**
  * Admin-applied core scan overrides (persisted in StrategyRuntimeConfig.coreScanner).
  * Env / patternScanner defaults remain the baseline until an override is set.
- * @type {{ autoScanEnabled?: boolean, autoScanIntervalMs?: number, scanBatchSize?: number }}
+ * @type {{ autoScanEnabled?: boolean, autoScanIntervalMs?: number, scanBatchSize?: number, symbols?: string[] }}
  */
 let coreOverrides = {};
+
+function sanitizeAdminSymbols(symbols) {
+  if (!Array.isArray(symbols)) return null;
+  const next = [];
+  const seen = new Set();
+  for (const raw of symbols) {
+    const normalized = normalizeSymbol(raw);
+    if (!isSupportedScannerSymbol(normalized) || seen.has(normalized)) continue;
+    seen.add(normalized);
+    next.push(normalized);
+  }
+  return next.length ? next : [...ALL_CURRENCY_PAIRS];
+}
 
 function clampAutoScanIntervalMs(value) {
   const parsed = parseInt(value, 10);
@@ -35,6 +53,8 @@ function getScannerConfig() {
     autoScanEnabled: Boolean(PATTERN_SCANNER_CONFIG.autoScanEnabled),
     autoScanIntervalMs: Number(PATTERN_SCANNER_CONFIG.autoScanIntervalMs),
     scanBatchSize: Number(PATTERN_SCANNER_CONFIG.scanBatchSize),
+    symbols: [...(PATTERN_SCANNER_CONFIG.symbols || ALL_CURRENCY_PAIRS)],
+    supportedSymbols: [...ALL_CURRENCY_PAIRS],
     activeStrategy: getActiveStrategy(),
     // BC: nested settings keyed by scalping | daytrading
     strategies: getStrategyAdminConfig(),
@@ -61,6 +81,11 @@ function applyCoreScannerFields(patch = {}) {
     const size = Math.max(1, parseInt(patch.scanBatchSize, 10) || 2);
     PATTERN_SCANNER_CONFIG.scanBatchSize = size;
     coreOverrides.scanBatchSize = size;
+  }
+  if (patch.symbols !== undefined) {
+    const symbols = sanitizeAdminSymbols(patch.symbols);
+    PATTERN_SCANNER_CONFIG.symbols = symbols;
+    coreOverrides.symbols = symbols;
   }
 }
 
@@ -103,6 +128,9 @@ function loadCoreScannerOverrides(docOverrides) {
   if (docOverrides.scanBatchSize !== undefined) {
     patch.scanBatchSize = docOverrides.scanBatchSize;
   }
+  if (docOverrides.symbols !== undefined) {
+    patch.symbols = docOverrides.symbols;
+  }
   applyCoreScannerFields(patch);
   return getScannerConfig();
 }
@@ -119,7 +147,9 @@ function resetScannerRuntimeConfigForTests() {
     1,
     parseInt(process.env.SCANNER_BATCH_SIZE, 10) || 5
   );
-  PATTERN_SCANNER_CONFIG.autoScanEnabled = process.env.SCANNER_AUTO_ENABLED !== 'false';}
+  PATTERN_SCANNER_CONFIG.autoScanEnabled = process.env.SCANNER_AUTO_ENABLED !== 'false';
+  PATTERN_SCANNER_CONFIG.symbols = [...ALL_CURRENCY_PAIRS];
+}
 
 module.exports = {
   DEFAULT_AUTO_SCAN_INTERVAL_MS,

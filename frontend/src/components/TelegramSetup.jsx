@@ -67,11 +67,12 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
 
   if (!canTelegram && !canMt5) {
     return (
-      <div className="insights-section">
-        <div className="feature-lock">
-          Auto Trading (Telegram notifications + MT5) requires Pro or Premium.{' '}
-          <button type="button" className="link-btn" onClick={onNavigatePricing}>
-            Upgrade
+      <div className="insights-section auto-trading-page">
+        <div className="auto-trading-lock">
+          <h3>Auto Trading</h3>
+          <p>Telegram notifications and MT5 execution require Pro or Premium.</p>
+          <button type="button" className="btn-fetch" onClick={onNavigatePricing}>
+            View plans
           </button>
         </div>
       </div>
@@ -178,23 +179,38 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
 
   const eaConnected = Boolean(mt5Status?.linked);
   const mt5Enabled = mt5Status?.enabled !== false;
+  const modeLabel = (mt5Status?.executionMode || executionMode) === 'auto' ? 'Auto' : 'Manual';
 
   return (
-    <div className="insights-section telegram-setup">
-      <div className="insights-section-header">
+    <div className="insights-section telegram-setup auto-trading-page">
+      <header className="auto-trading-header">
+        <p className="auto-trading-kicker">Execution</p>
         <h3>Auto Trading</h3>
         <p>
-          Connect MT5 to place trades from TradingView entry signals. Telegram is optional and notifications-only —
-          the EA never depends on Telegram.
+          Connect MT5 to place trades from TradingView entry signals. Telegram is optional and
+          notifications-only — the EA never depends on Telegram.
         </p>
-      </div>
+      </header>
 
-      {error && <div className="feature-lock">{error}</div>}
+      {error && (
+        <div className="mpesa-alert mpesa-alert-error" role="alert">
+          {error}
+        </div>
+      )}
 
       {canMt5 && (
-        <div className="telegram-status-card">
-          <h4>Enable MT5 execution</h4>
-          <ol className="mt5-setup-steps">
+        <section className="auto-trading-card">
+          <div className="auto-trading-card-head">
+            <div>
+              <h4>MT5 execution</h4>
+              <p>Compile the EA, allow WebRequest, then connect with a link token.</p>
+            </div>
+            <span className={`auto-status-pill ${eaConnected ? 'is-live' : 'is-idle'}`}>
+              {eaConnected ? (mt5Enabled ? 'Connected' : 'Paused') : 'Not connected'}
+            </span>
+          </div>
+
+          <ol className="auto-setup-steps">
             <li>
               Compile and attach <code>mt5/KachingTradeCopier.mq5</code> (v1.11+) on your MT5 terminal.
             </li>
@@ -202,13 +218,15 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               In MT5: Tools → Options → Expert Advisors → allow WebRequest for your Kaching backend URL.
             </li>
             <li>
-              Click <strong>Connect MT5</strong>, paste the link token into the EA, and set the Backend URL shown
-              below.
+              Click <strong>Connect MT5</strong>, paste the link token into the EA, and set the Backend URL
+              shown below.
             </li>
             <li>Enable Algo Trading, attach the EA to a chart, and keep it running.</li>
             {canAuto ? (
               <>
-                <li>Leave Execution Mode on <strong>Auto</strong> (Premium default).</li>
+                <li>
+                  Leave Execution Mode on <strong>Auto</strong> (Premium default).
+                </li>
                 <li>Set risk % and broker suffix, save, then wait for balance sync.</li>
                 <li>
                   Done: each entry signal queues to MT5 automatically. Link Telegram only if you want alert
@@ -219,9 +237,8 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               <>
                 <li>Set fixed lot size and broker suffix, then save.</li>
                 <li>
-                  Pro uses <strong>Manual</strong> mode: MT5 is ready after the steps above. Confirm each entry with{' '}
-                  <strong>Execute</strong> on the Telegram alert to queue it for the EA (that button only queues —
-                  Telegram does not talk to MT5).
+                  Pro uses <strong>Manual</strong> mode: confirm each entry with <strong>Execute</strong> on
+                  the Telegram alert to queue it for the EA.
                 </li>
                 <li>Upgrade to Premium for automatic queueing with no confirmation step.</li>
               </>
@@ -229,51 +246,57 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
           </ol>
 
           {!eaConnected ? (
-            <>
-              <div className="telegram-actions">
-                <button type="button" className="btn-fetch" disabled={busy} onClick={generateMt5Token}>
-                  {busy ? 'Working…' : 'Connect MT5'}
-                </button>
-              </div>
-            </>
+            <div className="telegram-actions">
+              <button type="button" className="btn-fetch" disabled={busy} onClick={generateMt5Token}>
+                {busy ? 'Working…' : 'Connect MT5'}
+              </button>
+            </div>
           ) : (
-            <>
-              <p>
-                <strong>Status:</strong> {mt5Enabled ? 'Active' : 'Paused'}
-              </p>
-              <p>
-                <strong>EA Connected:</strong> yes
-                {mt5Status.accountBalance != null
-                  ? ` · Balance ${mt5Status.accountBalance} ${mt5Status.accountCurrency || 'USD'}`
-                  : ' · waiting for balance sync'}
-              </p>
-              <p>
-                <strong>Lot Size:</strong>{' '}
-                {usesRiskPercent
-                  ? 'Auto from balance × risk %'
-                  : `${mt5Status.fixedLotSize ?? fixedLotSize}`}
-              </p>
-              <p>
-                <strong>Execution Mode:</strong>{' '}
-                {(mt5Status.executionMode || executionMode) === 'auto' ? 'Auto' : 'Manual'}
-              </p>
+            <dl className="auto-status-grid">
+              <div>
+                <dt>Status</dt>
+                <dd>{mt5Enabled ? 'Active' : 'Paused'}</dd>
+              </div>
+              <div>
+                <dt>EA Connected</dt>
+                <dd>
+                  Yes
+                  {mt5Status.accountBalance != null
+                    ? ` · Balance ${mt5Status.accountBalance} ${mt5Status.accountCurrency || 'USD'}`
+                    : ' · waiting for balance sync'}
+                </dd>
+              </div>
+              <div>
+                <dt>Lot Size</dt>
+                <dd>
+                  {usesRiskPercent
+                    ? 'Auto from balance × risk %'
+                    : `${mt5Status.fixedLotSize ?? fixedLotSize}`}
+                </dd>
+              </div>
+              <div>
+                <dt>Execution Mode</dt>
+                <dd>{modeLabel}</dd>
+              </div>
               {mt5Status.lastSyncAt && (
-                <p>
-                  <strong>Last sync:</strong> {new Date(mt5Status.lastSyncAt).toLocaleString()}
-                </p>
+                <div>
+                  <dt>Last sync</dt>
+                  <dd>{new Date(mt5Status.lastSyncAt).toLocaleString()}</dd>
+                </div>
               )}
-              <p>
-                <strong>Pending executions:</strong> {mt5Status.pendingCount || 0}
-              </p>
-            </>
+              <div>
+                <dt>Pending executions</dt>
+                <dd>{mt5Status.pendingCount || 0}</dd>
+              </div>
+            </dl>
           )}
 
           {eaConnected && (
             <>
-              <div className="form-row">
+              <div className="auto-settings-grid">
                 {canAuto && (
-                  <label>
-                    Execution Mode
+                  <label className="auto-field">
+                    <span>Execution Mode</span>
                     <select
                       value={executionMode}
                       onChange={e => setExecutionMode(e.target.value)}
@@ -285,15 +308,15 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                   </label>
                 )}
                 {!canAuto && (
-                  <p className="page-notice info-box">
-                    Pro is Manual: after MT5 is connected, confirm each entry with Execute on the Telegram alert to
-                    queue it. Upgrade to Premium for automatic MT5 queueing (Telegram stays notifications-only).
+                  <p className="auto-notice">
+                    Pro is Manual: after MT5 is connected, confirm each entry with Execute on the Telegram
+                    alert to queue it. Upgrade to Premium for automatic MT5 queueing.
                   </p>
                 )}
                 {canAuto && executionMode === 'manual' && (
-                  <p className="page-notice info-box">
-                    Manual mode: entry signals will not auto-queue. Confirm with Execute on the Telegram alert (queue
-                    only). Switch back to Auto for hands-off MT5 execution.
+                  <p className="auto-notice">
+                    Manual mode: entry signals will not auto-queue. Confirm with Execute on the Telegram
+                    alert, or switch back to Auto for hands-off MT5 execution.
                   </p>
                 )}
                 {usesRiskPercent ? (
@@ -331,11 +354,13 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                       }}
                       onBlur={() => setRiskPercent(normalizeRiskPercent(riskPercent))}
                     />
-                    <span className="mt5-risk-range">Allowed range: {RISK_MIN}% – {RISK_MAX}%</span>
+                    <span className="mt5-risk-range">
+                      Allowed range: {RISK_MIN}% – {RISK_MAX}%
+                    </span>
                   </div>
                 ) : (
-                  <label>
-                    Fixed lot size (Pro)
+                  <label className="auto-field">
+                    <span>Fixed lot size (Pro)</span>
                     <input
                       type="number"
                       min="0.01"
@@ -349,8 +374,8 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                     />
                   </label>
                 )}
-                <label>
-                  Broker symbol suffix
+                <label className="auto-field">
+                  <span>Broker symbol suffix</span>
                   <input
                     type="text"
                     placeholder="e.g. .m or leave blank"
@@ -368,16 +393,16 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                   Regenerate MT5 token
                 </button>
               </div>
-              {saveNotice && <p className="page-notice info-box">{saveNotice}</p>}
+              {saveNotice && <p className="auto-notice is-success">{saveNotice}</p>}
 
               {usesRiskPercent && mt5Status.accountBalance == null && (
-                <p className="page-notice info-box">
-                  Waiting for EA balance sync — Premium auto lot sizing will not queue trades until SyncAccount reports a
-                  balance.
+                <p className="auto-notice">
+                  Waiting for EA balance sync — Premium auto lot sizing will not queue trades until
+                  SyncAccount reports a balance.
                 </p>
               )}
               {(tierLimits.trailingStop || tierLimits.breakEvenAutomation) && (
-                <p className="page-notice info-box">
+                <p className="auto-notice">
                   Install EA v1.11+ so trailing stop and break-even run on open positions after fill.
                 </p>
               )}
@@ -387,7 +412,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
           {mt5LinkInfo && (
             <div className="telegram-link-box">
               <p>
-                <strong>MT5 link token:</strong>
+                <strong>MT5 link token</strong>
               </p>
               <pre>{mt5LinkInfo.token}</pre>
               <p>
@@ -404,36 +429,43 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               </ol>
             </div>
           )}
-        </div>
+        </section>
       )}
 
       {canTelegram && (
-        <div className="telegram-status-card">
-          <h4>Telegram notifications (optional)</h4>
-          <p>
-            Link Telegram for alert messages only. It does not connect to MT5. In Manual mode, alerts can include an
-            Execute control that queues a trade for your already-linked EA.
-          </p>
+        <section className="auto-trading-card">
+          <div className="auto-trading-card-head">
+            <div>
+              <h4>Telegram notifications</h4>
+              <p>Optional alert messages only. Telegram does not connect to MT5.</p>
+            </div>
+            <span className={`auto-status-pill ${status?.linked ? 'is-live' : 'is-idle'}`}>
+              {status?.linked ? (status.enabled ? 'Alerts on' : 'Paused') : 'Not linked'}
+            </span>
+          </div>
 
           {!status?.configured && (
-            <div className="feature-lock">
+            <div className="auto-notice is-warn">
               Telegram bot is not configured on the server yet. Add <code>TELEGRAM_BOT_TOKEN</code> to{' '}
               <code>backend/.env</code>.
             </div>
           )}
 
           {status && (
-            <>
-              <p>
-                <strong>Bot:</strong> @{status.botUsername}
-              </p>
-              <p>
-                <strong>Linked:</strong> {status.linked ? `yes (@${status.username || 'chat'})` : 'no'}
-              </p>
-              <p>
-                <strong>Alerts:</strong> {status.enabled ? 'on' : 'off'}
-              </p>
-            </>
+            <dl className="auto-status-grid">
+              <div>
+                <dt>Bot</dt>
+                <dd>@{status.botUsername}</dd>
+              </div>
+              <div>
+                <dt>Linked</dt>
+                <dd>{status.linked ? `yes (@${status.username || 'chat'})` : 'no'}</dd>
+              </div>
+              <div>
+                <dt>Alerts</dt>
+                <dd>{status.enabled ? 'on' : 'off'}</dd>
+              </div>
+            </dl>
           )}
 
           <div className="telegram-actions">
@@ -473,25 +505,25 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               <pre>/link {linkInfo.code}</pre>
             </div>
           )}
-        </div>
+        </section>
       )}
 
-      <div className="telegram-status-card">
+      <section className="auto-trading-card auto-trading-howto">
         <h4>After setup — how trades run</h4>
-        <ol>
+        <ol className="auto-setup-steps">
           <li>TradingView Pine sends an entry signal (Entry, SL, TP) via webhook.</li>
           <li>You get the alert in-app and by email; Telegram only if you linked it for notifications.</li>
           <li>
-            <strong>Premium Auto</strong> (default): the backend queues the trade for MT5 immediately — no Telegram
-            involved.
+            <strong>Premium Auto</strong> (default): the backend queues the trade for MT5 immediately — no
+            Telegram involved.
           </li>
           <li>
-            <strong>Pro Manual</strong> (default): the trade queues only after you confirm Execute on the Telegram
-            alert; your EA then picks it up from the MT5 bridge.
+            <strong>Pro Manual</strong> (default): the trade queues only after you confirm Execute on the
+            Telegram alert; your EA then picks it up from the MT5 bridge.
           </li>
           <li>The EA polls the bridge, places a market deal, then manages trailing stop and break-even.</li>
         </ol>
-      </div>
+      </section>
     </div>
   );
 }

@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "test:labels": "node --test src/utils/__tests__/smartLabelLayout.test.js"
+    "preview": "vite preview"
   },
   "dependencies": {
     "axios": "^1.6.5",

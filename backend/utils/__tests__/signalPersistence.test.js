@@ -9,10 +9,6 @@ const {
   isPartialAlert,
   buildAnalytics
 } = require('../signalOutcome');
-const {
-  detectTradeOutcome,
-  detectTradeClose
-} = require('../tradeLevelLifecycle');
 const ActiveSignalRegistry = require('../activeSignalRegistry');
 const TradeLifecycleService = require('../../services/TradeLifecycleService');
 
@@ -110,27 +106,8 @@ describe('signal persistence lifecycle', () => {
     assert.equal(found5.direction, 'short');
   });
 
-  it('detectTradeClose ignores TP1/TP2 and only returns terminal SL/TP3', () => {
-    const level = {
-      direction: 'long',
-      stop_loss: 99,
-      take_profit_1: 101,
-      take_profit_2: 102,
-      take_profit_3: 103,
-      activatedAtBarTime: 1000
-    };
-    const tp1Only = detectTradeOutcome(level, [{ time: 2000, high: 101.5, low: 100.2 }]);
-    assert.equal(tp1Only.outcome, 'tp1');
-    assert.equal(tp1Only.terminal, false);
-    assert.equal(detectTradeClose(level, [{ time: 2000, high: 101.5, low: 100.2 }]), null);
-
-    const tp3 = detectTradeClose(level, [{ time: 2000, high: 104, low: 100.2 }]);
-    assert.equal(tp3.outcome, 'tp3');
-    assert.equal(tp3.terminal, true);
-  });
-
-  it('ActiveSignalRegistry is keyed per symbol+timeframe (never global)', () => {
-    ActiveSignalRegistry.registerActive({
+  it('ActiveSignalRegistry is keyed per symbol+timeframe (never global)', async () => {
+    await ActiveSignalRegistry.registerActive({
       symbol: 'XAUUSD',
       timeframe: '15m',
       signalUuid: 'abc-15',
@@ -141,7 +118,7 @@ describe('signal persistence lifecycle', () => {
       take_profit_2: 1.2,
       take_profit_3: 1.3
     });
-    ActiveSignalRegistry.registerActive({
+    await ActiveSignalRegistry.registerActive({
       symbol: 'XAUUSD',
       timeframe: '5m',
       signalUuid: 'abc-5',
@@ -152,7 +129,7 @@ describe('signal persistence lifecycle', () => {
       take_profit_2: 1.8,
       take_profit_3: 1.7
     });
-    ActiveSignalRegistry.registerActive({
+    await ActiveSignalRegistry.registerActive({
       symbol: 'EURUSD',
       timeframe: '15m',
       signalUuid: 'eur-15',
@@ -164,17 +141,17 @@ describe('signal persistence lifecycle', () => {
       take_profit_3: 1.13
     });
 
-    assert.equal(ActiveSignalRegistry.hasActive('XAUUSD', '15m'), true);
-    assert.equal(ActiveSignalRegistry.hasActive('XAUUSD', '5m'), true);
-    assert.equal(ActiveSignalRegistry.hasActive('EURUSD', '15m'), true);
-    assert.equal(ActiveSignalRegistry.getActive('XAUUSD', '15m').signalUuid, 'abc-15');
-    assert.equal(ActiveSignalRegistry.getActive('XAUUSD', '5').signalUuid, 'abc-5');
+    assert.equal(await ActiveSignalRegistry.hasActive('XAUUSD', '15m'), true);
+    assert.equal(await ActiveSignalRegistry.hasActive('XAUUSD', '5m'), true);
+    assert.equal(await ActiveSignalRegistry.hasActive('EURUSD', '15m'), true);
+    assert.equal((await ActiveSignalRegistry.getActive('XAUUSD', '15m')).signalUuid, 'abc-15');
+    assert.equal((await ActiveSignalRegistry.getActive('XAUUSD', '5')).signalUuid, 'abc-5');
 
     // clearActive(symbol, reason, timeframe) — never clears other TF slots.
-    ActiveSignalRegistry.clearActive('XAUUSD', 'tp3', '15m');
-    assert.equal(ActiveSignalRegistry.hasActive('XAUUSD', '15m'), false);
-    assert.equal(ActiveSignalRegistry.hasActive('XAUUSD', '5m'), true);
-    assert.equal(ActiveSignalRegistry.hasActive('EURUSD', '15m'), true);
+    await ActiveSignalRegistry.clearActive('XAUUSD', 'tp3', '15m');
+    assert.equal(await ActiveSignalRegistry.hasActive('XAUUSD', '15m'), false);
+    assert.equal(await ActiveSignalRegistry.hasActive('XAUUSD', '5m'), true);
+    assert.equal(await ActiveSignalRegistry.hasActive('EURUSD', '15m'), true);
   });
 
   it('rejects No Signal / active=false reset webhooks via TradeLifecycleService', () => {

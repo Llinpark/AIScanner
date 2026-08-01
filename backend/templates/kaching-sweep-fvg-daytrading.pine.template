@@ -1,5 +1,5 @@
 //@version=5
-indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, max_labels_count=50, max_lines_count=500, max_boxes_count=50)
+indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
 
 // Generated for: {{SUBSCRIBER_LABEL}}
 // Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
@@ -11,7 +11,6 @@ indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=
 // License is HMAC-bound to this TradingView username (server-side). Pine cannot read the
 // current TV account at runtime, so CONFIRM is prefilled to the licensed username (override allowed).
 WEBHOOK_URL = "{{WEBHOOK_URL}}"
-WEBHOOK_SECRET = "{{WEBHOOK_SECRET}}"
 LICENSE_TOKEN = "{{LICENSE_TOKEN}}"
 LICENSED_TV_USERNAME = "{{TV_USERNAME}}"
 CONFIRM_TV_USERNAME = input.string("{{TV_USERNAME}}", "Confirm your TradingView username", group="KachingFx License", tooltip="Prefilled with the username this script was licensed for. Leave as-is to unlock, or override if needed. Signals and alerts stay locked until it matches.")
@@ -48,7 +47,22 @@ normalizeTvUser(string s) =>
     str.lower(str.replace_all(str.trim(s), "@", ""))
 
 licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_USERNAME) == LICENSED_TV_USERNAME
+
+// Supported Admin Scanner assets ONLY — Deriv / Jump / Volatility / others never signal.
+canonicalSymbol() =>
+    t = str.upper(str.replace_all(syminfo.ticker, "/", ""))
+    t == "NAS100" or t == "USTEC" or t == "NDX" or t == "NDXUSD" or t == "US100USD" ? "US100" :
+     t == "DJ30" or t == "DJI" or t == "DJIA" or t == "DOW" or t == "US30USD" ? "US30" :
+     t
+
+isSupportedSymbol() =>
+    c = canonicalSymbol()
+    c == "EURUSD" or c == "GBPUSD" or c == "USDJPY" or c == "AUDUSD" or c == "USDCAD" or c == "XAUUSD" or c == "US30" or c == "US100"
+
+symbolOk = isSupportedSymbol()
+
 var label licenseLockLabel = na
+var label symbolLockLabel = na
 if barstate.islast
     if not licenseOk
         if na(licenseLockLabel)
@@ -58,6 +72,14 @@ if barstate.islast
     else if not na(licenseLockLabel)
         label.delete(licenseLockLabel)
         licenseLockLabel := na
+    if licenseOk and not symbolOk
+        if na(symbolLockLabel)
+            symbolLockLabel := label.new(bar_index, high, "KachingFx: unsupported symbol — use EURUSD GBPUSD USDJPY AUDUSD USDCAD XAUUSD US30 US100", style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.normal)
+        else
+            label.set_xy(symbolLockLabel, bar_index, high)
+    else if not na(symbolLockLabel)
+        label.delete(symbolLockLabel)
+        symbolLockLabel := na
 
 // ===== COLORS (BUY vs SELL schemes) =====
 colBuy = #2563eb
@@ -127,7 +149,7 @@ buildHumanMessage(string direction, float entry, float sl, float tp1, float tp2,
 buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf, string signalId, string closedReason) =>
     msgText = alertType == "entry" ? buildHumanMessage(direction, entry, sl, tp1, tp2, tp3) : kachingAlertLabel(alertType)
     reasonJson = str.length(closedReason) > 0 ? ',"closedReason":"' + closedReason + '"' : ""
-    '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + signalId + '","signalUuid":"' + signalId + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true,"secret":"' + WEBHOOK_SECRET + '"' + reasonJson + '}'
+    '{"symbol":"' + canonicalSymbol() + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + signalId + '","signalUuid":"' + signalId + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true' + reasonJson + '}'
 
 // ===== HTF LIQUIDITY SWEEP (15m context — never used for entry price) =====
 htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
@@ -304,8 +326,9 @@ entryTfOk = timeframe.isminutes and (timeframe.multiplier == 15 or timeframe.mul
 {{DRAWING_ENGINE}}
 
 // One active trade per chart: never fire/replace while a trade is still open.
-fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
-fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
+// Unsupported symbols (Deriv/Jump/Volatility/etc.) never arm trades or send webhooks.
+fireLong = licenseOk and symbolOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
+fireShort = licenseOk and symbolOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
 
 if fireLong
     e = resolveEntry("long")
@@ -314,8 +337,8 @@ if fireLong
     conf = confScore() / 100.0
     sigId = makeSignalId()
     msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
-    alert(msg, alert.freq_once_per_bar)
-    // --- arm long trade (main scope only — no function may mutate globals) ---
+    alert(msg, alert.freq_all)
+    // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0
         for i = 0 to array.size(tradeLevelLines) - 1
             line.delete(array.get(tradeLevelLines, i))
@@ -334,17 +357,20 @@ if fireLong
     if array.size(tradeFvgHold) > 0
         box.delete(array.get(tradeFvgHold, 0))
         array.clear(tradeFvgHold)
-    buyBadge = label.new(bar_index, low, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.normal)
+    buyBadge = label.new(bar_index, ee, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small)
     array.push(tradeBadgeHold, buyBadge)
     if SHOW_FVG_ZONE
-        buyZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, bgcolor=colLongZoneBg)
+        buyZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, border_width=1, bgcolor=colLongZoneBg)
         array.push(tradeFvgHold, buyZone)
     if SHOW_TRADE_LINES
-        [newLines, newLeaders, newLabels] = buildTradeDrawings(ee, ssl, t1, t2, t3, true)
+        [newLines, newLeaders, newLabels, layoutY, layoutSide, layoutStep] = buildTradeDrawings(ee, ssl, t1, t2, t3, true)
         for i = 0 to array.size(newLines) - 1
             array.push(tradeLevelLines, array.get(newLines, i))
             array.push(tradeLeaderLines, array.get(newLeaders, i))
             array.push(tradeLevelLabels, array.get(newLabels, i))
+            array.set(tradeLabelYs, i, array.get(layoutY, i))
+            array.set(tradeLayoutSide, i, array.get(layoutSide, i))
+            array.set(tradeLayoutStep, i, array.get(layoutStep, i))
     array.set(tradeStrings, 1, sigId)
     array.set(tradeStrings, 0, "long")
     array.set(tradeFloats, 0, ee)
@@ -368,8 +394,8 @@ if fireShort
     conf = confScore() / 100.0
     sigId = makeSignalId()
     msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
-    alert(msg, alert.freq_once_per_bar)
-    // --- arm short trade (main scope only — no function may mutate globals) ---
+    alert(msg, alert.freq_all)
+    // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0
         for i = 0 to array.size(tradeLevelLines) - 1
             line.delete(array.get(tradeLevelLines, i))
@@ -388,17 +414,20 @@ if fireShort
     if array.size(tradeFvgHold) > 0
         box.delete(array.get(tradeFvgHold, 0))
         array.clear(tradeFvgHold)
-    sellBadge = label.new(bar_index, high, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.normal)
+    sellBadge = label.new(bar_index, ee, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.small)
     array.push(tradeBadgeHold, sellBadge)
     if SHOW_FVG_ZONE
-        sellZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, bgcolor=colShortZoneBg)
+        sellZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, border_width=1, bgcolor=colShortZoneBg)
         array.push(tradeFvgHold, sellZone)
     if SHOW_TRADE_LINES
-        [newLinesS, newLeadersS, newLabelsS] = buildTradeDrawings(ee, ssl, t1, t2, t3, false)
+        [newLinesS, newLeadersS, newLabelsS, layoutYS, layoutSideS, layoutStepS] = buildTradeDrawings(ee, ssl, t1, t2, t3, false)
         for i = 0 to array.size(newLinesS) - 1
             array.push(tradeLevelLines, array.get(newLinesS, i))
             array.push(tradeLeaderLines, array.get(newLeadersS, i))
             array.push(tradeLevelLabels, array.get(newLabelsS, i))
+            array.set(tradeLabelYs, i, array.get(layoutYS, i))
+            array.set(tradeLayoutSide, i, array.get(layoutSideS, i))
+            array.set(tradeLayoutStep, i, array.get(layoutStepS, i))
     array.set(tradeStrings, 1, sigId)
     array.set(tradeStrings, 0, "short")
     array.set(tradeFloats, 0, ee)

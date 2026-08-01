@@ -5,14 +5,18 @@ import {
 } from '../../constants/chartTimeframes';
 import { getTimeframesForTier } from '../../constants/subscriptionLimits';
 import { useAuth } from '../../context/AuthContext';
-import useLiveChartLevels from '../../hooks/useLiveChartLevels';
 import useMarketCandles from '../../hooks/useMarketCandles';
 import ChartTimeframeToolbar from './ChartTimeframeToolbar';
 import KachingLightweightChart from './KachingLightweightChart';
 
 const CHART_FAILURE_COPY =
-  'Live chart temporarily unavailable. Trading alerts continue normally.';
+  'Live chart temporarily unavailable. Trading alerts continue normally on TradingView.';
 
+/**
+ * Market price chart ONLY.
+ * TradingView Pine is the sole source of truth for Entry/SL/TP drawings.
+ * This panel never draws trade levels, FVGs, or lifecycle overlays.
+ */
 export default function MarketChartPanel({
   symbol,
   interval: controlledInterval,
@@ -20,16 +24,13 @@ export default function MarketChartPanel({
   allowedTimeframes: allowedTimeframesProp,
   allowedSymbols = [],
   onSymbolChange,
-  overlaySignals = [],
-  useLiveLevels = true,
   subscribed = true,
   liveEnabled = true,
   height = 600,
-  onChartErrorChange,
-  enableSmcOverlays = false
+  onChartErrorChange
 }) {
   const SYMBOL_DEBOUNCE_MS = 400;
-  const { subscription, isAuthenticated } = useAuth();
+  const { subscription } = useAuth();
   const tier = subscription?.tier || 'basic';
   const [debouncedSymbol, setDebouncedSymbol] = useState(symbol);
 
@@ -84,17 +85,6 @@ export default function MarketChartPanel({
     onChartErrorChange?.(error || null);
   }, [error, onChartErrorChange]);
 
-  const { liveSignal, stage, closedOutcome, historicalSignals } = useLiveChartLevels({
-    symbol: debouncedSymbol,
-    interval,
-    candles,
-    overlaySignals,
-    subscribed: subscribed && useLiveLevels,
-    isAuthenticated
-  });
-
-  const overlaySignal = useLiveLevels ? liveSignal : null;
-  const historicalOverlaySignals = useLiveLevels ? historicalSignals : [];
   const chartFailed = Boolean(error && candles.length === 0);
 
   if (!subscribed) {
@@ -121,34 +111,24 @@ export default function MarketChartPanel({
       )}
       {liveStatus === 'stale' && candles.length > 0 && (
         <div className="page-notice info-box">
-          Live refresh delayed — showing cached candles. Trading alerts continue normally.
+          Live refresh delayed — showing cached candles. TradingView alerts continue normally.
         </div>
       )}
       {fallbackUsed && fallbackInterval && candles.length > 0 && (
         <div className="page-notice info-box">
-          Live intraday chart feed unavailable — showing daily candles instead. Trading alerts continue normally.
+          Live intraday chart feed unavailable — showing daily candles instead. TradingView alerts
+          continue normally.
         </div>
-      )}
-      {useLiveLevels && stage === 'active_trade' && liveSignal && (
-        <div className="page-notice info-box">
-          Active TradingView levels on chart — staying until SL or TP outcome arrives.
-        </div>
-      )}
-      {useLiveLevels && closedOutcome && (
-        <div className="page-notice info-box">Trade closed at {closedOutcome.toUpperCase()} — levels cleared.</div>
       )}
       {!chartFailed && (
         <KachingLightweightChart
           candles={candles}
-          overlaySignal={overlaySignal}
-          historicalOverlaySignals={historicalOverlaySignals}
           symbol={debouncedSymbol}
           interval={interval}
           liveEnabled={liveEnabled}
           liveStatus={liveStatus}
           provider={provider}
           height={height}
-          enableSmcOverlays={enableSmcOverlays}
         />
       )}
       {!loading && !error && candles.length === 0 && (

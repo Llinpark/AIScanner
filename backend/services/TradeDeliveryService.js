@@ -93,13 +93,11 @@ async function deliverInApp(io, signalDoc, subscriber) {
     : signalDoc;
   const payload = toLiveAlertPayload(forClient);
 
+  // Delivery channels only — canonical lifecycle events are emitted once in broadcast.
   if (payload.userId) {
-    // Per-user room only — avoids leaking Premium SMC / pair data to other tiers.
     io.to(`user:${payload.userId}`).emit('tv:live-alert', payload);
-    io.to(`user:${payload.userId}`).emit('signal:update', forClient);
   } else {
     io.emit('tv:live-alert', payload);
-    io.emit('signal:update', forClient);
   }
 
   return payload;

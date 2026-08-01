@@ -26,13 +26,12 @@ const TRADINGVIEW_CONFIG = {
   symbols: {
     eurusd: { symbol: 'EUR/USD', exchange: 'FOREX' },
     gbpusd: { symbol: 'GBP/USD', exchange: 'FOREX' },
-    xauusd: { symbol: 'XAU/USD', exchange: 'FOREX' },
-    xagusd: { symbol: 'XAG/USD', exchange: 'FOREX' },
-    us30: { symbol: 'US30', exchange: 'INDEX' },
-    us100: { symbol: 'US100', exchange: 'INDEX' },
-    usdbtc: { symbol: 'BTC/USD', exchange: 'CRYPTO' },
+    usdjpy: { symbol: 'USD/JPY', exchange: 'FOREX' },
     audusd: { symbol: 'AUD/USD', exchange: 'FOREX' },
-    usdjpy: { symbol: 'USD/JPY', exchange: 'FOREX' }
+    usdcad: { symbol: 'USD/CAD', exchange: 'FOREX' },
+    xauusd: { symbol: 'XAU/USD', exchange: 'FOREX' },
+    us30: { symbol: 'US30', exchange: 'INDEX' },
+    us100: { symbol: 'US100', exchange: 'INDEX' }
   }
 };
 

@@ -157,7 +157,19 @@ function maxMilestone(a, b) {
   return milestoneRank(a) >= milestoneRank(b) ? a || 'pending' : b || 'pending';
 }
 
-function findOpenEntry(signals, symbol, timeframe) {
+function strategiesMatch(a, b) {
+  const left = String(a || '').trim().toLowerCase();
+  const right = String(b || '').trim().toLowerCase();
+  if (!left || !right) return true;
+  const norm = value => {
+    if (value.includes('scalp')) return 'scalping';
+    if (value.includes('day') || value.includes('fvg')) return 'daytrading';
+    return value;
+  };
+  return norm(left) === norm(right);
+}
+
+function findOpenEntry(signals, symbol, timeframe, strategy) {
   const normalized = normalizeSymbol(symbol);
   const tf = timeframe != null && timeframe !== '' ? normalizeTradeTimeframe(timeframe) : null;
   const candidates = signals
@@ -165,6 +177,11 @@ function findOpenEntry(signals, symbol, timeframe) {
       s =>
         normalizeSymbol(s.symbol) === normalized &&
         (!tf || timeframesMatch(s.timeframe, tf)) &&
+        (!strategy ||
+          strategiesMatch(
+            strategy,
+            s.strategyId || s.strategyName || s.strategy || s.pattern
+          )) &&
         isEntryAlert(s.alertType || 'signal') &&
         isOpenTradeStatus(s.tradeStatus) &&
         isOpenOutcome(s.outcome)
@@ -172,6 +189,20 @@ function findOpenEntry(signals, symbol, timeframe) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   return candidates[0] || null;
+}
+
+/** Prefer permanent UUID match for outcome linking (TV → backend → dashboard sync). */
+function findEntryBySignalUuid(signals, signalUuid) {
+  const id = String(signalUuid || '').trim();
+  if (!id) return null;
+  return (
+    signals.find(
+      s =>
+        String(s.signalUuid || '') === id ||
+        String(s.signalId || '') === id ||
+        String(s.signalGroupId || '') === id
+    ) || null
+  );
 }
 
 function applyOutcomeUpdate(entrySignal, alertType, closedReason) {
@@ -511,6 +542,8 @@ module.exports = {
   isPartialAlert,
   outcomeFromAlertType,
   findOpenEntry,
+  findEntryBySignalUuid,
+  strategiesMatch,
   applyOutcomeUpdate,
   enrichEntrySignal,
   buildAnalytics,

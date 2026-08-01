@@ -138,21 +138,53 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
 
     const socket = getSharedSocket();
 
-    // Dashboard updates exclusively from TradingView webhook fan-out — no signal polling.
-    socket.on('signal:update', newSignal => {
-      if (!isInsightsSignal(newSignal)) return;
-      setSignals(prev => [newSignal, ...prev.filter(s => String(s._id) !== String(newSignal._id))].slice(0, tierLimits.maxSignals || 50));
-    });
-
-    socket.on('signal:outcome', updated => {
-      setSignals(prev =>
-        prev.map(s => (String(s._id) === String(updated._id) ? { ...s, ...updated } : s))
+    // History/log only — TradingView owns drawings. Lifecycle via canonical socket events.
+    const upsertByUuid = (prev, next) => {
+      const id = String(next.signalUuid || next._id || next.id || '');
+      const filtered = prev.filter(
+        s => String(s.signalUuid || s._id || s.id || '') !== id
       );
-    });
+      return [next, ...filtered].slice(0, tierLimits.maxSignals || 50);
+    };
+
+    const onCreated = payload => {
+      if (!isInsightsSignal(payload)) return;
+      setSignals(prev => upsertByUuid(prev, payload));
+    };
+    const onUpdated = payload => {
+      if (!payload) return;
+      setSignals(prev =>
+        prev.map(s => {
+          const sid = String(s.signalUuid || s._id || '');
+          const pid = String(payload.signalUuid || payload._id || '');
+          return sid && sid === pid ? { ...s, ...payload } : s;
+        })
+      );
+    };
+    const onClosed = payload => {
+      if (!payload) return;
+      setSignals(prev =>
+        prev.map(s => {
+          const sid = String(s.signalUuid || s._id || '');
+          const pid = String(payload.signalUuid || payload._id || '');
+          return sid && sid === pid ? { ...s, ...payload } : s;
+        })
+      );
+    };
+
+    socket.on('signal_created', onCreated);
+    socket.on('signal_updated', onUpdated);
+    socket.on('signal_closed', onClosed);
+    // Legacy aliases during transition
+    socket.on('signal:update', onCreated);
+    socket.on('signal:outcome', onUpdated);
 
     return () => {
-      socket.off('signal:update');
-      socket.off('signal:outcome');
+      socket.off('signal_created', onCreated);
+      socket.off('signal_updated', onUpdated);
+      socket.off('signal_closed', onClosed);
+      socket.off('signal:update', onCreated);
+      socket.off('signal:outcome', onUpdated);
     };
   }, [isAuthenticated, tierLimits.maxSignals]);
 
@@ -281,12 +313,10 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
             symbol={chartSymbol}
             allowedSymbols={allowedPairs}
             onSymbolChange={setChartSymbol}
-            overlaySignals={signals}
             subscribed={hasAccess}
             liveEnabled
             height={600}
             onChartErrorChange={onChartErrorChange}
-            enableSmcOverlays={Boolean(tierLimits.smartMoneyConcepts)}
           />
         </div>
       )}

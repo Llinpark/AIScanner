@@ -25,6 +25,7 @@ const SignalOutcomeService = require('./SignalOutcomeService');
 
 const STAGES = Object.freeze({
   DETECTED: 'DETECTED',
+  CREATED: 'CREATED',
   CONFIRMED: 'CONFIRMED',
   ACTIVE: 'ACTIVE',
   TP1: 'TP1',
@@ -32,7 +33,8 @@ const STAGES = Object.freeze({
   TP3: 'TP3',
   SL: 'SL',
   EXPIRED: 'EXPIRED',
-  CANCELLED: 'CANCELLED'
+  CANCELLED: 'CANCELLED',
+  COMPLETED: 'COMPLETED'
 });
 
 const FROZEN_LEVEL_KEYS = [
@@ -138,7 +140,7 @@ function attachExpiryFields(signalData) {
  * Different timeframes never block each other; nothing globally blocks the system.
  */
 async function assertCanOpenEntry(signalData) {
-  let active = ActiveSignalRegistry.getActive(signalData.symbol, signalData.timeframe);
+  let active = await ActiveSignalRegistry.getActive(signalData);
   if (!active) {
     try {
       const openEntry = await SignalOutcomeService.findOpenEntryInDb(
@@ -146,7 +148,7 @@ async function assertCanOpenEntry(signalData) {
         signalData.timeframe
       );
       if (openEntry) {
-        active = ActiveSignalRegistry.registerActive(openEntry);
+        active = await ActiveSignalRegistry.registerActive(openEntry);
         logLifecycleEvent('registry_hydrate', {
           symbol: openEntry.symbol,
           timeframe: openEntry.timeframe,
@@ -161,6 +163,24 @@ async function assertCanOpenEntry(signalData) {
   }
 
   if (active) {
+    // Idempotent webhook replay with the same permanent UUID is allowed (no overwrite).
+    const incomingUuid = signalData.signalUuid || signalData.signalId || signalData.signalGroupId;
+    if (incomingUuid && active.signalUuid && String(incomingUuid) === String(active.signalUuid)) {
+      logLifecycleEvent('duplicate_webhook_replay', {
+        symbol: signalData.symbol,
+        timeframe: signalData.timeframe,
+        signalUuid: incomingUuid,
+        alertType: signalData.alertType,
+        stage: active.stage || active.lifecycleStage,
+        reason: 'same_uuid_replay'
+      });
+      return {
+        allowed: false,
+        active,
+        reason: 'duplicate_webhook_replay',
+        message: `Duplicate webhook for active signalUuid ${incomingUuid}; ignored.`
+      };
+    }
     logLifecycleEvent('reject_duplicate_entry', {
       symbol: signalData.symbol,
       timeframe: signalData.timeframe,
@@ -176,6 +196,9 @@ async function assertCanOpenEntry(signalData) {
       message:
         `Active trade already open for ${signalData.symbol}` +
         (signalData.timeframe ? `:${signalData.timeframe}` : '') +
+        (signalData.strategyName || signalData.strategy
+          ? `:${signalData.strategyName || signalData.strategy}`
+          : '') +
         '; new entry ignored until TP3/SL/expiry/cancel.'
     };
   }
@@ -183,31 +206,40 @@ async function assertCanOpenEntry(signalData) {
   return { allowed: true };
 }
 
-function syncRegistryAfterTransition(signalData, updatedEntry, alertType) {
+async function syncRegistryAfterTransition(signalData, updatedEntry, alertType) {
   if (isEntryAlert(alertType)) {
     const confirmed = freezeConfirmedLevels({
       ...signalData,
-      lifecycleStage: signalData.lifecycleStage || STAGES.CONFIRMED
+      lifecycleStage: STAGES.CONFIRMED
     });
     Object.assign(signalData, confirmed);
-    const record = ActiveSignalRegistry.registerActive(signalData);
+    signalData.lifecycleStage = STAGES.ACTIVE;
+    const record = await ActiveSignalRegistry.registerActive(signalData);
     logLifecycleEvent('created', {
       symbol: signalData.symbol,
       timeframe: signalData.timeframe,
       signalUuid: signalData.signalUuid || signalData.signalId,
       alertType,
-      lifecycleStage: signalData.lifecycleStage,
-      reason: 'entry_confirmed'
+      lifecycleStage: STAGES.CREATED,
+      reason: 'entry_received'
+    });
+    logLifecycleEvent('confirmed', {
+      symbol: signalData.symbol,
+      timeframe: signalData.timeframe,
+      signalUuid: signalData.signalUuid || signalData.signalId,
+      alertType,
+      lifecycleStage: STAGES.CONFIRMED,
+      reason: 'levels_frozen'
     });
     logLifecycleEvent('persisted', {
       symbol: signalData.symbol,
       timeframe: signalData.timeframe,
       signalUuid: signalData.signalUuid || signalData.signalId,
       alertType,
-      lifecycleStage: signalData.lifecycleStage,
+      lifecycleStage: STAGES.ACTIVE,
       reason: `registry=${record ? 'registered' : 'skipped'}`
     });
-    return { signalData, updatedEntry, stage: signalData.lifecycleStage };
+    return { signalData, updatedEntry, stage: STAGES.ACTIVE };
   }
 
   if (isPartialAlert(alertType) && updatedEntry) {
@@ -215,14 +247,16 @@ function syncRegistryAfterTransition(signalData, updatedEntry, alertType) {
       signalData.lifecycleStage ||
       updatedEntry.lifecycleStage ||
       lifecycleStageFromOutcome(updatedEntry.outcome);
-    ActiveSignalRegistry.updateActiveStage(
-      signalData.symbol,
+    await ActiveSignalRegistry.updateActiveStage(
+      {
+        symbol: signalData.symbol || updatedEntry.symbol,
+        timeframe: signalData.timeframe || updatedEntry.timeframe
+      },
       stage,
       {
         signalUuid: updatedEntry.signalUuid || signalData.signalUuid,
         timeframe: signalData.timeframe || updatedEntry.timeframe
-      },
-      signalData.timeframe || updatedEntry.timeframe
+      }
     );
     logLifecycleEvent('updated', {
       symbol: signalData.symbol,
@@ -240,10 +274,12 @@ function syncRegistryAfterTransition(signalData, updatedEntry, alertType) {
       updatedEntry?.lifecycleStage ||
       signalData.lifecycleStage ||
       lifecycleStageFromOutcome(outcomeFromAlertType(alertType));
-    ActiveSignalRegistry.clearActive(
-      signalData.symbol,
-      signalData.closedReason || alertType,
-      signalData.timeframe || updatedEntry?.timeframe
+    await ActiveSignalRegistry.clearActive(
+      {
+        symbol: signalData.symbol,
+        timeframe: signalData.timeframe || updatedEntry?.timeframe
+      },
+      signalData.closedReason || alertType
     );
     const eventName =
       alertType === 'expired'
@@ -261,6 +297,18 @@ function syncRegistryAfterTransition(signalData, updatedEntry, alertType) {
       lifecycleStage: stage,
       closedReason: signalData.closedReason || alertType
     });
+    logLifecycleEvent('completed', {
+      symbol: signalData.symbol,
+      timeframe: signalData.timeframe || updatedEntry?.timeframe,
+      signalUuid: updatedEntry?.signalUuid || signalData.signalUuid,
+      alertType,
+      lifecycleStage: STAGES.COMPLETED,
+      closedReason: signalData.closedReason || alertType,
+      reason: `terminal=${eventName}`
+    });
+    if (updatedEntry) {
+      updatedEntry.lifecycleStage = stage;
+    }
     return { signalData, updatedEntry, stage };
   }
 
@@ -316,7 +364,7 @@ async function processIncomingTradeAlert(baseData, inMemorySignals = [], options
     Object.assign(signalData, withIdentity);
   }
 
-  const sync = syncRegistryAfterTransition(signalData, updatedEntry, alertType);
+  const sync = await syncRegistryAfterTransition(signalData, updatedEntry, alertType);
 
   return {
     rejected: false,
@@ -343,7 +391,7 @@ function applyLocalOutcome(entrySignal, alertType, closedReason) {
   return entrySignal;
 }
 
-function getActiveTrade(symbol, timeframe) {
+async function getActiveTrade(symbol, timeframe) {
   return ActiveSignalRegistry.getActive(symbol, timeframe);
 }
 

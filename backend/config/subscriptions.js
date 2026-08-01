@@ -86,9 +86,9 @@ const TIER_FEATURES = {
     tradingViewAlerts: true,
     // Pine draws Entry/SL/TP1–3 on the user's TradingView chart (all paid tiers).
     tradingViewLevelOverlays: true,
-    // Chart / scanner catalog only — TV webhooks accept any instrument when anyTradingViewInstrument.
-    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'BTC/USD', 'USD/JPY'],
-    anyTradingViewInstrument: true,
+    // Supported Admin Scanner assets only (platform invariant).
+    currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'USD/JPY', 'AUD/USD'],
+    anyTradingViewInstrument: false,
     timeframes: ['1h', '15m', '3m', '1m'],
     showConfidence: false,
     newsFilter: false,
@@ -118,14 +118,13 @@ const TIER_FEATURES = {
       'EUR/USD',
       'GBP/USD',
       'XAU/USD',
-      'XAG/USD',
       'AUD/USD',
       'USD/JPY',
+      'USD/CAD',
       'US30',
-      'US100',
-      'BTC/USD'
+      'US100'
     ],
-    anyTradingViewInstrument: true,
+    anyTradingViewInstrument: false,
     timeframes: ['4h', '1h', '30m', '15m', '5m', '1m'],
     showConfidence: true,
     newsFilter: true,
@@ -151,9 +150,9 @@ const TIER_FEATURES = {
     aiAlerts: true,
     tradingViewAlerts: true,
     tradingViewLevelOverlays: true,
-    // Chart catalog seed list — webhook / distribution is not limited to these.
+    // Full supported Admin Scanner catalog only.
     currencyPairs: ALL_CURRENCY_PAIRS,
-    anyTradingViewInstrument: true,
+    anyTradingViewInstrument: false,
     timeframes: ALL_TIMEFRAMES,
     showConfidence: true,
     newsFilter: true,
@@ -182,7 +181,7 @@ const FEATURE_MATRIX = [
   { key: 'aiAlerts', label: 'AI Alerts', basic: true, professional: true, premium: true },
   { key: 'tradingViewAlerts', label: 'TradingView Alerts', basic: true, professional: true, premium: true },
   { key: 'tradingViewLevelOverlays', label: 'TV Entry / SL / TP Overlays', basic: true, professional: true, premium: true },
-  { key: 'currencyPairs', label: 'Chart Markets', basic: 'Limited catalog', professional: 'Most catalog', premium: 'Any TV instrument' },
+  { key: 'currencyPairs', label: 'Chart Markets', basic: 'Core FX + gold', professional: 'All 8 supported', premium: 'All 8 supported' },
   { key: 'timeframes', label: 'Timeframes', basic: '4', professional: '6', premium: 'All' },
   { key: 'showConfidence', label: 'Confidence Score', basic: false, professional: true, premium: true },
   { key: 'newsFilter', label: 'News Filter', basic: false, professional: true, premium: true },

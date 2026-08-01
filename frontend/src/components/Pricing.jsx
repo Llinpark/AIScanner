@@ -167,8 +167,7 @@ export default function Pricing({
                     ) : null}
                     {limits.currencyPairs ? (
                       <p className="tier-meta">
-                        {limits.currencyPairs.length} chart markets
-                        {limits.anyTradingViewInstrument ? ' · any TV webhook symbol' : ''}
+                        {limits.currencyPairs.length} supported markets
                         {' · '}
                         {limits.timeframes?.length || 1} timeframe
                         {(limits.timeframes?.length || 0) !== 1 ? 's' : ''}
@@ -215,12 +214,11 @@ export default function Pricing({
           </div>
 
           <section className="pricing-payment-info" aria-label="Direct payment details">
-            <p className="pricing-payment-intro">
-              You can pay directly through our M-Pesa Till
-            </p>
+            <p className="pricing-payment-kicker">Direct payment</p>
+            <p className="pricing-payment-intro">Pay via M-Pesa Till</p>
             <ul className="pricing-payment-details">
               <li>
-                <span className="pricing-payment-label">Mpesa Till</span>
+                <span className="pricing-payment-label">M-Pesa Till</span>
                 <span className="pricing-payment-value">5337170</span>
               </li>
               <li>
@@ -228,7 +226,7 @@ export default function Pricing({
                 <span className="pricing-payment-value">KachingFx Official</span>
               </li>
               <li>
-                <span className="pricing-payment-label">Binance Pay — Binance ID</span>
+                <span className="pricing-payment-label">Binance ID</span>
                 <span className="pricing-payment-value">484947783</span>
               </li>
             </ul>

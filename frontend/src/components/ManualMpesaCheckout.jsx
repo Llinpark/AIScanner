@@ -41,6 +41,7 @@ export default function ManualMpesaCheckout({
   };
   const expectedAmount = pricing.price || 0;
   const periodLabel = pricing.periodLabel || (billingCycle === 'yearly' ? 'year' : 'month');
+  const planName = tierData?.name || tier;
 
   const [mpesaCode, setMpesaCode] = useState('');
   const [phone, setPhone] = useState(user?.phone || '');
@@ -54,12 +55,12 @@ export default function ManualMpesaCheckout({
 
   const instructions = useMemo(
     () => [
-      `Open M-Pesa on your phone and choose Lipa na M-Pesa → Buy Goods.`,
+      'Open M-Pesa → Lipa na M-Pesa → Buy Goods.',
       `Enter Till Number ${tillNumber} (${businessName}).`,
-      `Pay KES ${Number(expectedAmount).toLocaleString()} for the ${tierData?.name || tier} plan (${periodLabel}).`,
-      'Save the M-Pesa confirmation code, then fill the form below.'
+      `Pay KES ${Number(expectedAmount).toLocaleString()} for ${planName} (${periodLabel}).`,
+      'Copy the confirmation code, then submit the form below.'
     ],
-    [tillNumber, businessName, expectedAmount, tierData?.name, tier, periodLabel]
+    [tillNumber, businessName, expectedAmount, planName, periodLabel]
   );
 
   const handleScreenshot = async e => {
@@ -116,34 +117,34 @@ export default function ManualMpesaCheckout({
   if (submitted) {
     return (
       <div className="checkout-container manual-mpesa-checkout">
-        <button type="button" className="btn-small checkout-back" onClick={onBack}>
+        <button type="button" className="mpesa-back-btn" onClick={onBack}>
           ← Back to plans
         </button>
         <div className="manual-mpesa-awaiting">
-          <span className="admin-pill status-pending">Awaiting Verification</span>
+          <span className="mpesa-status-pill">Awaiting Verification</span>
           <h2>Payment received for review</h2>
           <p>
-            Thanks — your M-Pesa payment for <strong>{tierData?.name || tier}</strong> was submitted.
-            A Super Admin will verify the code and activate your subscription shortly.
+            Thanks — your M-Pesa payment for <strong>{planName}</strong> was submitted. A Super Admin
+            will verify the code and activate your subscription shortly.
           </p>
-          <dl className="admin-meta-grid">
-            <div className="admin-meta-item">
+          <dl className="mpesa-receipt-grid">
+            <div>
               <dt>M-Pesa code</dt>
               <dd>{submitted.mpesaCode}</dd>
             </div>
-            <div className="admin-meta-item">
+            <div>
               <dt>Amount</dt>
               <dd>
                 {submitted.currency || 'KES'} {Number(submitted.amount).toLocaleString()}
               </dd>
             </div>
-            <div className="admin-meta-item">
+            <div>
               <dt>Status</dt>
               <dd>Awaiting Verification</dd>
             </div>
           </dl>
           {onNavigateDashboard && (
-            <button type="button" className="btn-fetch" onClick={onNavigateDashboard}>
+            <button type="button" className="btn-fetch mpesa-primary-btn" onClick={onNavigateDashboard}>
               Go to dashboard
             </button>
           )}
@@ -154,109 +155,134 @@ export default function ManualMpesaCheckout({
 
   return (
     <div className="checkout-container manual-mpesa-checkout">
-      <button type="button" className="btn-small checkout-back" onClick={onBack}>
+      <button type="button" className="mpesa-back-btn" onClick={onBack}>
         ← Back to plans
       </button>
 
-      <div className="checkout-header">
+      <header className="mpesa-checkout-header">
+        <p className="mpesa-kicker">Secure checkout</p>
         <h2>Pay via M-Pesa Till</h2>
-        <p>
-          <strong>{tierData?.name || tier}</strong> · KES {Number(expectedAmount).toLocaleString()}/
-          {periodLabel}
+        <p className="mpesa-plan-line">
+          <span className="mpesa-plan-name">{planName}</span>
+          <span className="mpesa-plan-price">
+            KES {Number(expectedAmount).toLocaleString()}
+            <span>/{periodLabel}</span>
+          </span>
         </p>
-      </div>
+      </header>
 
-      <section className="manual-mpesa-till-card" aria-label="M-Pesa Till details">
-        <p className="pricing-payment-intro">Send payment to:</p>
-        <ul className="pricing-payment-details">
-          <li>
-            <span className="pricing-payment-label">Business Name</span>
-            <span className="pricing-payment-value">{businessName}</span>
-          </li>
-          <li>
-            <span className="pricing-payment-label">Till Number</span>
-            <span className="pricing-payment-value">{tillNumber}</span>
-          </li>
-          <li>
-            <span className="pricing-payment-label">Plan Price</span>
-            <span className="pricing-payment-value">KES {Number(expectedAmount).toLocaleString()}</span>
-          </li>
-          <li>
-            <span className="pricing-payment-label">Binance Pay — Binance ID</span>
-            <span className="pricing-payment-value">{binanceId}</span>
-          </li>
-        </ul>
-        <ol className="manual-mpesa-steps">
-          {instructions.map(step => (
-            <li key={step}>{step}</li>
+      <section className="mpesa-pay-panel" aria-label="Payment destination">
+        <div className="mpesa-pay-panel-top">
+          <h3>Send payment to</h3>
+          <p>Use Buy Goods and Till Number below. Keep your confirmation code.</p>
+        </div>
+        <div className="mpesa-dest-grid">
+          <div className="mpesa-dest-item">
+            <span className="mpesa-dest-label">Business Name</span>
+            <span className="mpesa-dest-value">{businessName}</span>
+          </div>
+          <div className="mpesa-dest-item mpesa-dest-highlight">
+            <span className="mpesa-dest-label">Till Number</span>
+            <span className="mpesa-dest-value mpesa-dest-till">{tillNumber}</span>
+          </div>
+          <div className="mpesa-dest-item">
+            <span className="mpesa-dest-label">Plan Price</span>
+            <span className="mpesa-dest-value">KES {Number(expectedAmount).toLocaleString()}</span>
+          </div>
+          <div className="mpesa-dest-item">
+            <span className="mpesa-dest-label">Binance ID</span>
+            <span className="mpesa-dest-value">{binanceId}</span>
+          </div>
+        </div>
+        <ol className="mpesa-steps">
+          {instructions.map((step, index) => (
+            <li key={step}>
+              <span className="mpesa-step-num" aria-hidden="true">
+                {index + 1}
+              </span>
+              <span>{step}</span>
+            </li>
           ))}
         </ol>
       </section>
 
-      <form className="checkout-form manual-mpesa-form" onSubmit={handleSubmit}>
-        <h3>I Have Paid</h3>
-        <p className="admin-table-meta">Submit your M-Pesa details for verification. Access unlocks after approval.</p>
+      <form className="mpesa-form" onSubmit={handleSubmit}>
+        <div className="mpesa-form-header">
+          <h3>I Have Paid</h3>
+          <p>Submit your M-Pesa details for verification. Access unlocks after approval.</p>
+        </div>
 
-        {error && <div className="feature-lock admin-alert admin-alert-error">{error}</div>}
+        {error && (
+          <div className="mpesa-alert mpesa-alert-error" role="alert">
+            {error}
+          </div>
+        )}
 
-        <label className="admin-field">
-          <span>M-Pesa Code</span>
-          <input
-            className="admin-input"
-            value={mpesaCode}
-            onChange={e => setMpesaCode(e.target.value.toUpperCase())}
-            placeholder="e.g. QH7X2K9M1A"
-            required
-            minLength={8}
-            maxLength={15}
-            autoComplete="off"
-          />
-        </label>
+        <div className="mpesa-fields">
+          <label className="mpesa-field">
+            <span>M-Pesa Code</span>
+            <input
+              value={mpesaCode}
+              onChange={e => setMpesaCode(e.target.value.toUpperCase())}
+              placeholder="e.g. QH7X2K9M1A"
+              required
+              minLength={8}
+              maxLength={15}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
 
-        <label className="admin-field">
-          <span>Phone Number</span>
-          <input
-            className="admin-input"
-            value={phone}
-            onChange={e => setPhone(e.target.value)}
-            placeholder="2547XXXXXXXX"
-            required
-            inputMode="tel"
-          />
-        </label>
+          <div className="mpesa-field-row">
+            <label className="mpesa-field">
+              <span>Phone Number</span>
+              <input
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                placeholder="2547XXXXXXXX"
+                required
+                inputMode="tel"
+                autoComplete="tel"
+              />
+            </label>
 
-        <label className="admin-field">
-          <span>Amount (KES)</span>
-          <input
-            className="admin-input"
-            type="number"
-            min={1}
-            step={1}
-            value={amount}
-            onChange={e => setAmount(e.target.value)}
-            required
-          />
-        </label>
+            <label className="mpesa-field">
+              <span>Amount (KES)</span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={amount}
+                onChange={e => setAmount(e.target.value)}
+                required
+              />
+            </label>
+          </div>
 
-        <label className="admin-field">
-          <span>Notes (optional)</span>
-          <textarea
-            className="admin-input"
-            rows={3}
-            value={notes}
-            onChange={e => setNotes(e.target.value)}
-            placeholder="Any extra detail for the admin"
-            maxLength={2000}
-          />
-        </label>
+          <label className="mpesa-field">
+            <span>Notes (optional)</span>
+            <textarea
+              rows={3}
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder="Any extra detail for the admin"
+              maxLength={2000}
+            />
+          </label>
 
-        <label className="admin-field">
-          <span>Upload Screenshot (optional)</span>
-          <input type="file" accept="image/*" onChange={handleScreenshot} />
-          {screenshotName ? <small className="admin-table-meta">Attached: {screenshotName}</small> : null}
-        </label>
+          <label className="mpesa-upload">
+            <span className="mpesa-upload-title">Upload Screenshot (optional)</span>
+            <span className="mpesa-upload-hint">PNG or JPG · max 280 KB</span>
+            <input type="file" accept="image/*" onChange={handleScreenshot} />
+            {screenshotName ? (
+              <span className="mpesa-upload-file">Attached: {screenshotName}</span>
+            ) : (
+              <span className="mpesa-upload-cta">Choose image</span>
+            )}
+          </label>
+        </div>
 
-        <button type="submit" className={`btn-subscribe btn-${tier}`} disabled={loading}>
+        <button type="submit" className={`btn-subscribe btn-${tier} mpesa-submit`} disabled={loading}>
           <span className="btn-subscribe-label">{loading ? 'Submitting…' : 'I Have Paid — Submit'}</span>
         </button>
       </form>

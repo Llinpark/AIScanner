@@ -125,6 +125,9 @@ const SPREAD_OVERRIDE_SYMBOLS = [
   'US100'
 ];
 
+/** Platform allowlist — Admin Scanner may only enable a subset of these. */
+const SUPPORTED_ADMIN_SYMBOLS = [...SPREAD_OVERRIDE_SYMBOLS];
+
 const TP_SCORE_WEIGHT_FIELDS = [
   { key: 'internal_liquidity', label: 'Weight for Internal Liquidity' },
   { key: 'external_liquidity', label: 'Weight for External Liquidity' },
@@ -846,6 +849,33 @@ export default function AdminScanner() {
               onChange={e => updateCore('autoScanEnabled', e.target.checked)}
             />
           </Field>
+        </div>
+        <p className="admin-form-note">
+          Supported assets only (platform invariant): EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD,
+          XAU/USD, US30, US100. Unsupported symbols (Deriv / Jump / Volatility / crypto) are rejected
+          by Pine, webhook, and dashboard.
+        </p>
+        <div className="admin-form-grid">
+          {SUPPORTED_ADMIN_SYMBOLS.map(symbol => {
+            const selected = (form.symbols || SUPPORTED_ADMIN_SYMBOLS).includes(symbol);
+            return (
+              <Field key={symbol} label={symbol} className="admin-checkbox">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={e => {
+                    const current = Array.isArray(form.symbols)
+                      ? form.symbols
+                      : [...SUPPORTED_ADMIN_SYMBOLS];
+                    const next = e.target.checked
+                      ? [...new Set([...current, symbol])]
+                      : current.filter(s => s !== symbol);
+                    updateCore('symbols', next.length ? next : [symbol]);
+                  }}
+                />
+              </Field>
+            );
+          })}
         </div>
       </section>
 
