@@ -2,28 +2,30 @@
  * Liquidity Sweep + Fair Value Gap (Scalping) — all thresholds in one place.
  * Override via env: SCALPING_* keys (see resolveScalpingConfig).
  * TP settings come from the Scalping Strategy TP Profile (independent of day trading).
+ *
+ * Timeframe allowlists come from strategyArchitecture.js (canonical).
  */
 
 const { resolveTpProfile, SCALPING_TP_PROFILE } = require('../profiles');
+const { resolveArchitectureTimeframes } = require('./strategyArchitecture');
 
 const STRATEGY_ID = 'liquidity_sweep_fvg_scalp';
 const STRATEGY_NAME = 'Liquidity Sweep + Fair Value Gap (Scalping)';
 const STRATEGY_KEY = 'scalping';
 
 const _scalpTp = SCALPING_TP_PROFILE;
+const _archTf = resolveArchitectureTimeframes(STRATEGY_KEY);
 
 const DEFAULT_SCALPING_CONFIG = Object.freeze({
   id: STRATEGY_ID,
   name: STRATEGY_NAME,
   enabled: process.env.SCALPING_STRATEGY_ENABLED !== 'false',
 
-  // Timeframes — HTF is context only; entries never on 15m
-  htfTimeframe: process.env.SCALPING_HTF_TF || '15m',
-  entryTimeframes: (process.env.SCALPING_ENTRY_TFS || '3m,1m')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean),
-  defaultEntryTimeframe: process.env.SCALPING_DEFAULT_ENTRY_TF || '3m',
+  // Timeframes — HTF is context only; entries never on HTF (canonical: 3m/5m entry, 15m HTF)
+  htfTimeframe: _archTf.htfTimeframe,
+  htfTimeframes: Object.freeze([..._archTf.htfTimeframes]),
+  entryTimeframes: Object.freeze([..._archTf.entryTimeframes]),
+  defaultEntryTimeframe: _archTf.defaultEntryTimeframe,
 
   // Liquidity / swings
   swing: {
@@ -185,9 +187,18 @@ function resolveScalpingConfig(overrides = {}) {
     ...DEFAULT_SCALPING_CONFIG.takeProfit,
     ...(overrides.takeProfit || {})
   });
+  const archTf = resolveArchitectureTimeframes(STRATEGY_KEY, {
+    entryTimeframes: overrides.entryTimeframes,
+    defaultEntryTimeframe: overrides.defaultEntryTimeframe,
+    htfTimeframe: overrides.htfTimeframe
+  });
   return {
     ...DEFAULT_SCALPING_CONFIG,
     ...overrides,
+    htfTimeframe: archTf.htfTimeframe,
+    htfTimeframes: [...archTf.htfTimeframes],
+    entryTimeframes: [...archTf.entryTimeframes],
+    defaultEntryTimeframe: archTf.defaultEntryTimeframe,
     swing: { ...DEFAULT_SCALPING_CONFIG.swing, ...(overrides.swing || {}) },
     sessions: { ...DEFAULT_SCALPING_CONFIG.sessions, ...(overrides.sessions || {}) },
     mss: { ...DEFAULT_SCALPING_CONFIG.mss, ...(overrides.mss || {}) },

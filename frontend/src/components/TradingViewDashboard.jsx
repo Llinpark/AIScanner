@@ -8,6 +8,7 @@ import MarketChartPanel from './charts/MarketChartPanel';
 import { alertMatchesSymbol } from '../constants/markets';
 import { isInsightsSignal } from '../utils/insightsSignal';
 import { formatInstrumentPrice } from '../utils/pricePrecision';
+import { getStrategyArchitecture } from '../constants/strategyArchitecture';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -599,11 +600,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       <p className="setup-note">
                         Keep the script on the chart so Entry, SL, and TP1–3 draw when signals fire. Charts are
                         display-only and never block alerts.
-                        {pineStrategy === 'scalping'
-                          ? ' Scalping: use a 1m or 3m chart; HTF liquidity is 15m context only.'
-                          : pineStrategy === 'daytrading'
-                            ? ' Day Trading: use a 15m or 5m chart; HTF bias/liquidity is 4H context only.'
-                            : ''}
+                        {getStrategyArchitecture(pineStrategy)?.chartHint
+                          ? ` ${getStrategyArchitecture(pineStrategy).chartHint}`
+                          : ''}
                       </p>
                     </div>
                   )}

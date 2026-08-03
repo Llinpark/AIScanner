@@ -170,6 +170,16 @@ for (const [label, g] of [
   assert(!/\blblBadge\b/.test(g.script), `${label}: must not use lblBadge`);
   assert(!g.script.includes('SEND_CANDLE_FEED'), `${label}: must not include candle feed`);
   assert(g.script.includes('licenseOk and entryTfOk'), `${label}: missing license+entryTf fire gate`);
+  assert(g.script.includes('DEBUG_MODE'), `${label}: missing DEBUG_MODE input`);
+  assert(g.script.includes('pineAlertBlockReason'), `${label}: missing pineAlertBlockReason diagnostics`);
+  assert(g.script.includes('fireLong to alert()'), `${label}: missing fireLong to alert() debug log`);
+  assert(g.script.includes('TIMEFRAME VALIDATION'), `${label}: missing dedicated TIMEFRAME VALIDATION block`);
+  assert(g.script.includes('entryChartOk'), `${label}: missing entryChartOk gate`);
+  assert(g.script.includes('htfTfOk'), `${label}: missing htfTfOk gate`);
+  assert(g.script.includes('chartIsHtf'), `${label}: missing chartIsHtf guard`);
+  assert(g.script.includes('barmerge.lookahead_off'), `${label}: request.security must use lookahead_off`);
+  assert(g.script.includes('barstate.isconfirmed'), `${label}: missing barstate.isconfirmed for hist/rt parity`);
+  assert(!/timeframe\.period\s*==/.test(g.script), `${label}: must not use rigid timeframe.period equality gates`);
   assert(g.script.includes('max_labels_count=500'), `${label}: max_labels_count should be 500`);
   assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);
   assert(g.script.includes('alert.freq_all'), `${label}: lifecycle alerts must use freq_all`);
@@ -195,17 +205,79 @@ assert(scalp.script.includes('expiryBars = input.int(60'), 'scalping default exp
 assert(day.script.includes('enableTradeExpiry = input.bool(true'), 'daytrading missing enableTradeExpiry input');
 assert(scalp.script.includes('enableTradeExpiry = input.bool(true'), 'scalping missing enableTradeExpiry input');
 
+// Dedicated TF architecture checks (config-driven)
+const {
+  STRATEGY_ARCHITECTURE,
+  buildPineTfVariables,
+  validateAllStrategyArchitectures
+} = require('../strategies/config/strategyArchitecture');
+
+const archReport = validateAllStrategyArchitectures();
+assert(archReport.ok, `strategy architecture invalid: ${archReport.errors.join('; ')}`);
+
+assert(day.script.includes('STRATEGY_KEY = "daytrading"'), 'daytrading: missing STRATEGY_KEY');
+assert(scalp.script.includes('STRATEGY_KEY = "scalping"'), 'scalping: missing STRATEGY_KEY');
+assert(
+  day.script.includes('timeframe.multiplier == 5 or timeframe.multiplier == 15'),
+  'daytrading: entry charts must be 5m or 15m'
+);
+assert(
+  scalp.script.includes('timeframe.multiplier == 3 or timeframe.multiplier == 5'),
+  'scalping: entry charts must be 3m or 5m'
+);
+assert(!/timeframe\.multiplier == 1 or timeframe\.multiplier == 3/.test(scalp.script), 'scalping: must not allow 1m entry');
+assert(day.script.includes('htfSec == 3600 or htfSec == 14400'), 'daytrading: HTF must be 1H or 4H');
+assert(scalp.script.includes('htfSec == 900'), 'scalping: HTF must be 15m');
+assert(day.instructions[0].includes('5m or 15m'), 'daytrading instructions must mention 5m/15m entry');
+assert(scalp.instructions[0].includes('3m or 5m'), 'scalping instructions must mention 3m/5m entry');
+assert(scalp.instructions[0].includes('15m'), 'scalping instructions must mention 15m HTF');
+
+// Config-driven HTF bake-in + diagnostic labels
+assert(scalp.strategyArchitecture.bakedHtfPine === '15', 'scalping: baked HTF must be 15 from Strategy Config');
+assert(day.strategyArchitecture.bakedHtfPine === '60', 'daytrading: baked default HTF must be 60 (1h)');
+assert(
+  JSON.stringify(scalp.strategyArchitecture.entryTimeframes) ===
+    JSON.stringify([...STRATEGY_ARCHITECTURE.scalping.entryTimeframes]),
+  'scalping: generated entry TFs must match Strategy Architecture'
+);
+assert(
+  JSON.stringify(day.strategyArchitecture.htfTimeframes) ===
+    JSON.stringify([...STRATEGY_ARCHITECTURE.daytrading.htfTimeframes]),
+  'daytrading: generated HTFs must match Strategy Architecture'
+);
+assert(scalp.script.includes('Wrong Entry Timeframe'), 'scalping: missing Wrong Entry Timeframe label');
+assert(scalp.script.includes('Wrong HTF Configuration'), 'scalping: missing Wrong HTF Configuration label');
+assert(scalp.script.includes('Chart opened on HTF'), 'scalping: missing Chart opened on HTF label');
+assert(scalp.script.includes('Unsupported Strategy Configuration'), 'scalping: missing Unsupported Strategy label');
+assert(scalp.script.includes('Missing HTF Confirmation'), 'scalping: missing Missing HTF Confirmation label');
+assert(day.script.includes('Wrong Entry Timeframe'), 'daytrading: missing Wrong Entry Timeframe label');
+assert(day.script.includes('htfConfigured'), 'daytrading: missing htfConfigured gate');
+assert(scalp.script.includes('strategyCfgOk'), 'scalping: missing strategyCfgOk gate');
+
+const scalpVars = buildPineTfVariables('scalping');
+assert(scalp.script.includes(scalpVars.ENTRY_CHART_OK), 'scalping: ENTRY_CHART_OK from config must appear in script');
+assert(scalp.script.includes(`input.timeframe("${scalpVars.HTF_TF}"`), 'scalping: HTF input default must match config');
+
+// No obsolete 1m scalping references in generated scripts / architecture
+assert(!STRATEGY_ARCHITECTURE.scalping.entryTimeframes.includes('1m'), 'architecture must not list 1m scalping');
+assert(!/multiplier == 1\b/.test(scalp.script), 'scalping generated Pine must not allow 1m multiplier');
+
 console.log(
   JSON.stringify(
     {
       ok: true,
       pineGlobalMutationAudit: 'passed',
+      tfValidationArchitecture: 'passed',
+      strategyArchitectureDriven: 'passed',
       violations: 0,
       daytrading: {
         hasPersistence: true,
         expiryDefault: 80,
         enableTradeExpiry: true,
         compileSafeDrawingEngine: true,
+        entryCharts: day.strategyArchitecture.entryTimeframes,
+        htf: day.strategyArchitecture.htfTimeframes,
+        bakedHtfPine: day.strategyArchitecture.bakedHtfPine,
         webhookUrl: day.webhookUrl
       },
       scalping: {
@@ -213,6 +285,9 @@ console.log(
         expiryDefault: 60,
         enableTradeExpiry: true,
         compileSafeDrawingEngine: true,
+        entryCharts: scalp.strategyArchitecture.entryTimeframes,
+        htf: scalp.strategyArchitecture.htfTimeframes,
+        bakedHtfPine: scalp.strategyArchitecture.bakedHtfPine,
         webhookUrl: scalp.webhookUrl
       }
     },

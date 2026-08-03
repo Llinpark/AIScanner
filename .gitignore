@@ -13,6 +13,9 @@ backend/.env
 backend/dev-users.json
 backend/dev-journal.json
 
+# Local Mongo dumps / cleanup artifacts (never commit)
+backups/
+
 python-service/.venv/
 __pycache__/
 *.py[cod]

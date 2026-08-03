@@ -66,6 +66,8 @@ describe('strategyRuntimeConfig persistence', () => {
     });
     assert.equal(getActiveStrategy(), 'daytrading');
     assert.equal(getScannerConfig().activeStrategy, 'daytrading');
+    // Invalid scalping HTF is clamped by Strategy Architecture
+    assert.equal(getScannerConfig().strategies.scalping.htfTimeframe, '15m');
   });
 
   it('persists activeStrategy in memory and returns it via scanner config', () => {
@@ -93,14 +95,15 @@ describe('strategyRuntimeConfig persistence', () => {
 
     applyStrategyConfig({
       activeStrategy: 'scalping',
+      // Invalid scalping HTF must clamp to architecture default (15m)
       scalping: { htfTimeframe: '5m' }
     });
 
     const strategies = getStrategyAdminConfig();
     assert.equal(getActiveStrategy(), 'scalping');
-    assert.equal(strategies.scalping.htfTimeframe, '5m');
+    assert.equal(strategies.scalping.htfTimeframe, '15m');
     assert.equal(strategies.daytrading.htfTimeframe, '4h');
-    assert.equal(getResolvedScalpingConfig().htfTimeframe, '5m');
+    assert.equal(getResolvedScalpingConfig().htfTimeframe, '15m');
     assert.equal(getResolvedDaytradingConfig().htfTimeframe, '4h');
   });
 

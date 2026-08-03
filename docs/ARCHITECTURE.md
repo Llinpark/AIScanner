@@ -45,3 +45,62 @@ Optional FastAPI (`kaching-python`) may run analytics on Node-injected candles f
 **Status:** Accepted (2026-07-24)
 
 Dashboard signal list updates exclusively from webhook-driven Socket.IO events (`signal:update`, `signal:outcome`, `tv:live-alert`). No polling loop for new signals.
+
+## Decision: Strategy Configuration is the single source of truth for timeframes
+
+**Status:** Accepted (2026-08-03)
+
+All Entry Timeframe and HTF Confirmation layouts are defined in one canonical module:
+
+`backend/strategies/config/strategyArchitecture.js`
+
+(Frontend mirror: `frontend/src/constants/strategyArchitecture.js`.)
+
+Admin Configuration → Strategy Configuration → Generated Pine. The Pine generator must never hardcode HTF, Entry TF, or TF validation expressions; it injects them from Strategy Configuration. Scanner thresholds (confidence, sessions, liquidity, TP profiles) stay in per-strategy config modules that **consume** the architecture TF allowlists.
+
+### Scalping Architecture
+
+| Role | Timeframes |
+|------|------------|
+| **Entry Timeframe** | `3m`, `5m` |
+| **HTF Confirmation** | `15m` (via `request.security` only) |
+
+- `1m` is **not** a supported Entry Timeframe.
+- Never open the 15m chart for entries; never fire entries on HTF candles.
+
+### Day Trading Architecture
+
+| Role | Timeframes |
+|------|------------|
+| **Entry Timeframe** | `5m`, `15m` |
+| **HTF Confirmation** | `1H`, `4H` (via `request.security` only) |
+
+- Default baked HTF is `1H` from Strategy Configuration; advanced users may switch the Pine HTF input to `4H`.
+- Never open 1H/4H charts for entries.
+
+### HTF Confirmation & `request.security`
+
+HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.lookahead_off)`. Entries evaluate on the chart Entry Timeframe only. This keeps TradingView as the sole source of truth for trades while preventing HTF-chart mis-attachment.
+
+### No Repainting guarantees
+
+- Confirmed-bar gating (`barstate.isconfirmed`) for hist/rt parity.
+- `request.security` uses `lookahead_off`.
+- TF validation (`entryChartOk` / `htfTfOk` / `chartIsHtf`) blocks signals on wrong charts and surfaces diagnostic labels instead of silent suppression:
+  - Wrong Entry Timeframe
+  - Wrong HTF Configuration
+  - Chart opened on HTF
+  - Unsupported Strategy Configuration
+  - Missing HTF Confirmation
+
+### TradingView workflow
+
+1. Choose strategy (Scalping or Day Trading) in the app.
+2. Generate personal Pine (HTF default baked from Strategy Configuration).
+3. Attach script to an allowed **Entry Timeframe** chart.
+4. Create alert → webhook → Kaching distribution (dashboard / Telegram / MT5).
+5. After admin TF/config changes or deploy: regenerate Pine and recreate the alert.
+
+Strategy math (liquidity sweep, FVG, BOS/CHOCH, entry models, confidence, risk/TP/SL) is unchanged by this architecture layer. Future strategies (Swing, Position, Crypto, Gold) register architecture slots without modifying Pine strategy math.
+
+Startup validation (`assertStrategyArchitecturesValid` / `initStrategyRuntimeConfig`) rejects invalid Entry/HTF combinations before Pine generation.

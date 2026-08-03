@@ -129,6 +129,7 @@ describe('Strategy Engine architecture', () => {
 
   it('keeps scalping and daytrading admin configs independent via catalog', () => {
     applyStrategyConfig({
+      // Invalid scalping HTF clamps to architecture default; TP override stays independent
       scalping: { htfTimeframe: '5m', takeProfit: { maxTpDistancePips: 22 } },
       daytrading: { htfTimeframe: '4h', takeProfit: { maxTpDistancePips: 100 } }
     });
@@ -137,7 +138,7 @@ describe('Strategy Engine architecture', () => {
     });
 
     const admin = getStrategyAdminConfig();
-    assert.equal(admin.scalping.htfTimeframe, '5m');
+    assert.equal(admin.scalping.htfTimeframe, '15m');
     assert.equal(admin.scalping.takeProfit.maxTpDistancePips, 22);
     assert.equal(admin.daytrading.takeProfit.maxTpDistancePips, 88);
 
@@ -146,7 +147,7 @@ describe('Strategy Engine architecture', () => {
     const swingEntry = catalog.find(c => c.key === 'swing');
     assert.ok(scalpEntry);
     assert.equal(scalpEntry.status, 'live');
-    assert.equal(scalpEntry.settings.htfTimeframe, '5m');
+    assert.equal(scalpEntry.settings.htfTimeframe, '15m');
     assert.ok(swingEntry);
     assert.equal(swingEntry.status, 'stub');
     assert.equal(swingEntry.comingSoon, true);

@@ -4,7 +4,8 @@ indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=
 // Generated for: {{SUBSCRIBER_LABEL}}
 // Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
 // Strategy: Liquidity Sweep + Fair Value Gap (Scalping)
-// HTF 15m = context only. Entries only when this chart is 1m or 3m.
+// TF architecture (from Strategy Configuration): entry = {{ARCH_ENTRY_LABEL}}; HTF = {{ARCH_HTF_LABEL}} via request.security() only.
+// Never require opening an HTF chart for entries; never fire entries on HTF candles.
 // TradingView overlays show ONLY: Kaching Buy/Sell, Entry, SL, TP1–3 (with prices).
 
 // ===== CONFIGURATION =====
@@ -16,13 +17,14 @@ LICENSED_TV_USERNAME = "{{TV_USERNAME}}"
 CONFIRM_TV_USERNAME = input.string("{{TV_USERNAME}}", "Confirm your TradingView username", group="KachingFx License", tooltip="Prefilled with the username this script was licensed for. Leave as-is to unlock, or override if needed. Signals and alerts stay locked until it matches.")
 SHOW_TRADE_LINES = true
 SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
+DEBUG_MODE = input.bool(false, "DEBUG_MODE — show block reasons", group="KachingFx", tooltip="When ON, draws labels explaining why alert() did not fire (license, wrong entry TF, HTF, confidence, trade active, retrace, FVG). Turn OFF for live trading.")
 levelExtendBars = input.int(22, "Initial trade level length (bars)", minval=8, maxval=60, group="KachingFx Display", tooltip="Starting length of Entry/SL/TP lines. While a trade is active, lines keep extending with each new candle until TP3/SL/expiry/cancel.")
 enableTradeExpiry = input.bool(true, "Enable trade candle expiry", group="KachingFx Display", tooltip="When ON, active trades auto-close after expiryBars if TP3/SL not hit. When OFF, trades stay until TP3/SL/cancel only. Never clears because a later scan finds no setup.")
 expiryBars = input.int(60, "Active trade expiry (candles)", minval=5, maxval=500, group="KachingFx Display", tooltip="Close and remove the active trade after this many candles if TP3/SL not hit (only when Enable trade candle expiry is ON). Default 60 for scalping so trades are not wiped after a few moments.")
 smartLabelMinVerticalTicks = input.int(12, "Smart label min vertical gap (ticks)", minval=2, maxval=250, group="KachingFx Display", tooltip="Minimum price-space gap between trade labels before lower-priority labels are shifted.")
 minHorizontalGapBars = input.int(2, "Smart label min horizontal gap (bars)", minval=1, maxval=8, group="KachingFx Display", tooltip="Horizontal spacing used for staggered smart labels and left/right spillover.")
 
-htfTf = input.timeframe("{{HTF_TF}}", "HTF context (never entries)", group="Scalp — Structure")
+htfTf = input.timeframe("{{HTF_TF}}", "{{HTF_INPUT_LABEL}}", group="Scalp — Structure", tooltip="{{HTF_INPUT_TOOLTIP}}")
 swingLen = input.int({{SWING_SENSITIVITY}}, "Swing sensitivity", minval=1, maxval=5, group="Scalp — Structure")
 eqTolAtr = input.float({{EQH_EQL_TOLERANCE}}, "EQH/EQL ATR tolerance", minval=0.01, maxval=0.5, group="Scalp — Structure")
 
@@ -48,8 +50,25 @@ normalizeTvUser(string s) =>
 
 licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_USERNAME) == LICENSED_TV_USERNAME
 
+// ===== TIMEFRAME VALIDATION (from Strategy Configuration — Scalping) =====
+// Entry-chart allowlist and HTF confirmation are injected from backend Strategy Configuration.
+STRATEGY_KEY = "{{STRATEGY_KEY}}"
+strategyCfgOk = STRATEGY_KEY == "scalping"
+// Permitted entry charts only — signals never fire on HTF candles.
+entryChartOk = {{ENTRY_CHART_OK}}
+// Required HTF (seconds). Default baked from Strategy Configuration; advanced users may change input.
+htfSec = timeframe.in_seconds(htfTf)
+htfConfigured = htfSec > 0
+htfTfOk = {{HTF_TF_OK}}
+// Chart must be an entry TF; HTF is never a valid entry chart.
+chartSec = timeframe.in_seconds()
+chartIsHtf = htfConfigured and chartSec == htfSec
+entryTfOk = strategyCfgOk and entryChartOk and htfConfigured and htfTfOk and not chartIsHtf
+
 // Any TradingView instrument is valid — chart OHLC is the source of truth (no symbol allowlist).
 var label licenseLockLabel = na
+var label tfLockLabel = na
+var label debugBlockLabel = na
 if barstate.islast
     if not licenseOk
         if na(licenseLockLabel)
@@ -59,6 +78,17 @@ if barstate.islast
     else if not na(licenseLockLabel)
         label.delete(licenseLockLabel)
         licenseLockLabel := na
+    // TF gate diagnostics — do not alter strategy math; never silently suppress without a label.
+    tfMsg = not strategyCfgOk ? "{{DIAG_UNSUPPORTED}}" : not htfConfigured ? "{{DIAG_MISSING_HTF}}" : not entryChartOk ? "{{DIAG_WRONG_ENTRY}}" : not htfTfOk ? "{{DIAG_WRONG_HTF}}" : chartIsHtf ? "{{DIAG_CHART_IS_HTF}}" : ""
+    if str.length(tfMsg) > 0 and licenseOk
+        if na(tfLockLabel)
+            tfLockLabel := label.new(bar_index, low, tfMsg, style=label.style_label_up, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
+        else
+            label.set_xy(tfLockLabel, bar_index, low)
+            label.set_text(tfLockLabel, tfMsg)
+    else if not na(tfLockLabel)
+        label.delete(tfLockLabel)
+        tfLockLabel := na
 
 // ===== COLORS (BUY vs SELL schemes) =====
 colBuy = #2563eb
@@ -106,7 +136,8 @@ buildPayload(string alertType, string direction, float entry, float sl, float tp
     reasonJson = str.length(closedReason) > 0 ? ',"closedReason":"' + closedReason + '"' : ""
     '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Scalping)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_scalp","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + signalId + '","signalUuid":"' + signalId + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true' + reasonJson + '}'
 
-// ===== HTF LIQUIDITY SWEEP (15m context — never used for entry price) =====
+// ===== HTF LIQUIDITY / STRUCTURE ({{ARCH_HTF_LABEL}} via request.security — never entry price) =====
+// lookahead_off + barstate.isconfirmed keep historical/realtime parity (no future HTF peek).
 htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
 htfLow = request.security(syminfo.tickerid, htfTf, low, barmerge.gaps_off, barmerge.lookahead_off)
 htfClose = request.security(syminfo.tickerid, htfTf, close, barmerge.gaps_off, barmerge.lookahead_off)
@@ -275,15 +306,43 @@ resolveStop(string direction, float entryPx) =>
 resolveEntry(string direction) =>
     entryModel == "ce" ? fvgCe : close
 
-// Chart TF guard — entries only on 1 / 3 minute charts
-entryTfOk = timeframe.isminutes and (timeframe.multiplier == 1 or timeframe.multiplier == 3)
+// DEBUG_MODE helper (must be declared before DRAWING_ENGINE executable blocks).
+// Does not change strategy math — only labels/log why alert() is skipped.
+pineAlertBlockReason(bool tradeActiveNow) =>
+    not licenseOk ? "license" :
+     not strategyCfgOk ? "unsupported_strategy_cfg" :
+     not htfConfigured ? "htf_missing" :
+     not entryChartOk ? "wrong_entry_tf" :
+     not htfTfOk ? "wrong_htf" :
+     chartIsHtf ? "chart_is_htf" :
+     tradeActiveNow ? "trade_active" :
+     not barstate.isconfirmed ? "bar_unconfirmed" :
+     confScore() < confThreshold ? "confidence" :
+     not fvgActive ? "fvg_invalid" :
+     not (retraceLong or retraceShort) ? "retrace" :
+     "no_setup"
+
+// entryTfOk computed in TIMEFRAME VALIDATION (Scalping) — {{ARCH_ENTRY_LABEL}} entry + {{ARCH_HTF_LABEL}} HTF.
 
 {{DRAWING_ENGINE}}
 
 // One active trade per chart: never fire/replace while a trade is still open.
-// Any TV instrument may arm trades / webhooks when license + structure conditions pass.
+// Alerts fire only on valid entry TF bars (entryTfOk); HTF is confirmation-only.
 fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
 fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
+
+if DEBUG_MODE and barstate.islast and not fireLong and not fireShort
+    dbgReason = pineAlertBlockReason(tradeIsActive())
+    dbgText = "DEBUG block: " + dbgReason + " | conf=" + str.tostring(confScore(), "#.#") + "/" + str.tostring(confThreshold, "#.#")
+    if na(debugBlockLabel)
+        debugBlockLabel := label.new(bar_index, high, dbgText, style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
+    else
+        label.set_xy(debugBlockLabel, bar_index, high)
+        label.set_text(debugBlockLabel, dbgText)
+    log.info("[PIPELINE] AlertSkip | " + syminfo.ticker + " | " + timeframe.period + " | FAIL | " + dbgReason)
+else if not na(debugBlockLabel) and (not DEBUG_MODE or fireLong or fireShort)
+    label.delete(debugBlockLabel)
+    debugBlockLabel := na
 
 if fireLong
     e = resolveEntry("long")
@@ -292,6 +351,8 @@ if fireLong
     conf = confScore() / 100.0
     sigId = makeSignalId()
     msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
+    if DEBUG_MODE
+        log.info("[PIPELINE] Alert | " + syminfo.ticker + " | " + timeframe.period + " | " + sigId + " | PASS | fireLong to alert()")
     alert(msg, alert.freq_all)
     // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0
@@ -349,6 +410,8 @@ if fireShort
     conf = confScore() / 100.0
     sigId = makeSignalId()
     msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
+    if DEBUG_MODE
+        log.info("[PIPELINE] Alert | " + syminfo.ticker + " | " + timeframe.period + " | " + sigId + " | PASS | fireShort to alert()")
     alert(msg, alert.freq_all)
     // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0

@@ -28,6 +28,19 @@ const requireMockPayments = require('./middleware/requireMockPayments');
 
 assertProductionSecurityConfig();
 
+// Fail fast if Strategy Configuration TF layouts are invalid (before Pine generation).
+try {
+  const {
+    assertStrategyArchitecturesValid
+  } = require('./strategies/config/strategyArchitecture');
+  assertStrategyArchitecturesValid();
+} catch (err) {
+  console.error('[StrategyArchitecture] Startup validation failed:', err.message);
+  if (process.env.NODE_ENV === 'production') {
+    throw err;
+  }
+}
+
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
 
@@ -72,6 +85,12 @@ const {
   validateKachingEntrySignal,
   isStructuredEntryAlert
 } = require('./utils/kachingSignalLevels');
+const {
+  logPipeline,
+  extractPipelineMeta,
+  clientIp,
+  payloadSize
+} = require('./utils/pipelineLog');
 const MarketScannerService = require('./services/MarketScannerService');
 const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
 const PythonAiService = require('./services/PythonAiService');
@@ -147,7 +166,23 @@ async function resolveUser(username) {
 
 async function assertTradingViewWebhook(req, res) {
   // Prefer per-user licenseToken (HMAC) over legacy shared secret; rate-limit failures.
+  const probeBody =
+    typeof req.body === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(req.body);
+          } catch {
+            return {};
+          }
+        })()
+      : req.body || {};
+  const meta = extractPipelineMeta(probeBody);
+
   if (!tradingViewAuthFailureTracker.check(req, res)) {
+    logPipeline('Auth', 'FAIL', {
+      ...meta,
+      reason: 'auth_rate_limited'
+    });
     return null;
   }
 
@@ -155,15 +190,21 @@ async function assertTradingViewWebhook(req, res) {
   if (!auth.ok) {
     tradingViewAuthFailureTracker.recordFailure(req);
     const reason = auth.reason || 'unauthorized';
+    const bodyMeta = extractPipelineMeta(auth.body || probeBody);
     console.warn(
-      `[TV Webhook] Auth rejected (${reason}) symbol=${auth.body?.symbol || auth.body?.ticker || 'n/a'}`
+      `[TV Webhook] Auth rejected (${reason}) symbol=${bodyMeta.symbol || 'n/a'}`
     );
+    logPipeline('Auth', 'FAIL', { ...bodyMeta, reason });
     res.status(401).json({
       message: 'Invalid webhook authentication',
       reason
     });
     return null;
   }
+  logPipeline('Auth', 'PASS', {
+    ...extractPipelineMeta(auth.body || probeBody),
+    reason: `mode=${auth.mode || 'ok'}`
+  });
   req.webhookAuth = auth;
   return auth;
 }
@@ -304,6 +345,33 @@ app.post('/api/webhook/telegram', async (req, res) => {
 });
 
 app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
+  const t0 = Date.now();
+  // STEP 4 — log BEFORE auth so silent upstream drops are visible in Fly/local logs.
+  const earlyBody =
+    typeof req.body === 'string'
+      ? (() => {
+          try {
+            return JSON.parse(req.body);
+          } catch {
+            return {};
+          }
+        })()
+      : req.body && typeof req.body === 'object'
+        ? req.body
+        : {};
+  const earlyMeta = extractPipelineMeta(earlyBody);
+  const size = payloadSize(req);
+  const ip = clientIp(req);
+  console.log(
+    `[TV WEBHOOK RECEIVED] timestamp=${new Date().toISOString()} ip=${ip} ` +
+      `symbol=${earlyMeta.symbol || 'n/a'} timeframe=${earlyMeta.timeframe || 'n/a'} ` +
+      `signalUuid=${earlyMeta.signalUuid || 'n/a'} payloadBytes=${size}`
+  );
+  logPipeline('WebhookReceived', 'PASS', {
+    ...earlyMeta,
+    reason: `ip=${ip}; bytes=${size}`
+  });
+
   try {
     const auth = await assertTradingViewWebhook(req, res);
     if (!auth) return;
@@ -311,6 +379,7 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
     // Prefer auth.body (already JSON-parsed) so text/plain TV posts are not re-parsed incorrectly.
     const rawPayload = auth.body || req.body;
     const parsed = TradingViewAlertService.parseWebhookBody(rawPayload);
+    const meta = extractPipelineMeta(parsed);
     const normalizedAlertType = TradingViewAlertService.normalizeAlertType(
       parsed.alertType || parsed.alert_type || parsed.type
     );
@@ -330,6 +399,10 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       console.log(
         `[TV Webhook] Candle feed acknowledged (no scan/fetch): ${parsed.symbol || parsed.ticker}`
       );
+      logPipeline('CandleAck', 'PASS', {
+        ...meta,
+        reason: 'candle_feed_no_signal_publish'
+      });
       return res.status(201).json({
         success: true,
         mode: 'candle_ack',
@@ -339,15 +412,69 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       });
     }
 
+    logPipeline('Validation', 'PASS', {
+      ...meta,
+      reason: `alertType=${normalizedAlertType}; structuredEntry=${isStructuredEntry}`
+    });
+
     const result = await MarketScannerService.publishTradingViewAlert(
       io,
       rawPayload,
       inMemorySignals
     );
-    return res.status(201).json({ success: true, ...result });
+
+    const latencyMs = Date.now() - t0;
+    if (result?.rejected) {
+      logPipeline('Publish', 'FAIL', {
+        ...meta,
+        signalUuid: result.signalUuid || meta.signalUuid,
+        reason: result.reason || 'rejected'
+      });
+    } else {
+      logPipeline('Publish', 'PASS', {
+        ...meta,
+        signalUuid: result.signalUuid || meta.signalUuid,
+        reason: `mode=${result.mode || 'broadcast'}; delivered=${result.delivered ?? 0}; latencyMs=${latencyMs}`
+      });
+    }
+
+    return res.status(201).json({ success: true, latencyMs, ...result });
   } catch (error) {
+    const rejectedFields =
+      error?.rejectedFields ||
+      (error?.message && /missing/i.test(error.message) ? error.message : null);
+    logPipeline('Validation', 'FAIL', {
+      ...earlyMeta,
+      reason: rejectedFields || error.message || 'webhook_processing_failed'
+    });
     console.error('TradingView webhook error:', error);
-    return res.status(500).json({ message: 'TradingView webhook processing failed', error: error.message });
+    return res.status(500).json({
+      message: 'TradingView webhook processing failed',
+      error: error.message,
+      rejectedFields: rejectedFields || undefined
+    });
+  }
+});
+
+/**
+ * Dev-only: POST one valid entry through the REAL /api/webhook/tradingview production path.
+ * Never enabled in production. Set ENABLE_PIPELINE_SELF_TEST=true to expose.
+ */
+app.post('/api/dev/pipeline-self-test', async (req, res) => {
+  if (process.env.NODE_ENV === 'production' || process.env.ENABLE_PIPELINE_SELF_TEST !== 'true') {
+    return res.status(404).json({ message: 'Not found' });
+  }
+
+  try {
+    const { runPipelineSelfTest } = require('./utils/pipelineSelfTest');
+    const report = await runPipelineSelfTest({
+      io,
+      inMemorySignals
+    });
+    return res.status(report.ok ? 200 : 500).json(report);
+  } catch (error) {
+    console.error('[PipelineSelfTest] failed:', error);
+    return res.status(500).json({ ok: false, error: error.message });
   }
 });
 

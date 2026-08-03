@@ -18,6 +18,7 @@ const SignalEnrichmentService = require('../services/SignalEnrichmentService');
 const TradeDeliveryService = require('../services/TradeDeliveryService');
 const TradeLifecycleService = require('../services/TradeLifecycleService');
 const { normalizeSymbol } = require('../config/symbols');
+const { logPipeline, extractPipelineMeta } = require('../utils/pipelineLog');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -182,6 +183,8 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 }
 
 async function saveSignal(signalData, inMemorySignals) {
+  const meta = extractPipelineMeta(signalData);
+
   if (!isDbConnected()) {
     const saved = {
       ...signalData,
@@ -191,6 +194,10 @@ async function saveSignal(signalData, inMemorySignals) {
     if (Array.isArray(inMemorySignals)) {
       inMemorySignals.unshift(saved);
     }
+    logPipeline('MongoSave', 'PASS', {
+      ...meta,
+      reason: `in_memory_fallback; id=${saved._id}`
+    });
     return saved;
   }
 
@@ -201,9 +208,24 @@ async function saveSignal(signalData, inMemorySignals) {
     if (Array.isArray(inMemorySignals)) {
       inMemorySignals.unshift(saved.toObject ? saved.toObject() : saved);
     }
+    logPipeline('MongoSave', 'PASS', {
+      ...meta,
+      signalUuid: saved.signalUuid || saved.signalId || meta.signalUuid,
+      reason: `id=${saved._id}`
+    });
     return saved;
   } catch (error) {
-    console.error('[Alerts] saveSignal failed:', error.message);
+    const details =
+      error?.errors
+        ? Object.entries(error.errors)
+            .map(([k, v]) => `${k}:${v?.message || v}`)
+            .join(', ')
+        : error.message;
+    console.error('[Alerts] saveSignal failed:', details);
+    logPipeline('MongoSave', 'FAIL', {
+      ...meta,
+      reason: details || 'mongo_save_failed'
+    });
     throw error;
   }
 }
@@ -374,7 +396,9 @@ function buildSignalData(body) {
     telegramSent: false,
     mt5Sent: false,
     emailSent: false,
-    chartSnapshot: body.chartSnapshot || body.chart_snapshot || undefined
+    chartSnapshot: body.chartSnapshot || body.chart_snapshot || undefined,
+    // Dev self-test marker — never set by TradingView Pine; suppresses external fan-out.
+    selfTest: body.selfTest === true || body.self_test === true || undefined
   };
 
   if (signalData.pattern === 'perfect_fvg' && !signalData.patternLabel) {
@@ -386,7 +410,27 @@ function buildSignalData(body) {
 
   // Outcome / expiry alerts carry levels for audit but may not need full entry validation.
   if (TradeLifecycleService.isEntryAlert(signalData.alertType)) {
-    validateKachingEntrySignal(signalData);
+    try {
+      validateKachingEntrySignal(signalData);
+      logPipeline('Validation', 'PASS', {
+        ...extractPipelineMeta(signalData),
+        reason: 'entry_levels_ok'
+      });
+    } catch (error) {
+      const rejected = error.rejectedFields || [];
+      logPipeline('Validation', 'FAIL', {
+        ...extractPipelineMeta(signalData),
+        reason:
+          rejected.length > 0
+            ? `rejected_fields=${rejected.join(',')}`
+            : error.message || 'entry_validation_failed'
+      });
+      console.warn(
+        `[TV Webhook] Validation rejected fields=${rejected.join(',') || 'n/a'} ` +
+          `symbol=${signalData.symbol} msg=${error.message}`
+      );
+      throw error;
+    }
   }
 
   return signalData;
@@ -407,6 +451,10 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
       timeframe: body.timeframe || body.interval || body.tf,
       alertType: body.alertType || body.type,
       reason: 'forbidden_no_signal_or_reset'
+    });
+    logPipeline('Lifecycle', 'FAIL', {
+      ...extractPipelineMeta(body),
+      reason: 'forbidden_reset_payload'
     });
     return {
       mode: 'rejected',
@@ -431,6 +479,10 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
   );
 
   if (lifecycle.rejected) {
+    logPipeline('Lifecycle', 'FAIL', {
+      ...extractPipelineMeta(baseData),
+      reason: lifecycle.reason || 'lifecycle_rejected'
+    });
     return {
       mode: 'rejected',
       publishOnly: true,
@@ -442,6 +494,11 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
   }
 
   const { signalData, updatedEntry } = lifecycle;
+
+  logPipeline('Lifecycle', 'PASS', {
+    ...extractPipelineMeta(signalData),
+    reason: updatedEntry ? 'outcome_linked' : 'entry_accepted'
+  });
 
   // Outcomes update the single parent Signal; entries create one broadcast Signal.
   const delivery = await broadcastToSubscribers(

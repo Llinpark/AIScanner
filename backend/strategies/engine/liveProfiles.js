@@ -25,13 +25,13 @@ function createScalpingProfile() {
     key: SCALPING_KEY,
     name: SCALPING_NAME,
     description:
-      'Liquidity Sweep + Fair Value Gap scalping. HTF context on 15m; entries on 3m / 1m.',
+      'Liquidity Sweep + Fair Value Gap scalping. HTF context on 15m; entries on 3m / 5m.',
     enabled: cfg.enabled !== false,
     priority: 20,
     version: 1,
     status: 'live',
     entryTimeframes: [...(cfg.entryTimeframes || [])],
-    higherTimeframes: [cfg.htfTimeframe || '15m'],
+    higherTimeframes: [...(cfg.htfTimeframes || [cfg.htfTimeframe || '15m'])],
     defaultEntryTimeframe: cfg.defaultEntryTimeframe || '3m',
     entryModel: cfg.entry?.model || 'ce',
     stopLossModel: cfg.stop?.model || 'sweep',
@@ -78,15 +78,15 @@ function createDayTradingProfile() {
     key: DAYTRADING_KEY,
     name: DAYTRADING_NAME,
     description:
-      'Liquidity Sweep + Fair Value Gap day trading. HTF bias on 4h (+ optional 1h); entries on 15m / 5m.',
+      'Liquidity Sweep + Fair Value Gap day trading. HTF bias on 1H / 4H; entries on 5m / 15m.',
     enabled: cfg.enabled !== false,
     priority: 10,
     version: 1,
     status: 'live',
     entryTimeframes: [...(cfg.entryTimeframes || [])],
-    higherTimeframes: [cfg.htfTimeframe || '4h', cfg.refineHtfTimeframe || '1h'].filter(
-      Boolean
-    ),
+    higherTimeframes: [
+      ...(cfg.htfTimeframes || [cfg.htfTimeframe || '1h', cfg.refineHtfTimeframe || '1h'].filter(Boolean))
+    ],
     defaultEntryTimeframe: cfg.defaultEntryTimeframe || '15m',
     entryModel: cfg.entry?.model || 'ce',
     stopLossModel: cfg.stop?.model || 'sweep',

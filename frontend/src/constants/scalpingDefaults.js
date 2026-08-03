@@ -1,6 +1,7 @@
 /**
  * Official Scalping restore pack — admin form shape.
  * Keep in sync with backend:
+ *   strategies/config/strategyArchitecture.js  (Entry TF / HTF — canonical)
  *   strategies/config/scalpingConfig.js
  *   strategies/profiles/scalpingTpProfile.js
  *   utils/marketRegimeConfig.js
@@ -8,6 +9,10 @@
  *
  * Restore updates form state only; click Save to persist globally.
  */
+
+import { STRATEGY_ARCHITECTURE } from './strategyArchitecture.js';
+
+const ARCH = STRATEGY_ARCHITECTURE.scalping;
 
 export const SCALPING_CONFIDENCE_WEIGHTS = Object.freeze({
   sweep: 30,
@@ -66,9 +71,10 @@ export const SCALPING_MARKET_REGIME_DEFAULTS = Object.freeze({
 
 export const SCALPING_STRATEGY_DEFAULTS = Object.freeze({
   enabled: true,
-  htfTimeframe: '15m',
-  entryTimeframes: Object.freeze(['3m', '1m']),
-  defaultEntryTimeframe: '3m',
+  htfTimeframe: ARCH.defaultHtfTimeframe,
+  htfTimeframes: ARCH.htfTimeframes,
+  entryTimeframes: ARCH.entryTimeframes,
+  defaultEntryTimeframe: ARCH.defaultEntryTimeframe,
   entry: Object.freeze({
     model: 'ce',
     maxWaitBars: 10

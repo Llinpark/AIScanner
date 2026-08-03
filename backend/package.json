@@ -12,7 +12,8 @@
     "test:utils": "node --test utils/__tests__/**/*.test.js",
     "test:services": "node --test services/__tests__/**/*.test.js",
     "test:regime": "node --test utils/__tests__/marketRegimeService.test.js",
-    "test:patterns": "node scripts/verify-patterns.js"
+    "test:patterns": "node scripts/verify-patterns.js",
+    "test:pipeline": "node scripts/pipeline-self-test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

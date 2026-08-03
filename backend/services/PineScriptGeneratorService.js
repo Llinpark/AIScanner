@@ -9,6 +9,12 @@ const {
   STRATEGY_NAME: DAYTRADING_SWEEP_NAME
 } = require('../strategies/config/dayTradingConfig');
 const {
+  buildPineTfVariables,
+  formatTfList,
+  assertStrategyArchitecturesValid,
+  getStrategyArchitecture
+} = require('../strategies/config/strategyArchitecture');
+const {
   generateLicenseToken,
   normalizeTradingViewUsername
 } = require('../utils/webhookSecurity');
@@ -140,7 +146,11 @@ function sampleWebhookPayload(strategyKey = 'daytrading') {
   };
 }
 
-function buildSweepVariables(base, config, title, shortTitle, htfPine) {
+/**
+ * Merge strategy thresholds + config-driven TF validation into Pine template vars.
+ * HTF / entry TF validation is NEVER hardcoded here — always from Strategy Configuration.
+ */
+function buildSweepVariables(base, config, title, shortTitle, strategyKey) {
   const rr = config.takeProfit?.rrMultiples || [1.5, 2, 3];
   const atrCaps = config.takeProfit?.atrCaps || [0.7, 1.3, 2.0];
   const model = String(config.takeProfit?.model || 'smart_scoring').toLowerCase();
@@ -151,11 +161,24 @@ function buildSweepVariables(base, config, title, shortTitle, htfPine) {
       model === 'smart_tp' ||
       model === 'dynamic_liquidity' ||
       model === 'dynamic');
+  const pineTf = buildPineTfVariables(strategyKey, config);
   return {
     ...base,
     INDICATOR_TITLE: escapePineString(title),
     INDICATOR_SHORTTITLE: escapePineString(shortTitle),
-    HTF_TF: escapePineString(htfPine),
+    HTF_TF: escapePineString(pineTf.HTF_TF),
+    STRATEGY_KEY: escapePineString(pineTf.STRATEGY_KEY),
+    ENTRY_CHART_OK: pineTf.ENTRY_CHART_OK,
+    HTF_TF_OK: pineTf.HTF_TF_OK,
+    HTF_INPUT_LABEL: escapePineString(pineTf.HTF_INPUT_LABEL),
+    HTF_INPUT_TOOLTIP: escapePineString(pineTf.HTF_INPUT_TOOLTIP),
+    DIAG_WRONG_ENTRY: escapePineString(pineTf.DIAG_WRONG_ENTRY),
+    DIAG_WRONG_HTF: escapePineString(pineTf.DIAG_WRONG_HTF),
+    DIAG_CHART_IS_HTF: escapePineString(pineTf.DIAG_CHART_IS_HTF),
+    DIAG_UNSUPPORTED: escapePineString(pineTf.DIAG_UNSUPPORTED),
+    DIAG_MISSING_HTF: escapePineString(pineTf.DIAG_MISSING_HTF),
+    ARCH_ENTRY_LABEL: escapePineString(formatTfList(pineTf.ARCH_ENTRY_TIMEFRAMES)),
+    ARCH_HTF_LABEL: escapePineString(formatTfList(pineTf.ARCH_HTF_TIMEFRAMES)),
     SWING_SENSITIVITY: config.swing?.sensitivity ?? 2,
     EQH_EQL_TOLERANCE: config.swing?.equalToleranceAtrRatio ?? 0.08,
     MIN_BODY_RATIO: config.displacement?.minBodyRatio ?? 0.62,
@@ -172,7 +195,8 @@ function buildSweepVariables(base, config, title, shortTitle, htfPine) {
     TP2_ATR_CAP: atrCaps[1] ?? 1.3,
     TP3_ATR_CAP: atrCaps[2] ?? 2.0,
     CONFIDENCE_THRESHOLD: config.confidence?.threshold ?? 70,
-    REQUIRE_ENGULFING: config.engulfing?.required ? 'true' : 'false'
+    REQUIRE_ENGULFING: config.engulfing?.required ? 'true' : 'false',
+    _pineTf: pineTf
   };
 }
 
@@ -209,47 +233,54 @@ function generateForUser(user, options = {}) {
     SUBSCRIBER_ID: escapePineString(userId)
   };
 
+  // Fail before generation if Strategy Configuration is inconsistent.
+  assertStrategyArchitecturesValid();
+
   let variables;
   let templatePath;
   let strategyLabel;
   let instructionLead;
+  let pineTfMeta;
 
   if (strategyKey === 'scalping') {
     const {
       getResolvedScalpingConfig
     } = require('../utils/strategyRuntimeConfig');
     const scalp = getResolvedScalpingConfig();
+    const arch = getStrategyArchitecture('scalping');
     variables = buildSweepVariables(
       base,
       scalp,
-      'KachingFx Sweep+FVG Scalp',
-      'Kaching Scalp',
-      scalp.htfTimeframe === '15m' ? '15' : String(scalp.htfTimeframe).replace('m', '')
+      arch.pineTitle,
+      arch.pineShortTitle,
+      'scalping'
     );
     templatePath = SCALPING_TEMPLATE;
     strategyLabel = SCALPING_STRATEGY_NAME;
-    instructionLead =
-      'Open TradingView → attach this script to a 1m or 3m chart (entries blocked elsewhere). HTF liquidity uses 15m context only.';
+    pineTfMeta = variables._pineTf;
+    instructionLead = pineTfMeta.instructionLead;
   } else {
     const {
       getResolvedDaytradingConfig
     } = require('../utils/strategyRuntimeConfig');
     const day = getResolvedDaytradingConfig();
+    const arch = getStrategyArchitecture('daytrading');
     variables = buildSweepVariables(
       base,
       day,
-      'KachingFx Sweep+FVG Day',
-      'Kaching Day',
-      day.htfTimeframe === '4h' ? '240' : String(day.htfTimeframe)
+      arch.pineTitle,
+      arch.pineShortTitle,
+      'daytrading'
     );
     templatePath = DAYTRADING_SWEEP_TEMPLATE;
     strategyLabel = DAYTRADING_SWEEP_NAME;
-    instructionLead =
-      'Open TradingView → attach this script to a 15m or 5m chart (entries blocked on HTF). HTF bias/liquidity uses 4H context.';
+    pineTfMeta = variables._pineTf;
+    instructionLead = pineTfMeta.instructionLead;
   }
 
+  const { _pineTf, ...templateVars } = variables;
   const script = renderTemplate(loadTemplate(templatePath), {
-    ...variables,
+    ...templateVars,
     DRAWING_ENGINE: loadDrawingEngine()
   });
 
@@ -266,6 +297,13 @@ function generateForUser(user, options = {}) {
     strategyName: strategyLabel,
     generatedAt: new Date().toISOString(),
     architecture: 'tradingview_webhook_distribution',
+    strategyArchitecture: {
+      entryTimeframes: pineTfMeta.ARCH_ENTRY_TIMEFRAMES,
+      htfTimeframes: pineTfMeta.ARCH_HTF_TIMEFRAMES,
+      defaultHtfTimeframe: pineTfMeta.ARCH_DEFAULT_HTF,
+      defaultEntryTimeframe: pineTfMeta.ARCH_DEFAULT_ENTRY,
+      bakedHtfPine: pineTfMeta.HTF_TF
+    },
     flow: 'TradingView → webhook → Kaching dashboard / Telegram / MT5',
     samplePayload: sampleWebhookPayload(strategyKey),
     availableStrategies: [
@@ -286,9 +324,14 @@ function generateForUser(user, options = {}) {
       'When a signal fires, TradingView shows separate labels: Kaching Buy/Sell badge, plus Buy/Sell, SL, TP1, TP2, TP3 (each one object). Badge text never mixes with TP text.',
       'Overlays stay until TP3, SL, candle expiry, or cancel — they do not disappear if a later setup fails. Lines extend to the live candle every bar while the trade is active.',
       'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry).',
-      `Create one alert for this script, enable webhook notifications, and paste: ${webhookUrl}`,
+      // ONE alert only — webhook URL must match PUBLIC_BACKEND_URL /api/webhook/tradingview
+      `Create ONE alert on this chart for this script (Condition: Any alert() function call). Enable Webhook URL and paste exactly: ${webhookUrl}`,
+      'Alert message field: leave TradingView default {{strategy.order.alert_message}} / {{alert_message}} so the JSON from alert() is sent unchanged. Do not wrap or edit the JSON.',
+      'Alert frequency: Once Per Bar Close (script already uses alert.freq_all on confirmed bars). Expiration: Open-ended / no expire — do not let the alert expire or webhooks stop.',
+      'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',
+      'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
-      'After regenerating Pine, remove the old indicator from the chart, paste the new script, and recreate the alert so drawings and license binding take effect.',
+      'After regenerating Pine, remove the old indicator from the chart, paste the new script, and recreate the ONE alert so drawings, license binding, and webhook URL take effect.',
       'Switch strategies with ?strategy=daytrading | scalping.',
       'After updating your TradingView username in the app, re-save, re-copy this script, and re-add it to the chart so the license token and prefilled Confirm match.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan) · TV: ${tvUsername}.`
@@ -302,5 +345,6 @@ module.exports = {
   buildScriptId,
   sampleWebhookPayload,
   resolveStrategyKey,
-  resolveTradingViewUsername
+  resolveTradingViewUsername,
+  buildSweepVariables
 };

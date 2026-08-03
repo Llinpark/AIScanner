@@ -23,6 +23,9 @@ describe('frontend scalpingDefaults', () => {
     assert.equal(pack.core.autoScanIntervalMs, 60_000);
     assert.equal(pack.core.scanBatchSize, 5);
     assert.equal(pack.core.autoScanEnabled, true);
+    assert.deepEqual([...pack.strategy.entryTimeframes], ['3m', '5m']);
+    assert.deepEqual([...pack.strategy.htfTimeframes], ['15m']);
+    assert.ok(!pack.strategy.entryTimeframes.includes('1m'));
     assert.deepEqual([...pack.strategy.takeProfit.atrCaps], [0.8, 1.4, 2.0]);
     assert.equal(pack.strategy.takeProfit.minScore, 60);
     assert.equal(pack.marketRegime.avoidHighImpactNews, true);
@@ -47,6 +50,8 @@ describe('frontend dayTradingDefaults', () => {
     const pack = OFFICIAL_DAYTRADING_RESTORE;
     assert.equal(pack.activeStrategy, 'daytrading');
     assert.equal(pack.strategy.htfTimeframe, '1h');
+    assert.deepEqual([...pack.strategy.entryTimeframes], ['5m', '15m']);
+    assert.deepEqual([...pack.strategy.htfTimeframes], ['1h', '4h']);
     assert.equal(pack.strategy.confidence.threshold, 80);
     assert.deepEqual([...pack.strategy.takeProfit.atrCaps], [1.0, 2.0, 3.5]);
     assert.equal(pack.strategy.takeProfit.maxTpDistancePips, 150);

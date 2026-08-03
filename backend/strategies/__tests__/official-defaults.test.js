@@ -30,8 +30,10 @@ describe('Official Scalping defaults', () => {
 
   it('strategy core fields match restore pack', () => {
     assert.equal(DEFAULT_SCALPING_CONFIG.htfTimeframe, '15m');
-    assert.deepEqual(DEFAULT_SCALPING_CONFIG.entryTimeframes, ['3m', '1m']);
+    assert.deepEqual([...DEFAULT_SCALPING_CONFIG.entryTimeframes], ['3m', '5m']);
+    assert.deepEqual([...DEFAULT_SCALPING_CONFIG.htfTimeframes], ['15m']);
     assert.equal(DEFAULT_SCALPING_CONFIG.defaultEntryTimeframe, '3m');
+    assert.ok(!DEFAULT_SCALPING_CONFIG.entryTimeframes.includes('1m'));
     assert.equal(DEFAULT_SCALPING_CONFIG.confidence.threshold, 70);
     assert.equal(DEFAULT_SCALPING_CONFIG.entry.model, 'ce');
     assert.equal(DEFAULT_SCALPING_CONFIG.entry.maxWaitBars, 10);
@@ -80,7 +82,8 @@ describe('Official Day Trading defaults', () => {
 
   it('strategy core fields match restore pack', () => {
     assert.equal(DEFAULT_DAYTRADING_CONFIG.htfTimeframe, '1h');
-    assert.deepEqual(DEFAULT_DAYTRADING_CONFIG.entryTimeframes, ['15m', '5m']);
+    assert.deepEqual([...DEFAULT_DAYTRADING_CONFIG.entryTimeframes], ['5m', '15m']);
+    assert.deepEqual([...DEFAULT_DAYTRADING_CONFIG.htfTimeframes], ['1h', '4h']);
     assert.equal(DEFAULT_DAYTRADING_CONFIG.defaultEntryTimeframe, '15m');
     assert.equal(DEFAULT_DAYTRADING_CONFIG.confidence.threshold, 80);
     assert.equal(DEFAULT_DAYTRADING_CONFIG.entry.model, 'ce');

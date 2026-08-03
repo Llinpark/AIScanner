@@ -62,10 +62,13 @@ function validateKachingEntrySignal(signalData) {
     return value == null || value === 0;
   });
   if (missing.length > 0) {
-    throw new Error(
+    const err = new Error(
       `Invalid Kaching entry signal: TradingView must send Entry, SL, TP1, TP2, and TP3 ` +
         `(${missing.join(', ')} missing). Levels are never invented server-side.`
     );
+    err.rejectedFields = missing;
+    err.code = 'invalid_entry_levels';
+    throw err;
   }
 }
 

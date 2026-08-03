@@ -10,6 +10,17 @@ A hybrid Forex AI scanner architecture combining Python and the MERN stack.
 
 ## Architecture
 
+Trading signals come from **TradingView Pine** only (webhook distribution). Chart feeds are isolated from signal generation — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+**Strategy Configuration** (canonical timeframes — do not hardcode elsewhere):
+
+| Strategy | Entry Timeframe | HTF Confirmation |
+|----------|-----------------|------------------|
+| Scalping | 3m, 5m | 15m |
+| Day Trading | 5m, 15m | 1H, 4H |
+
+Source of truth: `backend/strategies/config/strategyArchitecture.js` (frontend mirror under `frontend/src/constants/`). Admin settings and Pine generation read this layout; `1m` is not a supported scalping entry. After deploy or admin TF changes, regenerate Pine.
+
 1. `python-service` (FastAPI AI analytics)
    - LSTM / indicator signal analytics on **injected** OHLC bars.
    - May read the shared Redis hub cache written by Node (`kaching:candles:*`).

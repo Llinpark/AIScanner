@@ -2,30 +2,33 @@
  * Liquidity Sweep + Fair Value Gap (Day Trading) — all thresholds.
  * Override via DAYTRADING_* env keys.
  * TP settings come from the Day Trading Strategy TP Profile (independent of scalping).
+ *
+ * Timeframe allowlists come from strategyArchitecture.js (canonical).
  */
 
 const { resolveTpProfile, DAY_TRADING_TP_PROFILE } = require('../profiles');
+const { resolveArchitectureTimeframes } = require('./strategyArchitecture');
 
 const STRATEGY_ID = 'liquidity_sweep_fvg_daytrading';
 const STRATEGY_NAME = 'Liquidity Sweep + Fair Value Gap (Day Trading)';
 const STRATEGY_KEY = 'daytrading';
 
 const _dayTp = DAY_TRADING_TP_PROFILE;
+const _archTf = resolveArchitectureTimeframes(STRATEGY_KEY);
 
 const DEFAULT_DAYTRADING_CONFIG = Object.freeze({
   id: STRATEGY_ID,
   name: STRATEGY_NAME,
   enabled: process.env.DAYTRADING_SWEEP_FVG_ENABLED !== 'false',
 
-  // Official default: 1H HTF bias; optional refine HTF; entries only 15m/5m
-  htfTimeframe: process.env.DAYTRADING_HTF_TF || '1h',
-  refineHtfTimeframe: process.env.DAYTRADING_REFINE_HTF_TF || '1h',
-  useRefineHtf: process.env.DAYTRADING_USE_REFINE_HTF === 'true',
-  entryTimeframes: (process.env.DAYTRADING_ENTRY_TFS || '15m,5m')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean),
-  defaultEntryTimeframe: process.env.DAYTRADING_DEFAULT_ENTRY_TF || '15m',
+  // Canonical: entry 5m/15m; HTF 1H/4H (default 1H); optional refine HTF
+  htfTimeframe: _archTf.htfTimeframe,
+  htfTimeframes: Object.freeze([..._archTf.htfTimeframes]),
+  refineHtfTimeframe: _archTf.refineHtfTimeframe || '1h',
+  useRefineHtf:
+    process.env.DAYTRADING_USE_REFINE_HTF === 'true' ? true : _archTf.useRefineHtf,
+  entryTimeframes: Object.freeze([..._archTf.entryTimeframes]),
+  defaultEntryTimeframe: _archTf.defaultEntryTimeframe,
 
   swing: {
     sensitivity: Math.max(1, parseInt(process.env.DAYTRADING_SWING_SENSITIVITY || '3', 10)),
@@ -202,9 +205,25 @@ function resolveDayTradingConfig(overrides = {}) {
     ...DEFAULT_DAYTRADING_CONFIG.takeProfit,
     ...(overrides.takeProfit || {})
   });
+  const archTf = resolveArchitectureTimeframes(STRATEGY_KEY, {
+    entryTimeframes: overrides.entryTimeframes,
+    defaultEntryTimeframe: overrides.defaultEntryTimeframe,
+    htfTimeframe: overrides.htfTimeframe,
+    refineHtfTimeframe: overrides.refineHtfTimeframe,
+    useRefineHtf: overrides.useRefineHtf
+  });
   return {
     ...DEFAULT_DAYTRADING_CONFIG,
     ...overrides,
+    htfTimeframe: archTf.htfTimeframe,
+    htfTimeframes: [...archTf.htfTimeframes],
+    refineHtfTimeframe: archTf.refineHtfTimeframe || DEFAULT_DAYTRADING_CONFIG.refineHtfTimeframe,
+    useRefineHtf:
+      overrides.useRefineHtf !== undefined
+        ? Boolean(overrides.useRefineHtf)
+        : DEFAULT_DAYTRADING_CONFIG.useRefineHtf,
+    entryTimeframes: [...archTf.entryTimeframes],
+    defaultEntryTimeframe: archTf.defaultEntryTimeframe,
     swing: { ...DEFAULT_DAYTRADING_CONFIG.swing, ...(overrides.swing || {}) },
     sessions: { ...DEFAULT_DAYTRADING_CONFIG.sessions, ...(overrides.sessions || {}) },
     liquidity: { ...DEFAULT_DAYTRADING_CONFIG.liquidity, ...(overrides.liquidity || {}) },

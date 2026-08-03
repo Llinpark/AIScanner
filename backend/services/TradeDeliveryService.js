@@ -9,6 +9,7 @@ const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { sendTradeAlertEmail } = require('../utils/mailer');
 const TelegramService = require('./TelegramService');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
+const { logPipeline, extractPipelineMeta } = require('../utils/pipelineLog');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -107,12 +108,18 @@ async function deliverEmail(subscriber, signalDoc) {
   if (!subscriber?.email) return false;
   if (!userHasTierFeature(subscriber, 'emailAlerts')) return false;
 
+  // Dev pipeline self-test must not email real subscribers.
+  const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
+  if (signal?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true') {
+    console.log('[TradeDelivery] email skipped (pipeline self-test)');
+    return false;
+  }
+
   // User may opt out via preferences.
   const prefs = subscriber.preferences || {};
   if (prefs.emailAlerts === false) return false;
 
   try {
-    const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
     const result = await sendTradeAlertEmail({
       to: subscriber.email,
       displayName: subscriber.displayName,
@@ -127,6 +134,12 @@ async function deliverEmail(subscriber, signalDoc) {
 
 async function deliverTelegram(subscriber, signalDoc, { includeExecuteButton = false } = {}) {
   if (!userHasTierFeature(subscriber, 'telegramAlerts')) {
+    return false;
+  }
+
+  const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
+  if (signal?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true') {
+    console.log('[TradeDelivery] telegram skipped (pipeline self-test)');
     return false;
   }
 
@@ -145,6 +158,11 @@ async function deliverTelegram(subscriber, signalDoc, { includeExecuteButton = f
  * MANUAL mode queues only via Telegram Execute (or future in-app Execute).
  */
 async function deliverMt5Auto(subscriber, signalDoc) {
+  const probe = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
+  if (probe?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true') {
+    return { ok: false, reason: 'self_test_skip' };
+  }
+
   if (!subscriber?.id || !signalDoc?._id) {
     return { ok: false, reason: 'missing_ids' };
   }
@@ -181,11 +199,15 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   let mt5Sent = Boolean(signalDoc.mt5Sent);
   let emailSent = Boolean(signalDoc.emailSent);
   let executionStatus = signalDoc.executionStatus || 'pending';
+  let mt5Reason = '-';
 
   const signal = signalDoc?.toObject ? signalDoc.toObject() : { ...signalDoc };
   if (subscriber?.id && !signal.userId) {
     signal.userId = subscriber.id;
   }
+
+  const meta = extractPipelineMeta(signal);
+  const subLabel = subscriber?.email || subscriber?.id || 'broadcast';
 
   const executionMode = subscriber ? resolveExecutionMode(subscriber) : 'manual';
   const isEntry = isEntryAlert(signal.alertType || 'signal');
@@ -198,11 +220,30 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   if (subscriber) {
     const emailOk = await deliverEmail(subscriber, signal);
     if (emailOk) emailSent = true;
+    const emailSelfTest =
+      signal?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true';
+    logPipeline('DeliveryEmail', emailOk || emailSelfTest ? 'PASS' : 'FAIL', {
+      ...meta,
+      reason: emailOk
+        ? `to=${subscriber.email}`
+        : emailSelfTest
+          ? `self_test_skip; sub=${subLabel}`
+          : `skipped_or_failed; sub=${subLabel}`
+    });
 
     const tgOk = await deliverTelegram(subscriber, signal, { includeExecuteButton });
     if (tgOk) telegramSent = true;
+    logPipeline('DeliveryTelegram', tgOk || emailSelfTest ? 'PASS' : 'FAIL', {
+      ...meta,
+      reason: tgOk
+        ? `sub=${subLabel}`
+        : emailSelfTest
+          ? `self_test_skip; sub=${subLabel}`
+          : `skipped_or_failed; sub=${subLabel}`
+    });
 
     const mt5Result = await deliverMt5Auto(subscriber, signal);
+    mt5Reason = mt5Result?.reason || (mt5Result?.ok ? 'queued' : 'skipped');
     if (mt5Result?.ok) {
       mt5Sent = true;
       executionStatus = 'sent';
@@ -211,10 +252,16 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
       mt5Result?.reason === 'mt5_disabled' ||
       mt5Result?.reason === 'manual_mode' ||
       mt5Result?.reason === 'subscription_required' ||
-      mt5Result?.reason === 'not_entry_signal'
+      mt5Result?.reason === 'not_entry_signal' ||
+      mt5Result?.reason === 'self_test_skip'
     ) {
       executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
     }
+    const mt5Ok = Boolean(mt5Result?.ok) || mt5Reason === 'self_test_skip';
+    logPipeline('DeliveryMT5', mt5Ok ? 'PASS' : 'FAIL', {
+      ...meta,
+      reason: `${mt5Reason}; sub=${subLabel}`
+    });
   }
 
   const enrichedDoc = {
@@ -235,6 +282,10 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   });
 
   const payload = await deliverInApp(io, enrichedDoc, subscriber);
+  logPipeline('DeliverySocket', 'PASS', {
+    ...meta,
+    reason: `tv:live-alert; sub=${subLabel}; email=${emailSent}; tg=${telegramSent}; mt5=${mt5Sent}`
+  });
   return payload;
 }
 

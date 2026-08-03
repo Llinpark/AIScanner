@@ -1,10 +1,11 @@
 /**
  * Official Day Trading restore pack — admin form shape.
  * Keep in sync with backend:
+ *   strategies/config/strategyArchitecture.js  (Entry TF / HTF — canonical)
  *   strategies/config/dayTradingConfig.js
  *   strategies/profiles/dayTradingTpProfile.js
  *
- * Intent: fewer/higher-quality signals, HTF alignment, wider TPs,
+ * Intent: fewer/higher-quality signals, HTF Confirmation alignment, wider TPs,
  * institutional liquidity, filter ranging / low-vol / Asian sessions.
  *
  * Confidence mapping (daytrading schema):
@@ -14,6 +15,10 @@
  *
  * Restore updates form state only; click Save to persist globally.
  */
+
+import { STRATEGY_ARCHITECTURE } from './strategyArchitecture.js';
+
+const ARCH = STRATEGY_ARCHITECTURE.daytrading;
 
 export const DAYTRADING_CONFIDENCE_WEIGHTS = Object.freeze({
   htfBias: 0,
@@ -66,11 +71,12 @@ export const DAYTRADING_MARKET_REGIME_DEFAULTS = Object.freeze({
 
 export const DAYTRADING_STRATEGY_DEFAULTS = Object.freeze({
   enabled: true,
-  htfTimeframe: '1h',
-  refineHtfTimeframe: '1h',
+  htfTimeframe: ARCH.defaultHtfTimeframe,
+  htfTimeframes: ARCH.htfTimeframes,
+  refineHtfTimeframe: ARCH.defaultRefineHtfTimeframe || '1h',
   useRefineHtf: false,
-  entryTimeframes: Object.freeze(['15m', '5m']),
-  defaultEntryTimeframe: '15m',
+  entryTimeframes: ARCH.entryTimeframes,
+  defaultEntryTimeframe: ARCH.defaultEntryTimeframe,
   entry: Object.freeze({
     model: 'ce',
     maxWaitBars: 15

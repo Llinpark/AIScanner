@@ -3,7 +3,7 @@
  *
  * Philosophy (all required before signal):
  * 1. HTF (15m) liquidity swept
- * 2. LTF (3m/1m) MSS
+ * 2. LTF (3m/5m) MSS
  * 3. FVG forms
  * 4. Price retraces into FVG
  *
@@ -11,6 +11,10 @@
  */
 
 const { resolveScalpingConfig, STRATEGY_ID, STRATEGY_NAME } = require('./config/scalpingConfig');
+const {
+  STRATEGY_ARCHITECTURE,
+  isHtfChartTimeframe
+} = require('./config/strategyArchitecture');
 const { IStrategy } = require('./interfaces/IStrategy');
 const { LiquidityDetector } = require('./detectors/LiquidityDetector');
 const { LiquiditySweepDetector } = require('./detectors/LiquiditySweepDetector');
@@ -77,10 +81,15 @@ class ScalpingStrategy extends IStrategy {
 
     const symbol = context.symbol || '';
     const timeframe = context.timeframe || this.config.defaultEntryTimeframe;
-    const entryTfs = this.config.entryTimeframes || ['3m', '1m'];
+    const entryTfs =
+      this.config.entryTimeframes || [...STRATEGY_ARCHITECTURE.scalping.entryTimeframes];
+    const htfList = [
+      ...(this.config.htfTimeframes || STRATEGY_ARCHITECTURE.scalping.htfTimeframes),
+      this.config.htfTimeframe
+    ].filter(Boolean);
 
-    // Hard rule: never enter on HTF
-    if (timeframe === this.config.htfTimeframe || timeframe === '15m' || timeframe === '15') {
+    // Hard rule: never enter on HTF (allowlist from Strategy Architecture)
+    if (isHtfChartTimeframe(timeframe, htfList)) {
       return { signal: false, stage: 'rejected', reason: 'htf_never_entries' };
     }
     if (entryTfs.length && !entryTfs.includes(timeframe) && context.enforceEntryTf !== false) {

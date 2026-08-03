@@ -13,6 +13,7 @@ import {
   DAYTRADING_TP_SCORE_WEIGHTS,
   DAYTRADING_CONFIDENCE_WEIGHTS
 } from '../constants/dayTradingDefaults';
+import { STRATEGY_ARCHITECTURE } from '../constants/strategyArchitecture';
 
 const LIVE_STRATEGY_KEYS = new Set(['scalping', 'daytrading']);
 const DEFAULT_ACTIVE_STRATEGY = 'scalping';
@@ -1082,8 +1083,16 @@ export default function AdminScanner() {
               </button>
             </div>
             <p className="admin-form-note">
-              Liquidity Sweep + FVG day trading — HTF bias on {daytrading.htfTimeframe || '1h'},
-              entries on 15m / 5m. Restore fills the form only; click Save to apply globally.
+              Liquidity Sweep + FVG day trading — HTF Confirmation on{' '}
+              {(daytrading.htfTimeframes || STRATEGY_ARCHITECTURE.daytrading.htfTimeframes).join(
+                ' / '
+              )}{' '}
+              (default {daytrading.htfTimeframe || STRATEGY_ARCHITECTURE.daytrading.defaultHtfTimeframe}
+              ), Entry Timeframes{' '}
+              {(
+                daytrading.entryTimeframes || STRATEGY_ARCHITECTURE.daytrading.entryTimeframes
+              ).join(' / ')}
+              . Restore fills the form only; click Save to apply globally.
             </p>
             <div className="admin-form-grid">
               <Field label="HTF timeframe">
@@ -1312,8 +1321,14 @@ export default function AdminScanner() {
               </button>
             </div>
             <p className="admin-form-note">
-              Liquidity Sweep + FVG scalping — HTF context on {scalping.htfTimeframe || '15m'},
-              entries on 3m / 1m. Also restores Core scan + Market Regime. Click Save to apply
+              Liquidity Sweep + FVG scalping — HTF Confirmation on{' '}
+              {(scalping.htfTimeframes || STRATEGY_ARCHITECTURE.scalping.htfTimeframes).join(' / ')}{' '}
+              (default {scalping.htfTimeframe || STRATEGY_ARCHITECTURE.scalping.defaultHtfTimeframe}),
+              Entry Timeframes{' '}
+              {(scalping.entryTimeframes || STRATEGY_ARCHITECTURE.scalping.entryTimeframes).join(
+                ' / '
+              )}
+              . Also restores Core scan + Market Regime. Click Save to apply
               globally.
             </p>
             <div className="admin-form-grid">

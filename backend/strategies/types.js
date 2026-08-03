@@ -105,8 +105,8 @@
  *
  * @typedef {Object} StrategyContext
  * @property {string} symbol
- * @property {Candle[]} candles - entry TF (1m or 3m)
- * @property {Candle[]} [htfCandles] - 15m context
+ * @property {Candle[]} candles - entry TF (scalping: 3m/5m; day trading: 5m/15m)
+ * @property {Candle[]} [htfCandles] - HTF context (scalping: 15m; day trading: 1h/4h)
  * @property {string} [timeframe]
  * @property {string} [htfTimeframe]
  * @property {Object} [state] - incremental SymbolStateCache

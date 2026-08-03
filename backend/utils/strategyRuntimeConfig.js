@@ -15,11 +15,20 @@ const {
   resolveDayTradingConfig
 } = require('../strategies/config/dayTradingConfig');
 const {
+  STRATEGY_ARCHITECTURE,
+  parseAllowedTimeframes,
+  assertStrategyArchitecturesValid,
+  getArchitecturePublicSummary
+} = require('../strategies/config/strategyArchitecture');
+const {
   SCALPING_TP_PROFILE,
   DAY_TRADING_TP_PROFILE,
   SYSTEM_DEFAULT_TP_PROFILE,
   getTpProfile
 } = require('../strategies/profiles');
+
+const SCALPING_ARCH = STRATEGY_ARCHITECTURE.scalping;
+const DAYTRADING_ARCH = STRATEGY_ARCHITECTURE.daytrading;
 
 const DOC_KEY = 'strategies';
 /** Live keys that drive analyze prefer (stubs cannot be active prefer). */
@@ -262,12 +271,24 @@ function pickScalpingAdminPatch(patch = {}) {
   const out = {};
 
   if (patch.enabled !== undefined) out.enabled = Boolean(patch.enabled);
-  if (patch.htfTimeframe !== undefined) out.htfTimeframe = String(patch.htfTimeframe).trim() || '15m';
+  if (patch.htfTimeframe !== undefined) {
+    const htf = String(patch.htfTimeframe).trim() || SCALPING_ARCH.defaultHtfTimeframe;
+    out.htfTimeframe = SCALPING_ARCH.htfTimeframes.includes(htf)
+      ? htf
+      : SCALPING_ARCH.defaultHtfTimeframe;
+  }
   if (patch.defaultEntryTimeframe !== undefined) {
-    out.defaultEntryTimeframe = String(patch.defaultEntryTimeframe).trim() || '3m';
+    const def = String(patch.defaultEntryTimeframe).trim() || SCALPING_ARCH.defaultEntryTimeframe;
+    out.defaultEntryTimeframe = SCALPING_ARCH.entryTimeframes.includes(def)
+      ? def
+      : SCALPING_ARCH.defaultEntryTimeframe;
   }
   if (patch.entryTimeframes !== undefined) {
-    out.entryTimeframes = parseTimeframes(patch.entryTimeframes, ['3m', '1m']);
+    out.entryTimeframes = parseAllowedTimeframes(
+      patch.entryTimeframes,
+      SCALPING_ARCH.entryTimeframes,
+      [...SCALPING_ARCH.entryTimeframes]
+    );
   }
 
   if (patch.entry && typeof patch.entry === 'object') {
@@ -340,16 +361,33 @@ function pickDaytradingAdminPatch(patch = {}) {
   const out = {};
 
   if (patch.enabled !== undefined) out.enabled = Boolean(patch.enabled);
-  if (patch.htfTimeframe !== undefined) out.htfTimeframe = String(patch.htfTimeframe).trim() || '1h';
+  if (patch.htfTimeframe !== undefined) {
+    const htf = String(patch.htfTimeframe).trim() || DAYTRADING_ARCH.defaultHtfTimeframe;
+    out.htfTimeframe = DAYTRADING_ARCH.htfTimeframes.includes(htf)
+      ? htf
+      : DAYTRADING_ARCH.defaultHtfTimeframe;
+  }
   if (patch.refineHtfTimeframe !== undefined) {
-    out.refineHtfTimeframe = String(patch.refineHtfTimeframe).trim() || '1h';
+    const refine =
+      String(patch.refineHtfTimeframe).trim() || DAYTRADING_ARCH.defaultRefineHtfTimeframe;
+    out.refineHtfTimeframe = DAYTRADING_ARCH.refineHtfTimeframes.includes(refine)
+      ? refine
+      : DAYTRADING_ARCH.defaultRefineHtfTimeframe;
   }
   if (patch.useRefineHtf !== undefined) out.useRefineHtf = Boolean(patch.useRefineHtf);
   if (patch.defaultEntryTimeframe !== undefined) {
-    out.defaultEntryTimeframe = String(patch.defaultEntryTimeframe).trim() || '15m';
+    const def =
+      String(patch.defaultEntryTimeframe).trim() || DAYTRADING_ARCH.defaultEntryTimeframe;
+    out.defaultEntryTimeframe = DAYTRADING_ARCH.entryTimeframes.includes(def)
+      ? def
+      : DAYTRADING_ARCH.defaultEntryTimeframe;
   }
   if (patch.entryTimeframes !== undefined) {
-    out.entryTimeframes = parseTimeframes(patch.entryTimeframes, ['15m', '5m']);
+    out.entryTimeframes = parseAllowedTimeframes(
+      patch.entryTimeframes,
+      DAYTRADING_ARCH.entryTimeframes,
+      [...DAYTRADING_ARCH.entryTimeframes]
+    );
   }
 
   if (patch.entry && typeof patch.entry === 'object') {
@@ -464,8 +502,15 @@ function toAdminScalpingView(cfg) {
     name: SCALPING_NAME,
     enabled: Boolean(cfg.enabled),
     htfTimeframe: cfg.htfTimeframe,
+    htfTimeframes: [...(cfg.htfTimeframes || SCALPING_ARCH.htfTimeframes)],
     entryTimeframes: [...(cfg.entryTimeframes || [])],
     defaultEntryTimeframe: cfg.defaultEntryTimeframe,
+    architecture: {
+      entryTimeframes: [...SCALPING_ARCH.entryTimeframes],
+      htfTimeframes: [...SCALPING_ARCH.htfTimeframes],
+      defaultEntryTimeframe: SCALPING_ARCH.defaultEntryTimeframe,
+      defaultHtfTimeframe: SCALPING_ARCH.defaultHtfTimeframe
+    },
     entry: {
       model: cfg.entry?.model || 'ce',
       maxWaitBars: cfg.entry?.maxWaitBars
@@ -507,10 +552,17 @@ function toAdminDaytradingView(cfg) {
     name: DAYTRADING_NAME,
     enabled: Boolean(cfg.enabled),
     htfTimeframe: cfg.htfTimeframe,
+    htfTimeframes: [...(cfg.htfTimeframes || DAYTRADING_ARCH.htfTimeframes)],
     refineHtfTimeframe: cfg.refineHtfTimeframe,
     useRefineHtf: Boolean(cfg.useRefineHtf),
     entryTimeframes: [...(cfg.entryTimeframes || [])],
     defaultEntryTimeframe: cfg.defaultEntryTimeframe,
+    architecture: {
+      entryTimeframes: [...DAYTRADING_ARCH.entryTimeframes],
+      htfTimeframes: [...DAYTRADING_ARCH.htfTimeframes],
+      defaultEntryTimeframe: DAYTRADING_ARCH.defaultEntryTimeframe,
+      defaultHtfTimeframe: DAYTRADING_ARCH.defaultHtfTimeframe
+    },
     entry: {
       model: cfg.entry?.model || 'ce',
       maxWaitBars: cfg.entry?.maxWaitBars
@@ -567,8 +619,23 @@ function getRegistryOptions() {
 function getStrategyAdminConfig() {
   return {
     scalping: toAdminScalpingView(getResolvedScalpingConfig()),
-    daytrading: toAdminDaytradingView(getResolvedDaytradingConfig())
+    daytrading: toAdminDaytradingView(getResolvedDaytradingConfig()),
+    architecture: getArchitecturePublicSummary()
   };
+}
+
+/**
+ * Validate resolved runtime configs against canonical Strategy Architecture.
+ * @returns {{ ok: boolean, errors: string[], warnings: string[] }}
+ */
+function validateRuntimeStrategyArchitectures() {
+  const {
+    validateAllStrategyArchitectures
+  } = require('../strategies/config/strategyArchitecture');
+  return validateAllStrategyArchitectures({
+    scalping: getResolvedScalpingConfig(),
+    daytrading: getResolvedDaytradingConfig()
+  });
 }
 
 /**
@@ -764,6 +831,31 @@ async function initStrategyRuntimeConfig() {
     console.error('[StrategyRuntime] Boot init error (env defaults kept):', err.message);
     rebuildDefaultRegistry();
   }
+  // Configuration validation at startup — report before any Pine generation.
+  try {
+    const report = validateRuntimeStrategyArchitectures();
+    if (!report.ok) {
+      console.error(
+        '[StrategyArchitecture] VALIDATION FAILED — fix Strategy Configuration before generating Pine:'
+      );
+      for (const msg of report.errors) {
+        console.error(`  • ${msg}`);
+      }
+    } else {
+      assertStrategyArchitecturesValid({
+        scalping: getResolvedScalpingConfig(),
+        daytrading: getResolvedDaytradingConfig()
+      });
+      const summary = getArchitecturePublicSummary();
+      console.log(
+        '[StrategyArchitecture] Validated:',
+        `scalping entry=${summary.scalping.entryTimeframes.join('/')} htf=${summary.scalping.htfTimeframes.join('/')};`,
+        `daytrading entry=${summary.daytrading.entryTimeframes.join('/')} htf=${summary.daytrading.htfTimeframes.join('/')}`
+      );
+    }
+  } catch (err) {
+    console.error('[StrategyArchitecture] Startup validation error:', err.message);
+  }
 }
 
 module.exports = {
@@ -786,6 +878,7 @@ module.exports = {
   getResolvedDaytradingConfig,
   getStrategyAdminConfig,
   getStrategyCatalog,
+  validateRuntimeStrategyArchitectures,
   applyStrategyConfig,
   persistStrategyConfig,
   loadPersistedStrategyConfig,

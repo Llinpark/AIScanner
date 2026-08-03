@@ -8,6 +8,10 @@
  */
 
 const { resolveDayTradingConfig, STRATEGY_ID, STRATEGY_NAME } = require('./config/dayTradingConfig');
+const {
+  STRATEGY_ARCHITECTURE,
+  isHtfChartTimeframe
+} = require('./config/strategyArchitecture');
 const { IStrategy } = require('./interfaces/IStrategy');
 const { LiquidityDetector } = require('./detectors/LiquidityDetector');
 const { LiquiditySweepDetector } = require('./detectors/LiquiditySweepDetector');
@@ -79,15 +83,16 @@ class DayTradingStrategy extends IStrategy {
 
     const symbol = context.symbol || '';
     const timeframe = context.timeframe || this.config.defaultEntryTimeframe;
-    const entryTfs = this.config.entryTimeframes || ['15m', '5m'];
+    const entryTfs =
+      this.config.entryTimeframes || [...STRATEGY_ARCHITECTURE.daytrading.entryTimeframes];
+    const htfList = [
+      ...(this.config.htfTimeframes || STRATEGY_ARCHITECTURE.daytrading.htfTimeframes),
+      this.config.htfTimeframe,
+      this.config.refineHtfTimeframe
+    ].filter(Boolean);
 
-    if (
-      timeframe === this.config.htfTimeframe ||
-      timeframe === '4h' ||
-      timeframe === '240' ||
-      timeframe === '1h' ||
-      timeframe === '60'
-    ) {
+    // Hard rule: never enter on HTF (allowlist from Strategy Architecture)
+    if (isHtfChartTimeframe(timeframe, htfList)) {
       return { signal: false, stage: 'rejected', reason: 'htf_never_entries' };
     }
 

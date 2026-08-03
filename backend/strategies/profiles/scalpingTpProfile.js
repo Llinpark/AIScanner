@@ -1,7 +1,7 @@
 /**
  * Scalping Strategy TP Profile — nearby liquidity, tight ATR/pip caps.
  * Official defaults for Restore Default Scalping Settings.
- * Optimised for Entry TF 1m/3m/5m, HTF 15m. Expected TP1 ~20–30 pips.
+ * Optimised for Entry TF 3m/5m, HTF 15m. Expected TP1 ~20–30 pips.
  */
 
 const SCALPING_TP_PROFILE = Object.freeze({
