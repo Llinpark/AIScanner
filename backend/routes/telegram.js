@@ -104,6 +104,43 @@ function createTelegramRouter() {
     }
   });
 
+  /**
+   * Pro-only: save telegramMode (manual_confirmation | alerts_only).
+   * Does not modify executionMode or MT5 settings.
+   */
+  router.post(
+    '/settings',
+    requireAuth,
+    requireSubscription,
+    requireTierFeature('telegramAlerts'),
+    async (req, res) => {
+      try {
+        if (req.body?.telegramMode == null) {
+          return res.status(400).json({ message: 'telegramMode is required' });
+        }
+        const result = await TelegramService.updateTelegramMode(req.userId, req.body.telegramMode);
+        if (!result.ok) {
+          return res.status(400).json({
+            message:
+              result.reason === 'invalid_telegram_mode'
+                ? 'Invalid telegramMode. Use manual_confirmation or alerts_only.'
+                : 'Unable to update Telegram settings',
+            reason: result.reason
+          });
+        }
+        res.json({
+          success: true,
+          telegramMode: result.telegramMode,
+          ignored: Boolean(result.ignored),
+          status: result.status
+        });
+      } catch (error) {
+        console.error('Telegram settings error:', error);
+        res.status(500).json({ message: 'Unable to update Telegram settings', error: error.message });
+      }
+    }
+  );
+
   return router;
 }
 

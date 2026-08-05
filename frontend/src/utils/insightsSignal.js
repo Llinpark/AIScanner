@@ -101,6 +101,14 @@ export function formatDeliveryStatus(signal) {
 }
 
 export function formatExecutionStatus(signal) {
+  if (signal?.executionChannel === 'telegram_alert' || signal?.telegramAlertSent) {
+    return 'Manual (Telegram Alert)';
+  }
+  if (signal?.mt5Sent || signal?.executionChannel === 'mt5_auto' || signal?.executionChannel === 'mt5_manual') {
+    if (signal?.executionStatus === 'sent' || signal?.executionStatus === 'executed') {
+      return 'Executed on MT5';
+    }
+  }
   if (!signal?.executionStatus) return '—';
   return String(signal.executionStatus).replace(/_/g, ' ');
 }

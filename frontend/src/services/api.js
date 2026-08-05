@@ -84,7 +84,8 @@ export const telegramApi = {
   getStatus: () => api.get('/api/telegram/status'),
   createLinkCode: () => api.post('/api/telegram/link-code'),
   unlink: () => api.post('/api/telegram/unlink'),
-  toggle: enabled => api.post('/api/telegram/toggle', { enabled })
+  toggle: enabled => api.post('/api/telegram/toggle', { enabled }),
+  updateSettings: payload => api.post('/api/telegram/settings', payload)
 };
 
 export const mt5Api = {

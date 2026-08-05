@@ -48,7 +48,7 @@ describe('Pro/Premium queue gating', () => {
     const result = await TradeDeliveryService.deliverMt5Auto(
       {
         id: 'u1',
-        subscription: { plan: 'professional', status: 'active' },
+        subscription: { tier: 'professional', status: 'active' },
         mt5: {
           enabled: true,
           executionMode: 'manual',
@@ -58,9 +58,24 @@ describe('Pro/Premium queue gating', () => {
       { _id: 's1', alertType: 'entry' }
     );
     assert.equal(result.ok, false);
-    assert.ok(
-      ['manual_mode', 'subscription_required', 'mt5_not_linked'].includes(result.reason),
-      result.reason
+    assert.equal(result.reason, 'manual_mode');
+  });
+
+  it('deliverMt5Auto refuses Pro alerts_only (still executionMode manual)', async () => {
+    const result = await TradeDeliveryService.deliverMt5Auto(
+      {
+        id: 'u2',
+        subscription: { tier: 'professional', status: 'active' },
+        mt5: {
+          enabled: true,
+          executionMode: 'manual',
+          devices: []
+        },
+        telegram: { telegramMode: 'alerts_only' }
+      },
+      { _id: 's2', alertType: 'entry' }
     );
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'manual_mode');
   });
 });

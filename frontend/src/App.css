@@ -5851,6 +5851,46 @@ h1, h2, h3, h4, h5, h6,
   line-height: 1.45;
 }
 
+.execution-mode-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.execution-mode-option {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  cursor: pointer;
+  background: transparent;
+}
+
+.execution-mode-option.is-selected {
+  border-color: var(--accent-color, #2d6a4f);
+  background: color-mix(in srgb, var(--accent-color, #2d6a4f) 8%, transparent);
+}
+
+.execution-mode-option input {
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.execution-mode-option strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--heading-color);
+}
+
+.execution-mode-option small {
+  display: block;
+  color: var(--text-muted-light);
+  line-height: 1.4;
+}
+
 .auto-setup-steps {
   margin: 0 0 16px;
   padding-left: 1.2rem;

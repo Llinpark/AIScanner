@@ -14,34 +14,50 @@ Requires **KachingTradeCopier.mq5 v1.22+** compiled and attached in MT5.
 
 ## Subscription execution modes (only two)
 
-| Plan | Execution Mode | How trade reaches MT5 queue |
-|------|----------------|------------------------------|
-| **Pro** | **Manual Confirmation** | TradingView → backend validates → Telegram **Execute Trade** / **Ignore Trade** → Execute queues MT5 |
-| **Premium** | **Automatic** | TradingView → backend validates → **immediate** MT5 queue |
+`user.mt5.executionMode` has **only** two values:
 
-**Identical after queue:** one EA trade-management engine (SL, TP1/TP2/TP3, BE, trail, partials, recovery, reporting). No duplicated MT5 logic per plan.
+| Value | Plan | How the trade reaches MT5 |
+|-------|------|---------------------------|
+| `manual` | **Pro** (default) | Telegram path (see telegramMode below) |
+| `auto` | **Premium** (default) | Immediate MT5 queue |
 
-### Pro — Manual Confirmation (time-limited)
+**Identical after MT5 queue:** one EA trade-management engine. No duplicated MT5 logic per plan.
 
-1. Entry signal validated and delivered (in-app / email / Telegram).
+### Pro Telegram preference (`user.telegram.telegramMode`)
+
+This is **not** a third execution mode. It only changes Telegram behaviour while `executionMode === manual`.
+
+| telegramMode | Behaviour |
+|--------------|-----------|
+| `manual_confirmation` (default; missing field) | Telegram **Execute** / **Ignore** → Execute queues MT5 |
+| `alerts_only` | Professional Telegram alert only → **done** (no MT5 queue, no Execute/Ignore) |
+
+Premium ignores `telegramMode` and always uses `executionMode === auto`.
+
+### Pro — Alerts Only (`telegramMode = alerts_only`)
+
+1. Entry signal validated and delivered.
+2. Telegram alert (levels + Signal ID + Open Kaching Dashboard). Footer: Manual Trading.
+3. **No Execute / Ignore.** No Pair Code required.
+4. Subscriber trades manually on any platform.
+5. Signal History / Journal shows **Manual (Telegram Alert)**.
+6. Does **not** require MT5, EA, Pairing, WebRequest, or Algo Trading.
+
+Switch Telegram Behaviour back to **Manual Confirmation** to show Pair MT5 again.
+
+### Pro — Manual Confirmation (`telegramMode = manual_confirmation`)
+
+1. Entry signal validated and delivered.
 2. Telegram shows **Execute Trade** and **Ignore Trade**.
 3. Confirmation window: **2–5 minutes** (default **3 min**).
-   - Env: `MT5_MANUAL_CONFIRM_SECONDS` (clamped 120–300)
-   - Optional user override: `mt5.manualConfirmSeconds`
-4. **Execute** → `TradeExecution` pending → EA poll → fill → full EA management (no further Telegram).
-5. **Ignore** → discard; `executionStatus=ignored`; **not queued**.
-6. **No response before expiry** → sweeper / on-tap marks **Expired** (`executionStatus=expired`, `mt5ConfirmStatus=expired`); **not queued**.
+4. **Execute** → MT5 queue → EA. **Ignore** / timeout → not queued.
+5. Requires MT5 pairing.
 
 ### Premium — Automatic
 
 1. Entry signal validated → `deliverMt5Auto` queues immediately.
-2. Telegram (if linked) is **informational only** — never required, never shows Execute/Ignore for auto mode.
+2. Telegram (if linked) is **informational only**.
 3. EA poll → fill → **same** full management as Pro.
-
-Dashboard shows:
-
-- **Manual Confirmation (Pro)** + confirm window explanation
-- **Automatic (Premium)** + “Telegram informational only”
 
 ---
 
@@ -53,28 +69,20 @@ TradingView ENTRY
        ▼
   Backend validate
        │
-       ├─ Premium Automatic ──────────────► MT5 queue (TradeExecution pending)
+       ├─ Premium (executionMode=auto) ───► MT5 queue
        │
-       └─ Pro Manual Confirm
+       └─ Pro (executionMode=manual)
               │
-              ├─ Execute (within TTL) ───► MT5 queue
-              ├─ Ignore ────────────────► discarded
-              └─ Timeout ───────────────► Expired (no queue)
-                       │
-                       ▼
-              EA poll (~1s) / claim (sent)
-                       │
-                       ▼
-              OrderSend (ENTRY + SL; TP managed locally)
-                       │
-                       ▼
-         EA trade manager (identical for Pro & Premium)
-           • Validate Expected vs Broker → sync | execute
-           • TP1 / TP2 / TP3 hits + partials (retry on reject; re-validate first)
-           • Break-even / trailing (flags after broker confirm or validate)
-           • Reconciler: OnInit / reconnect / token / 60s
-           • Persist managed + durable event queue (Common Files)
-           • Report → bridge/report (eventUuid + ack; remove only on 200+ack)
+              ├─ telegramMode=alerts_only ─► Telegram alert (no queue)
+              │
+              └─ telegramMode=manual_confirmation
+                     │
+                     ├─ Execute (within TTL) ───► MT5 queue
+                     ├─ Ignore ────────────────► discarded
+                     └─ Timeout ───────────────► Expired (no queue)
+                              │
+                              ▼
+                     EA poll / OrderSend / trade manager
 ```
 
 ---

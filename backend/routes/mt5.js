@@ -76,6 +76,20 @@ function createMt5Router() {
     pairStartLimiter,
     async (req, res) => {
       try {
+        // Security: Alerts Only Pro users must never receive Pair Codes.
+        // Does not change PairCode logic — only gates issuance.
+        const { isAlertsOnlyTelegram, resolveTelegramMode } = require('../utils/telegramMode');
+        if (
+          Mt5TradeCopierService.resolveExecutionMode(req.user) === 'manual' &&
+          isAlertsOnlyTelegram(req.user)
+        ) {
+          return res.status(403).json({
+            message:
+              'Telegram Alerts Only does not use MT5 pairing. Switch Telegram Behaviour to Manual Confirmation to pair MT5.',
+            reason: 'alerts_only_mode',
+            telegramMode: resolveTelegramMode(req.user)
+          });
+        }
         const session = await Mt5PairingService.startPairing(req.userId);
         res.json({
           pairCode: session.pairCode,

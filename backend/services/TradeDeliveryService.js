@@ -16,6 +16,11 @@ const {
   isConfirmExpired,
   formatConfirmWindowLabel
 } = require('../utils/mt5ManualConfirm');
+const {
+  resolveTelegramMode,
+  isAlertsOnlyTelegram,
+  TELEGRAM_MODES
+} = require('../utils/telegramMode');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -102,14 +107,6 @@ async function expirePendingManualConfirmations({ limit = 50 } = {}) {
   return { expired };
 }
 
-/**
- * Resolve Auto vs Manual MT5 execution for a subscriber.
- * Delegates to Mt5TradeCopierService so defaults stay in one place.
- */
-function resolveExecutionMode(subscriber) {
-  return Mt5TradeCopierService.resolveExecutionMode(subscriber);
-}
-
 function formatLiveAlertMessage(signal) {
   return formatKachingAlertMessage(signal);
 }
@@ -144,6 +141,10 @@ function toLiveAlertPayload(signalDoc) {
     telegramSent: Boolean(signal.telegramSent),
     mt5Sent: Boolean(signal.mt5Sent),
     emailSent: Boolean(signal.emailSent),
+    executionChannel: signal.executionChannel || 'none',
+    telegramAlertSent: Boolean(signal.telegramAlertSent),
+    telegramAlertDelivered: Boolean(signal.telegramAlertDelivered),
+    telegramAlertRead: Boolean(signal.telegramAlertRead),
     userId: signal.userId,
     createdAt: signal.createdAt,
     pattern: signal.pattern || null,
@@ -219,7 +220,7 @@ async function deliverEmail(subscriber, signalDoc) {
   }
 }
 
-async function deliverTelegram(subscriber, signalDoc, { includeExecuteButton = false } = {}) {
+async function deliverTelegram(subscriber, signalDoc, options = {}) {
   if (!userHasTierFeature(subscriber, 'telegramAlerts')) {
     return false;
   }
@@ -231,9 +232,7 @@ async function deliverTelegram(subscriber, signalDoc, { includeExecuteButton = f
   }
 
   try {
-    return await TelegramService.notifySubscriber(subscriber, signalDoc, {
-      includeExecuteButton
-    });
+    return await TelegramService.notifySubscriber(subscriber, signalDoc, options);
   } catch (err) {
     console.warn('[TradeDelivery] telegram failed:', err.message);
     return false;
@@ -286,6 +285,11 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   let mt5Sent = Boolean(signalDoc.mt5Sent);
   let emailSent = Boolean(signalDoc.emailSent);
   let executionStatus = signalDoc.executionStatus || 'pending';
+  let executionChannel = signalDoc.executionChannel || 'none';
+  let telegramAlertSent = Boolean(signalDoc.telegramAlertSent);
+  let telegramAlertSentAt = signalDoc.telegramAlertSentAt || null;
+  let telegramAlertDelivered = Boolean(signalDoc.telegramAlertDelivered);
+  let telegramAlertDeliveredAt = signalDoc.telegramAlertDeliveredAt || null;
   let mt5Reason = '-';
 
   const signal = signalDoc?.toObject ? signalDoc.toObject() : { ...signalDoc };
@@ -297,14 +301,20 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   const subLabel = subscriber?.email || subscriber?.id || 'broadcast';
 
   const executionMode = subscriber ? resolveExecutionMode(subscriber) : 'manual';
+  const telegramMode = subscriber ? resolveTelegramMode(subscriber) : TELEGRAM_MODES.MANUAL_CONFIRMATION;
   const isEntry = isEntryAlert(signal.alertType || 'signal');
   const mt5Linked =
     Boolean(subscriber) && Mt5TradeCopierService.isMt5Linked(subscriber.mt5 || {});
-  // Pro Manual: Telegram Execute/Ignore (time-limited). Premium Auto: never confirm buttons.
+  // Pro Alerts Only: telegramMode preference while executionMode stays manual — no Execute/Ignore.
+  const alertsOnly =
+    Boolean(subscriber) && executionMode === 'manual' && isAlertsOnlyTelegram(subscriber);
+  // Pro Manual Confirmation only — Alerts Only never shows Execute/Ignore; Premium Auto never does.
   const includeExecuteButton =
     Boolean(subscriber) &&
     isEntry &&
     executionMode === 'manual' &&
+    !alertsOnly &&
+    telegramMode === TELEGRAM_MODES.MANUAL_CONFIRMATION &&
     userHasTierFeature(subscriber, 'mt5Execution') &&
     mt5Linked;
 
@@ -333,25 +343,38 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
 
     const tgOk = await deliverTelegram(subscriber, signal, {
       includeExecuteButton,
+      alertOnly: alertsOnly,
       confirmExpiresAt: mt5ConfirmExpiresAt,
       confirmSeconds
     });
-    if (tgOk) telegramSent = true;
+    if (tgOk) {
+      telegramSent = true;
+      if (alertsOnly && isEntry) {
+        telegramAlertSent = true;
+        telegramAlertSentAt = new Date();
+        // Bot API sendMessage success ≈ delivered to Telegram servers (read receipts future-ready).
+        telegramAlertDelivered = true;
+        telegramAlertDeliveredAt = telegramAlertSentAt;
+        executionChannel = 'telegram_alert';
+        executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
+      }
+    }
     logPipeline('DeliveryTelegram', tgOk || emailSelfTest ? 'PASS' : 'FAIL', {
       ...meta,
       reason: tgOk
-        ? `sub=${subLabel}; mode=${executionMode}`
+        ? `sub=${subLabel}; mode=${executionMode}; telegramMode=${telegramMode}${alertsOnly ? '; telegram_alert_sent' : ''}`
         : emailSelfTest
           ? `self_test_skip; sub=${subLabel}`
           : `skipped_or_failed; sub=${subLabel}`
     });
 
-    // Premium Automatic only — Pro Manual never auto-queues (confirm or expire).
+    // Premium Automatic only — Pro Manual (including Alerts Only preference) never auto-queues.
     const mt5Result = await deliverMt5Auto(subscriber, signal);
     mt5Reason = mt5Result?.reason || (mt5Result?.ok ? 'queued' : 'skipped');
     if (mt5Result?.ok) {
       mt5Sent = true;
       executionStatus = 'sent';
+      executionChannel = 'mt5_auto';
       mt5ConfirmStatus = 'none';
       mt5ConfirmExpiresAt = null;
     } else if (
@@ -367,7 +390,7 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     const mt5Ok = Boolean(mt5Result?.ok) || mt5Reason === 'self_test_skip';
     logPipeline('DeliveryMT5', mt5Ok ? 'PASS' : 'FAIL', {
       ...meta,
-      reason: `${mt5Reason}; mode=${executionMode}; sub=${subLabel}`
+      reason: `${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; sub=${subLabel}`
     });
   }
 
@@ -377,6 +400,11 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     mt5Sent,
     emailSent,
     executionStatus,
+    executionChannel,
+    telegramAlertSent,
+    telegramAlertSentAt,
+    telegramAlertDelivered,
+    telegramAlertDeliveredAt,
     mt5ConfirmStatus,
     mt5ConfirmExpiresAt,
     deliveryStatus: 'delivered'
@@ -387,6 +415,11 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     mt5Sent,
     emailSent,
     executionStatus,
+    executionChannel,
+    telegramAlertSent,
+    telegramAlertSentAt,
+    telegramAlertDelivered,
+    telegramAlertDeliveredAt,
     mt5ConfirmStatus,
     mt5ConfirmExpiresAt,
     deliveryStatus: 'delivered'
@@ -411,6 +444,28 @@ async function queueManualExecution(userId, signalId) {
   }
 
   const plain = signal.toObject ? signal.toObject() : signal;
+
+  // Alerts Only never queues — Execute callbacks must not reach MT5.
+  try {
+    const UserConfig = require('../models/User');
+    const mongoose = require('mongoose');
+    let user = null;
+    if (mongoose.connection.readyState === 1) {
+      user = await UserConfig.findById(userId);
+    } else {
+      const devUserStore = require('../utils/devUserStore');
+      user = await devUserStore.findById(userId);
+    }
+    if (
+      user &&
+      resolveExecutionMode(user) === 'manual' &&
+      isAlertsOnlyTelegram(user)
+    ) {
+      return { ok: false, reason: 'alerts_only_mode' };
+    }
+  } catch {
+    /* ignore lookup errors; queue path still validates below */
+  }
 
   if (plain.mt5Sent || ['sent', 'executed'].includes(plain.executionStatus)) {
     return { ok: false, reason: 'already_queued' };
@@ -443,7 +498,8 @@ async function queueManualExecution(userId, signalId) {
     await Signal.findByIdAndUpdate(signalId, {
       mt5ConfirmStatus: 'executed',
       mt5Sent: true,
-      executionStatus: 'sent'
+      executionStatus: 'sent',
+      executionChannel: 'mt5_manual'
     }).catch(() => {});
   }
 
@@ -496,6 +552,10 @@ function stopManualConfirmExpiryJob() {
     clearInterval(confirmExpiryTimer);
     confirmExpiryTimer = null;
   }
+}
+
+function resolveExecutionMode(subscriber) {
+  return Mt5TradeCopierService.resolveExecutionMode(subscriber);
 }
 
 module.exports = {

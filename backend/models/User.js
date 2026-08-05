@@ -18,7 +18,18 @@ const UserConfigSchema = new mongoose.Schema({
     linkedAt: { type: Date, default: null },
     enabled: { type: Boolean, default: true },
     linkCode: { type: String, default: null },
-    linkCodeExpiresAt: { type: Date, default: null }
+    linkCodeExpiresAt: { type: Date, default: null },
+    /**
+     * Pro-only Telegram behaviour while executionMode === 'manual'.
+     * manual_confirmation (default) — Execute/Ignore → MT5 queue
+     * alerts_only — Telegram alert only; no MT5 queue / buttons
+     * Premium (executionMode auto) ignores this field. Missing → manual_confirmation.
+     */
+    telegramMode: {
+      type: String,
+      enum: ['manual_confirmation', 'alerts_only'],
+      required: false
+    }
   },
 
   mt5: {

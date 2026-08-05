@@ -40,7 +40,6 @@ describe('Pro Manual confirm expire / ignore (no queue)', () => {
   });
 
   it('treats past confirm window as expired', () => {
-    // Started 5 minutes ago with a 2-minute window → expired
     const expires = computeConfirmExpiresAt(new Date(Date.now() - 5 * 60_000), 120);
     assert.equal(isConfirmExpired(expires), true);
   });
@@ -49,22 +48,16 @@ describe('Pro Manual confirm expire / ignore (no queue)', () => {
 describe('Execution mode resolution — only two modes', () => {
   it('Pro-like (no mt5AutoExecution) resolves manual', () => {
     const user = {
-      subscription: { plan: 'professional', status: 'active' },
+      subscription: { tier: 'professional', status: 'active' },
       mt5: { executionMode: null }
     };
-    // resolveExecutionMode uses userHasTierFeature — professional should be manual default
     const mode = Mt5TradeCopierService.resolveExecutionMode(user);
-    assert.ok(mode === 'manual' || mode === 'auto');
-    // When auto feature absent, must be manual
-    if (mode === 'auto') {
-      // Premium fixture; still only auto|manual
-      assert.equal(['auto', 'manual'].includes(mode), true);
-    }
+    assert.equal(mode, 'manual');
   });
 
   it('explicit manual is never upgraded without tier', () => {
     const user = {
-      subscription: { plan: 'professional', status: 'active' },
+      subscription: { tier: 'professional', status: 'active' },
       mt5: { executionMode: 'manual' }
     };
     assert.equal(Mt5TradeCopierService.resolveExecutionMode(user), 'manual');
@@ -73,8 +66,17 @@ describe('Execution mode resolution — only two modes', () => {
 
   it('explicit auto without Premium feature collapses to manual', () => {
     const user = {
-      subscription: { plan: 'basic', status: 'active' },
+      subscription: { tier: 'basic', status: 'active' },
       mt5: { executionMode: 'auto' }
+    };
+    assert.equal(Mt5TradeCopierService.resolveExecutionMode(user), 'manual');
+  });
+
+  it('telegramMode does not alter executionMode', () => {
+    const user = {
+      subscription: { tier: 'professional', status: 'active' },
+      mt5: { executionMode: 'manual' },
+      telegram: { telegramMode: 'alerts_only' }
     };
     assert.equal(Mt5TradeCopierService.resolveExecutionMode(user), 'manual');
   });

@@ -443,8 +443,8 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
         </div>
         {tierLimits.mt5Execution && (
           <p className="api-hint">
-            Auto Trading (Pro+): connect MT5 in Auto Trading. Premium Auto queues every entry; Pro Manual confirms
-            via Execute on the Telegram alert (EA still independent of Telegram)
+            Auto Trading (Pro+): choose Telegram Alerts Only (no MT5) or Manual Confirmation (Execute on
+            Telegram → MT5). Premium Auto queues every entry
             {tierLimits.trailingStop ? ', trailing stop' : ''}
             {tierLimits.breakEvenAutomation ? ', break-even' : ''}
             {tierLimits.autoLotSizing

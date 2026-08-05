@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
-const { WEBHOOK_TELEGRAM_URL } = require('../config/appUrls');
+const { WEBHOOK_TELEGRAM_URL, FRONTEND_URL } = require('../config/appUrls');
 const {
   userHasTierFeature,
   getEffectiveSubscription,
@@ -14,6 +14,12 @@ const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { isEntryAlert } = require('../utils/signalOutcome');
 const { formatTvPrice } = require('../utils/priceFormat');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
+const {
+  isAlertsOnlyTelegram,
+  resolveTelegramMode,
+  coerceWritableTelegramMode,
+  TELEGRAM_MODES
+} = require('../utils/telegramMode');
 
 const LINK_CODE_TTL_MS = 15 * 60 * 1000;
 const ALLOWED_UPDATES = ['message', 'callback_query'];
@@ -253,9 +259,21 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
+function resolveAlertOnlyOption(subscriber, options = {}) {
+  // Explicit boolean wins — never let leftover telegramMode override Premium/auto.
+  if (typeof options.alertOnly === 'boolean') return options.alertOnly;
+  return Boolean(subscriber && isAlertsOnlyTelegram(subscriber));
+}
+
 function formatSignalMessage(signal, subscriber = null, options = {}) {
   const includeExecuteButton = Boolean(options.includeExecuteButton);
+  const alertOnly = resolveAlertOnlyOption(subscriber, options);
   const alertType = signal.alertType || 'signal';
+
+  if (alertOnly && isEntryAlert(alertType)) {
+    return formatAlertsOnlyMessage(signal, subscriber);
+  }
+
   const title = escapeHtml(formatKachingAlertMessage(signal).split('|')[0]?.trim() || 'Kaching Alert');
   const sl = signal.stop_loss_1 ?? signal.stop_loss;
   const lines = [
@@ -301,6 +319,45 @@ function formatSignalMessage(signal, subscriber = null, options = {}) {
   return lines.filter(Boolean).join('\n');
 }
 
+/**
+ * Professional alert-only Telegram message (no Execute / Ignore).
+ * Subscriber executes manually on any platform.
+ */
+function formatAlertsOnlyMessage(signal, subscriber = null) {
+  const direction = String(signal.direction || '').toLowerCase();
+  const isBuy = direction === 'long' || direction === 'buy';
+  const side = isBuy ? 'BUY' : direction === 'short' || direction === 'sell' ? 'SELL' : String(signal.direction || '').toUpperCase();
+  const emoji = isBuy ? '🟢' : side === 'SELL' ? '🔴' : '⚪';
+  const sl = signal.stop_loss_1 ?? signal.stop_loss;
+  const signalId = signal.signalUuid || signal.signalId || signal._id || signal.id || '—';
+  const conf =
+    signal.confidence != null
+      ? `${Math.round(Number(signal.confidence) <= 1 ? Number(signal.confidence) * 100 : Number(signal.confidence))}%`
+      : null;
+
+  const lines = [
+    `${emoji} <b>Kaching AI ${escapeHtml(side)}</b>`,
+    '',
+    `<b>${escapeHtml(signal.symbol)}</b>`,
+    signal.timeframe ? `<b>Timeframe:</b> ${escapeHtml(signal.timeframe)}` : null,
+    `<b>Entry:</b> ${formatTvPrice(signal.entry)}`,
+    `<b>Stop Loss:</b> ${formatTvPrice(sl)}`,
+    `<b>TP1:</b> ${formatTvPrice(signal.take_profit_1)}`,
+    `<b>TP2:</b> ${formatTvPrice(signal.take_profit_2)}`,
+    `<b>TP3:</b> ${formatTvPrice(signal.take_profit_3)}`
+  ];
+
+  if (conf != null && (!subscriber || userHasTierFeature(subscriber, 'showConfidence'))) {
+    lines.push(`<b>Confidence:</b> ${conf}`);
+  }
+
+  lines.push(`<b>Signal ID:</b> <code>${escapeHtml(String(signalId))}</code>`);
+  lines.push('');
+  lines.push('<i>Manual Trading — open your preferred trading platform to place this trade.</i>');
+
+  return lines.filter(line => line != null).join('\n');
+}
+
 function buildExecuteCallbackData(signalId) {
   return `exec:${String(signalId)}`.slice(0, 64);
 }
@@ -321,7 +378,18 @@ function parseIgnoreCallbackData(data) {
   return raw.slice(4);
 }
 
-function buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton = false } = {}) {
+function buildSignalReplyMarkup(signal, subscriber, options = {}) {
+  const includeExecuteButton = Boolean(options.includeExecuteButton);
+  const alertOnly = resolveAlertOnlyOption(subscriber, options);
+
+  // Alerts Only: dashboard URL only — never Execute / Ignore.
+  if (alertOnly) {
+    const dashboardUrl = (FRONTEND_URL || 'https://kachingscanner.com').replace(/\/$/, '');
+    return {
+      inline_keyboard: [[{ text: 'Open Kaching Dashboard', url: dashboardUrl }]]
+    };
+  }
+
   if (!includeExecuteButton) return null;
   if (!subscriber || !userHasTierFeature(subscriber, 'mt5Execution')) {
     return null;
@@ -365,9 +433,13 @@ async function notifySubscriber(subscriber, signalDoc, options = {}) {
   }
 
   const includeExecuteButton = Boolean(options.includeExecuteButton);
+  const alertOnly = resolveAlertOnlyOption(subscriber, options);
   const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
-  const text = formatSignalMessage(signal, subscriber, options);
-  const replyMarkup = buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton });
+  const text = formatSignalMessage(signal, subscriber, { ...options, alertOnly, includeExecuteButton });
+  const replyMarkup = buildSignalReplyMarkup(signal, subscriber, {
+    includeExecuteButton: includeExecuteButton && !alertOnly,
+    alertOnly
+  });
   const result = await sendMessage(telegram.chatId, text, { replyMarkup });
   return Boolean(result);
 }
@@ -439,6 +511,9 @@ async function getPublicStatus(user) {
   const telegram = user?.telegram || {};
   const tier = getEffectiveSubscription(user).tier || 'basic';
   const enabledFeature = userHasTierFeature(user, 'telegramAlerts');
+  const telegramMode = resolveTelegramMode(user);
+  const isProManual =
+    enabledFeature && !userHasTierFeature(user, 'mt5AutoExecution');
 
   return {
     configured: isConfigured(),
@@ -449,7 +524,53 @@ async function getPublicStatus(user) {
     linkedAt: telegram.linkedAt || null,
     botUsername: config.botUsername,
     botUrl: getBotDeepLink(),
-    tier: getTierDisplayName(tier)
+    tier: getTierDisplayName(tier),
+    /** Pro preference; Premium ignores. Default manual_confirmation when missing. */
+    telegramMode,
+    isAlertsOnly: isProManual && telegramMode === TELEGRAM_MODES.ALERTS_ONLY,
+    allowedTelegramModes: isProManual
+      ? [TELEGRAM_MODES.MANUAL_CONFIRMATION, TELEGRAM_MODES.ALERTS_ONLY]
+      : []
+  };
+}
+
+/**
+ * Persist Pro telegramMode preference (does not touch executionMode / MT5).
+ */
+async function updateTelegramMode(userId, requestedMode) {
+  const coerced = coerceWritableTelegramMode(requestedMode);
+  if (!coerced) {
+    return { ok: false, reason: 'invalid_telegram_mode' };
+  }
+
+  let user = null;
+  if (isDbConnected()) {
+    user = await UserConfig.findById(userId);
+  } else {
+    user = await devUserStore.findById(userId);
+  }
+  if (!user) return { ok: false, reason: 'user_not_found' };
+
+  // Premium ignores — keep stored value but do not apply to routing.
+  if (userHasTierFeature(user, 'mt5AutoExecution')) {
+    return {
+      ok: true,
+      ignored: true,
+      telegramMode: TELEGRAM_MODES.MANUAL_CONFIRMATION,
+      status: await getPublicStatus(user)
+    };
+  }
+
+  const telegram = {
+    ...(user.telegram?.toObject?.() || user.telegram || {}),
+    telegramMode: coerced
+  };
+  await persistUserTelegram(userId, telegram);
+  const updated = { ...user.toObject?.() || user, telegram };
+  return {
+    ok: true,
+    telegramMode: coerced,
+    status: await getPublicStatus(updated)
   };
 }
 
@@ -531,7 +652,9 @@ async function handleCommand(chatId, text, fromUsername) {
         `Plan: ${escapeHtml(status.tier)}`,
         `Telegram: ${status.linked ? 'linked' : 'not linked'} (${status.enabled ? 'alerts on' : 'alerts off'})`,
         mt5Status.featureEnabled
-          ? `MT5: ${mt5Status.linked ? 'EA linked' : 'EA not linked'} | Mode: ${mt5Status.executionMode}${mt5Status.accountBalance ? ` | Balance: ${mt5Status.accountBalance} ${mt5Status.accountCurrency}` : ''}`
+          ? isAlertsOnlyTelegram(user)
+            ? `Telegram: Alerts Only (no MT5) | Mode: ${resolveTelegramMode(user)}`
+            : `MT5: ${mt5Status.linked ? 'EA linked' : 'EA not linked'} | Mode: ${mt5Status.executionModeLabel || mt5Status.executionMode}${mt5Status.accountBalance ? ` | Balance: ${mt5Status.accountBalance} ${mt5Status.accountCurrency}` : ''}`
           : 'MT5 execution: upgrade to Pro or Premium'
       ].join('\n')
     );
@@ -549,8 +672,8 @@ async function handleCommand(chatId, text, fromUsername) {
         '/help — show this message',
         '',
         '<b>Auto Trading</b>',
-        'Telegram is notifications only. Pair MT5 in the dashboard.',
-        'Pro Manual Confirmation: Execute Trade / Ignore Trade (time-limited).',
+        'Pro Alerts Only: instant signals — trade manually on any platform. No MT5.',
+        'Pro Manual Confirmation: Execute Trade / Ignore Trade (time-limited) → MT5.',
         'Premium Automatic: queues MT5 immediately; Telegram is informational only.'
       ].join('\n')
     );
@@ -584,6 +707,15 @@ async function handleExecuteCallback(callbackQuery) {
     return;
   }
 
+  if (isAlertsOnlyTelegram(user)) {
+    await answerCallbackQuery(
+      callbackId,
+      'Alerts Only — no MT5 queue. Execute manually on your platform.',
+      true
+    );
+    return;
+  }
+
   const userId = user._id?.toString() || user.id;
   // Manual Execute only — queues via TradeDeliveryService (source=manual).
   const TradeDeliveryService = require('./TradeDeliveryService');
@@ -601,6 +733,7 @@ async function handleExecuteCallback(callbackQuery) {
       signal_not_found: 'Signal not found.',
       confirm_expired: 'Confirmation expired — signal marked Expired. Not queued.',
       confirm_ignored: 'This trade was ignored.',
+      alerts_only_mode: 'Alerts Only mode — no MT5 queue.',
       forbidden: 'Not allowed.'
     };
     await answerCallbackQuery(callbackId, messages[result.reason] || 'Unable to queue trade.', true);
@@ -820,8 +953,11 @@ module.exports = {
   linkByCode,
   unlinkUser,
   getPublicStatus,
+  updateTelegramMode,
   notifySubscriber,
   formatSignalMessage,
+  formatAlertsOnlyMessage,
+  buildSignalReplyMarkup,
   sendMessage,
   handleWebhook,
   startPolling,

@@ -116,6 +116,23 @@ const SignalSchema = new mongoose.Schema({
   telegramSent: { type: Boolean, default: false },
   mt5Sent: { type: Boolean, default: false },
   emailSent: { type: Boolean, default: false },
+  /**
+   * How this signal was routed for execution (additive analytics / journal).
+   * telegram_alert = Pro Alerts Only (no MT5 queue).
+   */
+  executionChannel: {
+    type: String,
+    enum: ['none', 'mt5_auto', 'mt5_manual', 'telegram_alert'],
+    default: 'none'
+  },
+  /** Telegram Alerts Only analytics — separate from MT5 execution analytics. */
+  telegramAlertSent: { type: Boolean, default: false },
+  telegramAlertSentAt: { type: Date, default: null },
+  telegramAlertDelivered: { type: Boolean, default: false },
+  telegramAlertDeliveredAt: { type: Date, default: null },
+  /** Future-ready if Telegram read receipts become available. */
+  telegramAlertRead: { type: Boolean, default: false },
+  telegramAlertReadAt: { type: Date, default: null },
   chartSnapshot: { type: String },
   pattern: { type: String },
   patternLabel: { type: String },

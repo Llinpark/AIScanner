@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { journalApi } from '../../services/api';
+import { formatExecutionStatus } from '../../utils/insightsSignal';
 
 const EMPTY_FORM = {
   symbol: '',
@@ -61,7 +62,10 @@ export default function TradeJournal({ tierLimits, prefill, onNavigatePricing, o
       emotion: '',
       lessonsLearned: '',
       screenshotUrl: '',
-      executionNotes: prefill.tradeExplanation || prefill.notes || ''
+      executionNotes:
+        (prefill.executionChannel === 'telegram_alert' || prefill.telegramAlertSent
+          ? `Execution: ${formatExecutionStatus(prefill)}\n`
+          : '') + (prefill.tradeExplanation || prefill.notes || '')
     });
     onPrefillConsumed?.();
   }, [prefill, onPrefillConsumed]);
