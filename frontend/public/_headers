@@ -1,0 +1,13 @@
+# Keep the HTML shell fresh so installs always pick up current hashed JS/CSS.
+/
+  Cache-Control: public, max-age=0, must-revalidate
+
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+
+/site.webmanifest
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Fingerprinted bundles: long cache is safe.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

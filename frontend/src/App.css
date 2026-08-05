@@ -4687,6 +4687,39 @@ h1, h2, h3, h4, h5, h6,
   color: var(--text-muted-light);
 }
 
+.site-layout--boot {
+  justify-content: center;
+}
+
+.site-main--boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 70vh;
+  padding-bottom: 48px;
+}
+
+.app-boot-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.app-boot-state p {
+  margin: 0;
+  font-size: 15px;
+}
+
+.app-boot-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  display: block;
+}
+
 .setup-instructions {
   background: var(--surface-color);
   border: 1px solid var(--border-color);

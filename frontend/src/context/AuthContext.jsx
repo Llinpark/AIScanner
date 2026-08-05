@@ -3,6 +3,9 @@ import { authApi, subscriptionApi, setUnauthorizedHandler } from '../services/ap
 
 const AuthContext = createContext(null);
 
+/** Avoid indefinite white/loading shell when the API is unreachable (common on flaky Wi‑Fi). */
+const AUTH_BOOTSTRAP_TIMEOUT_MS = 8000;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -13,7 +16,7 @@ export function AuthProvider({ children }) {
 
   const refreshUser = useCallback(async () => {
     try {
-      const response = await authApi.me();
+      const response = await authApi.me({ timeout: AUTH_BOOTSTRAP_TIMEOUT_MS });
       setUser(response.data.user);
     } catch {
       clearSession();
@@ -34,8 +37,28 @@ export function AuthProvider({ children }) {
   }, [clearSession]);
 
   useEffect(() => {
-    refreshUser();
-  }, [refreshUser]);
+    let cancelled = false;
+    const safetyTimer = window.setTimeout(() => {
+      if (!cancelled) setLoading(false);
+    }, AUTH_BOOTSTRAP_TIMEOUT_MS + 1500);
+
+    (async () => {
+      try {
+        const response = await authApi.me({ timeout: AUTH_BOOTSTRAP_TIMEOUT_MS });
+        if (!cancelled) setUser(response.data.user);
+      } catch {
+        if (!cancelled) clearSession();
+      } finally {
+        window.clearTimeout(safetyTimer);
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(safetyTimer);
+    };
+  }, [clearSession]);
 
   const login = async (email, password) => {
     const response = await authApi.login({ email, password });
@@ -86,7 +109,8 @@ export function AuthProvider({ children }) {
         logout,
         applySession,
         updateUser,
-        refreshSubscription
+        refreshSubscription,
+        refreshUser
       }}
     >
       {children}

@@ -331,13 +331,20 @@ function AppContent() {
 
 function LoadingShell() {
   return (
-    <div className="site-layout">
+    <div className="site-layout site-layout--boot">
       <SeoHead page={pageFromPath(typeof window !== 'undefined' ? window.location.pathname : '/')} />
-      <main className="site-main">
-        <div className="loading-state">Loading…</div>
+      <main className="site-main site-main--boot">
+        <div className="app-boot-state" role="status" aria-live="polite">
+          <img
+            className="app-boot-logo"
+            src="/icons/pwa-192-v3.png"
+            alt="KachingScanner"
+            width="72"
+            height="72"
+          />
+          <p>Starting KachingScanner…</p>
+        </div>
       </main>
-      <AcceptedPayments />
-      <Footer onNavigate={() => {}} onNavigateRiskDisclosure={() => {}} />
     </div>
   );
 }
