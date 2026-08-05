@@ -16,6 +16,10 @@ backend/dev-journal.json
 # Local Mongo dumps / cleanup artifacts (never commit)
 backups/
 
+# Local agent/temp dumps & Chrome PWA profile repro folders (never commit)
+.tmp_*
+.tmp_*/
+
 python-service/.venv/
 __pycache__/
 *.py[cod]
