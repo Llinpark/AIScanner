@@ -110,8 +110,11 @@ def main() -> None:
     logo = load_logo_source()
     print(f"logo source trimmed size={logo.size}")
 
-    # Install / PWA icons — solid white, opaque RGB
-    for size, name, ratio in [
+    icons_dir = PUBLIC / "icons"
+    icons_dir.mkdir(exist_ok=True)
+
+    # Install / PWA icons — solid white, opaque RGB (legacy root + cache-busted /icons/*-v3)
+    outputs: list[tuple[int, str, float]] = [
         (512, "icon-512.png", 0.78),
         (192, "icon-192.png", 0.78),
         (180, "apple-touch-icon.png", 0.78),
@@ -120,8 +123,22 @@ def main() -> None:
         (48, "favicon-48x48.png", 0.82),
         (32, "favicon-32x32.png", 0.82),
         (16, "favicon-16x16.png", 0.90),
-    ]:
-        save_rgb_png(make_square_icon(logo, size, ratio), PUBLIC / name)
+    ]
+    v3_aliases = {
+        "icon-512.png": "pwa-512-v3.png",
+        "icon-192.png": "pwa-192-v3.png",
+        "icon-512-maskable.png": "pwa-512-maskable-v3.png",
+        "icon-192-maskable.png": "pwa-192-maskable-v3.png",
+        "apple-touch-icon.png": "apple-touch-v3.png",
+        "favicon-32x32.png": "favicon-32-v3.png",
+        "favicon-16x16.png": "favicon-16-v3.png",
+    }
+    for size, name, ratio in outputs:
+        im = make_square_icon(logo, size, ratio)
+        save_rgb_png(im, PUBLIC / name)
+        alias = v3_aliases.get(name)
+        if alias:
+            save_rgb_png(im, icons_dir / alias)
 
     # Multi-size ICO — write largest first so Windows has a usable 48px frame
     base = Image.open(PUBLIC / "icon-512.png").convert("RGBA")
@@ -134,6 +151,9 @@ def main() -> None:
     ico_path = PUBLIC / "favicon.ico"
     ico_images[0].save(ico_path, format="ICO", append_images=ico_images[1:])
     print(f"wrote {ico_path.name} bytes={ico_path.stat().st_size}")
+    ico_v3 = icons_dir / "favicon-v3.ico"
+    ico_images[0].save(ico_v3, format="ICO", append_images=ico_images[1:])
+    print(f"wrote icons/{ico_v3.name} bytes={ico_v3.stat().st_size}")
 
     print("\n=== verify ===")
     for name in [
@@ -144,6 +164,9 @@ def main() -> None:
         "apple-touch-icon.png",
         "favicon-32x32.png",
         "favicon.ico",
+        "icons/pwa-512-v3.png",
+        "icons/pwa-512-maskable-v3.png",
+        "icons/favicon-v3.ico",
     ]:
         analyze(PUBLIC / name)
 
