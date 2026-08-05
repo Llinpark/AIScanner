@@ -75,6 +75,13 @@ export default function AuthForm({ onSuccess, initialMode = 'login', authNotice 
         setError(apiError.message);
         return;
       }
+      // No HTTP response → network / DNS / CORS / API down (not bad credentials).
+      if (!err.response) {
+        setError(
+          'Cannot reach the login server. Check your connection, VPN, or firewall, then try again.'
+        );
+        return;
+      }
       setError(
         formatFieldErrors(apiError?.errors) ||
           apiError?.message ||
