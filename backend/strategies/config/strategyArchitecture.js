@@ -481,16 +481,22 @@ function buildPineTfVariables(key, resolvedConfig = {}) {
   const htfShort = formatTfList(arch.htfTimeframes);
   const d = arch.diagnostics;
 
-  const diagWrongEntry = `${d.wrongEntry} — attach to ${entryLabel} for entries (HTF is ${htfShort} via request.security)`;
-  const diagWrongHtf = `${d.wrongHtf} — set HTF context to ${htfLabel}`;
-  const diagChartIsHtf = `${d.chartIsHtf} — switch to ${entryLabel} for entries`;
+  // Include shortLabel so users on the wrong chart know which strategy they attached
+  // (e.g. Scalping on 15m vs Day Trading which allows 15m entries).
+  const diagWrongEntry = `${d.wrongEntry} (${arch.shortLabel}) — attach to ${entryLabel} for entries (HTF is ${htfShort} via request.security)`;
+  const diagWrongHtf = `${d.wrongHtf} (${arch.shortLabel}) — set HTF context to ${htfLabel}`;
+  const diagChartIsHtf = `${d.chartIsHtf} (${arch.shortLabel}) — switch to ${entryLabel} for entries`;
   const diagUnsupported = `${d.unsupported} — regenerate Pine from KachingFx for ${arch.shortLabel}`;
-  const diagMissingHtf = `${d.missingHtf} — select a valid HTF context (${htfLabel})`;
+  const diagMissingHtf = `${d.missingHtf} (${arch.shortLabel}) — select a valid HTF context (${htfLabel})`;
 
   const htfInputLabel = `HTF context (${htfShort} — never entries)`;
   const htfInputTooltip = `Higher-timeframe confirmation only (${htfLabel}). Fetched via request.security — do not open this chart for entries. Default is baked from Strategy Configuration.`;
 
-  const instructionLead = `Open TradingView → attach this script to a ${entryLabel} chart (entries blocked elsewhere). HTF confirmation uses ${htfShort} via request.security — never open ${htfShort} for entries.`;
+  const scalpFifteenTip =
+    arch.key === 'scalping'
+      ? ' Want 15m entries? Generate Day Trading instead — 15m is Scalping HTF only.'
+      : '';
+  const instructionLead = `${arch.shortLabel}: Open TradingView → attach this script to a ${entryLabel} chart (entries blocked elsewhere). HTF confirmation uses ${htfShort} via request.security — never open ${htfShort} for entries.${scalpFifteenTip}`;
 
   return {
     STRATEGY_KEY: arch.key,

@@ -133,11 +133,11 @@ describe('Pine generator injects Strategy Configuration', () => {
     assert.match(scalp.ENTRY_CHART_OK, /multiplier == 5/);
     assert.doesNotMatch(scalp.ENTRY_CHART_OK, /multiplier == 1\b/);
     assert.equal(scalp.HTF_TF_OK, 'htfSec == 900');
-    assert.match(scalp.DIAG_WRONG_ENTRY, /Wrong Entry Timeframe/);
-    assert.match(scalp.DIAG_WRONG_HTF, /Wrong HTF Configuration/);
-    assert.match(scalp.DIAG_CHART_IS_HTF, /Chart opened on HTF/);
+    assert.match(scalp.DIAG_WRONG_ENTRY, /Wrong Entry Timeframe \(Scalping\)/);
+    assert.match(scalp.DIAG_WRONG_HTF, /Wrong HTF Configuration \(Scalping\)/);
+    assert.match(scalp.DIAG_CHART_IS_HTF, /Chart opened on HTF \(Scalping\)/);
     assert.match(scalp.DIAG_UNSUPPORTED, /Unsupported Strategy Configuration/);
-    assert.match(scalp.DIAG_MISSING_HTF, /Missing HTF Confirmation/);
+    assert.match(scalp.DIAG_MISSING_HTF, /Missing HTF Confirmation \(Scalping\)/);
 
     const day = buildPineTfVariables('daytrading');
     assert.equal(day.HTF_TF, '60'); // default HTF baked = 1h
@@ -155,11 +155,11 @@ describe('Pine generator injects Strategy Configuration', () => {
     assert.deepEqual(scalp.strategyArchitecture.htfTimeframes, ['15m']);
     assert.equal(scalp.strategyArchitecture.bakedHtfPine, '15');
     assert.match(scalp.script, /input\.timeframe\("15"/);
-    assert.match(scalp.script, /Wrong Entry Timeframe/);
-    assert.match(scalp.script, /Wrong HTF Configuration/);
-    assert.match(scalp.script, /Chart opened on HTF/);
+    assert.match(scalp.script, /Wrong Entry Timeframe \(Scalping\)/);
+    assert.match(scalp.script, /Wrong HTF Configuration \(Scalping\)/);
+    assert.match(scalp.script, /Chart opened on HTF \(Scalping\)/);
     assert.match(scalp.script, /Unsupported Strategy Configuration/);
-    assert.match(scalp.script, /Missing HTF Confirmation/);
+    assert.match(scalp.script, /Missing HTF Confirmation \(Scalping\)/);
     assert.match(scalp.script, /timeframe\.multiplier == 3 or timeframe\.multiplier == 5/);
     assert.doesNotMatch(scalp.script, /timeframe\.multiplier == 1 or/);
     assert.ok(!/SCALPING_ENTRY_TFS.*1m|entries on 3m \/ 1m/.test(scalp.script));
@@ -169,8 +169,12 @@ describe('Pine generator injects Strategy Configuration', () => {
     assert.equal(day.strategyArchitecture.bakedHtfPine, '60');
     assert.match(day.script, /input\.timeframe\("60"/);
     assert.match(day.script, /htfSec == 3600 or htfSec == 14400/);
+    assert.match(day.script, /Wrong Entry Timeframe \(Day Trading\)/);
+    assert.match(day.instructions[0], /Day Trading/);
     assert.match(day.instructions[0], /5m or 15m/);
+    assert.match(scalp.instructions[0], /Scalping/);
     assert.match(scalp.instructions[0], /3m or 5m/);
+    assert.match(scalp.instructions[0], /Day Trading/);
   });
 
   it('Pine templates contain placeholders — not hardcoded TF multipliers as sole source', () => {

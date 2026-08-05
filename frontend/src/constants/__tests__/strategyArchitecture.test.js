@@ -39,7 +39,9 @@ describe('frontend Strategy Architecture', () => {
 
   it('exposes chart hints and future slots', () => {
     assert.match(getStrategyArchitecture('scalping').chartHint, /3m or 5m/);
+    assert.match(getStrategyArchitecture('scalping').chartHint, /Day Trading/);
     assert.match(getStrategyArchitecture('daytrading').chartHint, /1H or 4H/);
+    assert.match(getStrategyArchitecture('daytrading').chartHint, /15m/);
     assert.match(formatEntryHtfLine('scalping'), /Entry Timeframe/);
     assert.ok(FUTURE_STRATEGY_KEYS.includes('swing'));
   });

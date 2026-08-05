@@ -229,8 +229,12 @@ assert(!/timeframe\.multiplier == 1 or timeframe\.multiplier == 3/.test(scalp.sc
 assert(day.script.includes('htfSec == 3600 or htfSec == 14400'), 'daytrading: HTF must be 1H or 4H');
 assert(scalp.script.includes('htfSec == 900'), 'scalping: HTF must be 15m');
 assert(day.instructions[0].includes('5m or 15m'), 'daytrading instructions must mention 5m/15m entry');
+assert(day.instructions[0].includes('Day Trading'), 'daytrading instructions must name Day Trading');
 assert(scalp.instructions[0].includes('3m or 5m'), 'scalping instructions must mention 3m/5m entry');
 assert(scalp.instructions[0].includes('15m'), 'scalping instructions must mention 15m HTF');
+assert(scalp.instructions[0].includes('Day Trading'), 'scalping instructions must tip Day Trading for 15m entries');
+assert(scalp.script.includes('Wrong Entry Timeframe (Scalping)'), 'scalping: lock label must name Scalping');
+assert(day.script.includes('Wrong Entry Timeframe (Day Trading)'), 'daytrading: lock label must name Day Trading');
 
 // Config-driven HTF bake-in + diagnostic labels
 assert(scalp.strategyArchitecture.bakedHtfPine === '15', 'scalping: baked HTF must be 15 from Strategy Config');

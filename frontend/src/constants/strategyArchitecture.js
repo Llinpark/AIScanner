@@ -20,7 +20,7 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     entrySummary: '3m or 5m',
     htfSummary: '15m',
     chartHint:
-      'Scalping: use a 3m or 5m chart; HTF Confirmation is 15m via request.security only.'
+      'Scalping: attach to a 3m or 5m chart only. 15m is HTF Confirmation via request.security — not an entry chart. Want 15m entries? Switch strategy to Day Trading.'
   }),
   daytrading: Object.freeze({
     key: 'daytrading',
@@ -36,7 +36,7 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     entrySummary: '5m or 15m',
     htfSummary: '1H or 4H',
     chartHint:
-      'Day Trading: use a 5m or 15m chart; HTF Confirmation is 1H or 4H via request.security only.'
+      'Day Trading: attach to a 5m or 15m chart. HTF Confirmation is 1H or 4H via request.security only — do not open 1H/4H for entries.'
   })
 });
 
