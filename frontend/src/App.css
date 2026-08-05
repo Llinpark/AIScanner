@@ -4689,6 +4689,8 @@ h1, h2, h3, h4, h5, h6,
 
 .site-layout--boot {
   justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 .site-main--boot {
@@ -4696,6 +4698,7 @@ h1, h2, h3, h4, h5, h6,
   align-items: center;
   justify-content: center;
   min-height: 70vh;
+  min-height: 70dvh;
   padding-bottom: 48px;
 }
 
@@ -4713,11 +4716,21 @@ h1, h2, h3, h4, h5, h6,
   font-size: 15px;
 }
 
+.app-boot-state .hero-btn {
+  margin-top: 4px;
+}
+
 .app-boot-logo {
   width: 72px;
   height: 72px;
   border-radius: 16px;
   display: block;
+}
+
+@media (display-mode: standalone) {
+  .site-layout {
+    min-height: 100dvh;
+  }
 }
 
 .setup-instructions {

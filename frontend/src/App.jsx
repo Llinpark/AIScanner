@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState } from 'react';
 import SignalDashboard from './components/SignalDashboard';
 import Pricing from './components/Pricing';
 import TradingViewDashboard from './components/TradingViewDashboard';
@@ -25,6 +25,58 @@ import { storeReferralCode } from './utils/referralStorage';
 import { pageFromPath, pathForPage } from './seo/routes';
 import { usePathRouting } from './seo/usePathRouting';
 
+/** Pages that need a session check before choosing dashboard vs login. */
+const AUTH_GATED_PAGES = new Set(['dashboard', 'insights', 'tradingview', 'referrals', 'admin']);
+
+function markAppReady() {
+  try {
+    window.__KACHING_APP_READY__ = true;
+  } catch {
+    // ignore
+  }
+}
+
+class AppErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error('App render error:', error);
+    markAppReady();
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="site-layout site-layout--boot">
+          <main className="site-main site-main--boot">
+            <div className="app-boot-state" role="alert">
+              <img
+                className="app-boot-logo"
+                src="/icons/pwa-192-v3.png"
+                alt="KachingScanner"
+                width="72"
+                height="72"
+              />
+              <p>Something went wrong loading the app.</p>
+              <button type="button" className="hero-btn hero-btn-primary" onClick={() => window.location.reload()}>
+                Reload
+              </button>
+            </div>
+          </main>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function AppContent() {
   const { user, subscription, loading, logout, isAuthenticated, refreshSubscription } = useAuth();
   const [signals, setSignals] = useState([]);
@@ -48,6 +100,13 @@ function AppContent() {
     logout();
     navigateTo('home', {}, { replace: true });
   };
+
+  // Public pages render immediately; never blank the whole PWA on /api/auth/me.
+  useEffect(() => {
+    if (!AUTH_GATED_PAGES.has(currentPage) || !loading) {
+      markAppReady();
+    }
+  }, [currentPage, loading]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -154,7 +213,8 @@ function AppContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshSubscription]);
 
-  if (loading) {
+  // Only gated routes wait on session hydrate (capped in AuthContext). Home/pricing always show.
+  if (loading && AUTH_GATED_PAGES.has(currentPage)) {
     return <LoadingShell />;
   }
 
@@ -351,9 +411,11 @@ function LoadingShell() {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <AppErrorBoundary>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </AppErrorBoundary>
   );
 }
 

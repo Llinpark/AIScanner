@@ -3,11 +3,20 @@ import { authApi, subscriptionApi, setUnauthorizedHandler } from '../services/ap
 
 const AuthContext = createContext(null);
 
-/** Avoid indefinite white/loading shell when the API is unreachable (common on flaky Wi‑Fi). */
-const AUTH_BOOTSTRAP_TIMEOUT_MS = 8000;
+/** Hard cap so Fly cold-starts / Wi‑Fi blackholes cannot stall the UI. */
+const AUTH_BOOTSTRAP_TIMEOUT_MS = 4000;
+
+function safeLocalStorageRemove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // iOS private mode / blocked storage must not crash boot.
+  }
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
+  // "loading" means session check is in flight — public pages must still render.
   const [loading, setLoading] = useState(true);
 
   const clearSession = useCallback(() => {
@@ -26,7 +35,7 @@ export function AuthProvider({ children }) {
   }, [clearSession]);
 
   useEffect(() => {
-    localStorage.removeItem('token');
+    safeLocalStorageRemove('token');
   }, []);
 
   useEffect(() => {
@@ -38,24 +47,35 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let cancelled = false;
-    const safetyTimer = window.setTimeout(() => {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+
+    const finish = () => {
       if (!cancelled) setLoading(false);
-    }, AUTH_BOOTSTRAP_TIMEOUT_MS + 1500);
+    };
+
+    const safetyTimer = window.setTimeout(() => {
+      controller?.abort();
+      finish();
+    }, AUTH_BOOTSTRAP_TIMEOUT_MS);
 
     (async () => {
       try {
-        const response = await authApi.me({ timeout: AUTH_BOOTSTRAP_TIMEOUT_MS });
+        const response = await authApi.me({
+          timeout: AUTH_BOOTSTRAP_TIMEOUT_MS,
+          signal: controller?.signal
+        });
         if (!cancelled) setUser(response.data.user);
       } catch {
         if (!cancelled) clearSession();
       } finally {
         window.clearTimeout(safetyTimer);
-        if (!cancelled) setLoading(false);
+        finish();
       }
     })();
 
     return () => {
       cancelled = true;
+      controller?.abort();
       window.clearTimeout(safetyTimer);
     };
   }, [clearSession]);

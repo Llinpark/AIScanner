@@ -16,8 +16,12 @@
     <meta name="author" content="KachingScanner" />
     <meta name="theme-color" content="#ffffff" />
     <meta name="application-name" content="KachingScanner" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="KachingScanner" />
     <link rel="canonical" href="https://kachingscanner.com/" />
-    <link rel="manifest" href="/site.webmanifest?v=3" />
+    <link rel="manifest" href="/site.webmanifest?v=4" />
     <!-- Opaque RGB white-canvas install icons only. Never link /logo-1.png (transparent → Windows paints black). -->
     <link rel="icon" href="/icons/favicon-v3.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32-v3.png" />
@@ -46,15 +50,12 @@
     />
     <meta name="twitter:image" content="https://kachingscanner.com/hero-img.png" />
 
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap" rel="stylesheet" />
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+    <!-- Boot shell CSS first so first paint never waits on Google Fonts / jsDelivr. -->
     <style>
-      /* Visible until React mounts — avoids white void after OS/PWA splash if JS is slow/fails. */
       #boot-splash {
         margin: 0;
         min-height: 100vh;
+        min-height: 100dvh;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -88,6 +89,32 @@
         font-size: 14px;
       }
     </style>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Non-blocking stylesheets: blocked CDNs must not freeze the PWA shell. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap"
+        rel="stylesheet"
+      />
+      <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+        rel="stylesheet"
+      />
+    </noscript>
   </head>
   <body>
     <div id="root">
@@ -104,19 +131,33 @@
           el.dataset.failed = '1';
           el.innerHTML =
             '<img src="/icons/pwa-192-v3.png" alt="KachingScanner" width="96" height="96" />' +
-            '<p>' + message + '</p>' +
+            '<p>' +
+            message +
+            '</p>' +
             '<button type="button" onclick="location.reload()">Retry</button>';
         }
+
         window.addEventListener(
           'error',
           function (event) {
             var t = event && event.target;
-            if (t && t.tagName === 'SCRIPT') {
+            // Resource load failures for our own module/script only (not fonts/CDN CSS).
+            if (t && t.tagName === 'SCRIPT' && t.src && /kachingscanner\.com|\/assets\//.test(t.src)) {
               showBootFailure('App failed to load. Check your connection, then retry.');
             }
           },
           true
         );
+
+        // If React never mounts (stale asset hash, broken module), escape the splash.
+        window.setTimeout(function () {
+          if (window.__KACHING_APP_READY__) return;
+          if (document.getElementById('boot-splash')) {
+            showBootFailure(
+              'Still loading. Clear site data for kachingscanner.com, or try mobile data, then Retry.'
+            );
+          }
+        }, 12000);
       })();
     </script>
     <script type="module" src="/src/main.jsx"></script>

@@ -1,2 +1,5 @@
-# SPA client routes (existing static files under /assets/ are still served).
+# Missing hashed bundles must NOT fall through to the SPA HTML shell (browsers treat that as bad JS).
+/assets/*  /assets/404.html  404
+
+# SPA client routes (existing static files under /assets/ are still served when present).
 /*    /index.html   200
