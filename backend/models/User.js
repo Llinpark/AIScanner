@@ -22,7 +22,6 @@ const UserConfigSchema = new mongoose.Schema({
   },
 
   mt5: {
-    linkToken: { type: String, default: null },
     enabled: { type: Boolean, default: false },
     accountBalance: { type: Number, default: null },
     accountCurrency: { type: String, default: 'USD' },
@@ -38,7 +37,40 @@ const UserConfigSchema = new mongoose.Schema({
     executionMode: { type: String, enum: ['auto', 'manual'], required: false },
     lastSyncAt: { type: Date, default: null },
     linkedAt: { type: Date, default: null },
-    terminalId: { type: String, default: null }
+    terminalId: { type: String, default: null },
+    /** Set when EA completes PairCode flow (never exposed as permanent auth on dashboard). */
+    lastPairAt: { type: Date, default: null },
+    broker: { type: String, default: null },
+    build: { type: String, default: null },
+    machineFingerprint: { type: String, default: null },
+    accountNumber: { type: String, default: null },
+    /**
+     * Multi-device authorized EA terminals. Each device has its own access/refresh tokens.
+     * Pair codes are NEVER stored here (Redis TTL only). Auth is PairCode → device tokens only.
+     */
+    devices: [
+      {
+        deviceId: { type: String, required: true },
+        accessToken: { type: String, default: null },
+        refreshToken: { type: String, default: null },
+        accessExpiresAt: { type: Date, default: null },
+        refreshExpiresAt: { type: Date, default: null },
+        friendlyName: { type: String, default: 'MT5 Terminal' },
+        label: { type: String, default: 'MT5 Terminal' },
+        broker: { type: String, default: null },
+        accountNumber: { type: String, default: null },
+        platform: { type: String, default: 'Windows' },
+        terminalBuild: { type: String, default: null },
+        eaVersion: { type: String, default: null },
+        machineFingerprint: { type: String, default: null },
+        terminalId: { type: String, default: null },
+        firstPairedAt: { type: Date, default: Date.now },
+        lastHeartbeatAt: { type: Date, default: null },
+        lastSeenIP: { type: String, default: null },
+        createdAt: { type: Date, default: Date.now },
+        revokedAt: { type: Date, default: null }
+      }
+    ]
   },
 
   /**
@@ -104,5 +136,10 @@ const UserConfigSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
+/** Device-token lookups for the MT5 bridge (PairCode auth). */
+UserConfigSchema.index({ 'mt5.devices.accessToken': 1 }, { sparse: true });
+UserConfigSchema.index({ 'mt5.devices.refreshToken': 1 }, { sparse: true });
+UserConfigSchema.index({ 'mt5.devices.deviceId': 1 }, { sparse: true });
 
 module.exports = mongoose.model('UserConfig', UserConfigSchema);

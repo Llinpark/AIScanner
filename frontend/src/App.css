@@ -3939,6 +3939,13 @@ h1, h2, h3, h4, h5, h6,
   gap: 8px;
 }
 
+.pine-script-strategy .pine-tf-tip {
+  margin: 0;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--heading-color);
+}
+
 .pine-script-strategy label {
   font-size: 0.9rem;
   font-weight: 600;
@@ -5919,6 +5926,111 @@ h1, h2, h3, h4, h5, h6,
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--text-muted-light);
+}
+
+.mt5-pair-box {
+  margin-top: 14px;
+}
+
+.mt5-pair-code {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0 14px;
+}
+
+.mt5-pair-code-value {
+  margin: 0;
+  padding: 16px 18px;
+  border-radius: 10px;
+  background: var(--surface-navy);
+  color: #f8fafc;
+  font-size: 1.85rem;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.mt5-pair-expiry {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.mt5-pair-expiry.is-expired {
+  color: #b91c1c;
+}
+
+.mt5-pair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.mt5-devices {
+  margin: 16px 0 8px;
+}
+
+.mt5-devices h5 {
+  margin: 0 0 10px;
+  font-family: var(--heading-font);
+  font-size: 1rem;
+  color: var(--heading-color);
+}
+
+.mt5-device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mt5-device-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color, rgba(15, 23, 42, 0.08));
+  border-radius: 10px;
+}
+
+.mt5-device-row p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.mt5-device-meta {
+  font-size: 0.8rem !important;
+}
+
+.mt5-device-dot {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.mt5-device-dot.is-online {
+  background: rgba(22, 163, 74, 0.12);
+  color: #15803d;
+}
+
+.mt5-device-dot.is-offline {
+  background: rgba(100, 116, 139, 0.14);
+  color: #475569;
+}
+
+.mt5-pair-code-value {
+  letter-spacing: 0.22em;
 }
 
 .auto-trading-howto h4 {

@@ -3,7 +3,13 @@ const mongoose = require('mongoose');
 const UserConfig = require('../models/User');
 const devUserStore = require('../utils/devUserStore');
 const { WEBHOOK_TELEGRAM_URL } = require('../config/appUrls');
-const { userHasTierFeature, getEffectiveSubscription, getTierDisplayName } = require('../utils/subscriptionAccess');
+const {
+  userHasTierFeature,
+  getEffectiveSubscription,
+  getTierDisplayName,
+  isSubscriptionActive,
+  hasTierFeature
+} = require('../utils/subscriptionAccess');
 const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { isEntryAlert } = require('../utils/signalOutcome');
 const { formatTvPrice } = require('../utils/priceFormat');
@@ -56,21 +62,92 @@ function storeLinkCode(code, userId, expiresAt) {
   linkCodeIndex.set(code, { userId, expiresAt });
 }
 
-function consumeLinkCode(code) {
-  const entry = linkCodeIndex.get(code);
-  if (!entry) return null;
-  if (entry.expiresAt < new Date()) {
-    linkCodeIndex.delete(code);
+function purgeExpiredMemoryCodes() {
+  const now = Date.now();
+  for (const [code, entry] of linkCodeIndex.entries()) {
+    if (!entry?.expiresAt || new Date(entry.expiresAt).getTime() < now) {
+      linkCodeIndex.delete(code);
+    }
+  }
+}
+
+/** Drop any in-memory codes previously issued for this user (new code replaces them). */
+function clearMemoryCodesForUser(userId) {
+  const id = String(userId);
+  for (const [code, entry] of linkCodeIndex.entries()) {
+    if (String(entry?.userId) === id) {
+      linkCodeIndex.delete(code);
+    }
+  }
+}
+
+async function findUserByLinkCode(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) return null;
+
+  if (isDbConnected()) {
+    return UserConfig.findOne({ 'telegram.linkCode': normalized });
+  }
+  return devUserStore.findByLinkCode(normalized);
+}
+
+/**
+ * Resolve a link code from the in-memory index, with DB fallback.
+ * Codes are persisted on the user document so redemption still works after
+ * process restarts or when the webhook hits a different instance.
+ */
+async function resolveLinkCode(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) return null;
+
+  purgeExpiredMemoryCodes();
+
+  const memoryEntry = linkCodeIndex.get(normalized);
+  if (memoryEntry) {
+    if (new Date(memoryEntry.expiresAt) < new Date()) {
+      linkCodeIndex.delete(normalized);
+    } else {
+      return { userId: String(memoryEntry.userId), expiresAt: memoryEntry.expiresAt, source: 'memory' };
+    }
+  }
+
+  const user = await findUserByLinkCode(normalized);
+  if (!user) return null;
+
+  const expiresAt = user.telegram?.linkCodeExpiresAt;
+  if (!expiresAt || new Date(expiresAt) < new Date()) {
     return null;
   }
-  linkCodeIndex.delete(code);
-  return entry.userId;
+
+  const userId = user._id?.toString?.() || user.id;
+  // Warm memory so subsequent lookups on this process are cheap.
+  storeLinkCode(normalized, userId, new Date(expiresAt));
+  return { userId: String(userId), expiresAt: new Date(expiresAt), source: 'db' };
+}
+
+async function invalidateLinkCode(code, userId) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (normalized) {
+    linkCodeIndex.delete(normalized);
+  }
+
+  if (!userId) return;
+
+  const current = await getTelegramState(userId);
+  if (!current.linkCode && !current.linkCodeExpiresAt) return;
+
+  await persistUserTelegram(userId, {
+    ...current,
+    linkCode: null,
+    linkCodeExpiresAt: null
+  });
 }
 
 async function createLinkCode(userId) {
   const code = crypto.randomBytes(4).toString('hex').toUpperCase();
   const expiresAt = new Date(Date.now() + LINK_CODE_TTL_MS);
 
+  clearMemoryCodesForUser(userId);
   storeLinkCode(code, userId, expiresAt);
 
   const current = await getTelegramState(userId);
@@ -240,7 +317,8 @@ function buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton = fal
   }
 
   const mt5 = subscriber.mt5 || {};
-  if (!mt5.linkToken || mt5.enabled === false) {
+  const hasDevice = Array.isArray(mt5.devices) && mt5.devices.some(d => d && !d.revokedAt);
+  if (!hasDevice || mt5.enabled === false) {
     return null;
   }
 
@@ -300,16 +378,40 @@ async function unlinkUser(userId) {
 }
 
 async function linkByCode(code, chatId, username) {
-  const userId = consumeLinkCode(String(code || '').trim().toUpperCase());
-  if (!userId) return { ok: false, reason: 'invalid_or_expired_code' };
+  const normalized = String(code || '').trim().toUpperCase();
+  const resolved = await resolveLinkCode(normalized);
+  if (!resolved) return { ok: false, reason: 'invalid_or_expired_code' };
 
-  const user = await findUserById(userId);
-  if (!user || !userHasTierFeature(user, 'telegramAlerts')) {
+  const user = await findUserById(resolved.userId);
+  if (!user) {
+    await invalidateLinkCode(normalized, resolved.userId);
+    return { ok: false, reason: 'invalid_or_expired_code' };
+  }
+
+  const subscription = getEffectiveSubscription(user);
+  if (!isSubscriptionActive(subscription) || !hasTierFeature(subscription, 'telegramAlerts')) {
+    // Keep the code so the user can retry after renewing/upgrading (still within TTL).
     return { ok: false, reason: 'subscription_required' };
   }
 
-  await linkChatToUser(userId, chatId, username);
-  return { ok: true, userId, email: user.email };
+  // Burn the one-time code (memory + DB) then attach this chat.
+  linkCodeIndex.delete(normalized);
+  await linkChatToUser(resolved.userId, chatId, username);
+  return { ok: true, userId: resolved.userId, email: user.email };
+}
+
+async function sendLinkFailure(chatId, reason) {
+  if (reason === 'subscription_required') {
+    await sendMessage(
+      chatId,
+      '❌ Could not link account. Telegram alerts require an active Pro or Premium subscription.'
+    );
+    return;
+  }
+  await sendMessage(
+    chatId,
+    '❌ Link code invalid or expired. Generate a new code in the KachingScanner dashboard (codes expire in 15 minutes).'
+  );
 }
 
 async function getPublicStatus(user) {
@@ -333,7 +435,8 @@ async function getPublicStatus(user) {
 
 async function handleCommand(chatId, text, fromUsername) {
   const parts = String(text || '').trim().split(/\s+/);
-  const command = (parts[0] || '').toLowerCase();
+  // Telegram may send "/link@BotName" in groups — strip the bot suffix.
+  const command = (parts[0] || '').toLowerCase().split('@')[0];
   const arg = parts[1] || '';
 
   if (command === '/start') {
@@ -346,7 +449,7 @@ async function handleCommand(chatId, text, fromUsername) {
         );
         return;
       }
-      await sendMessage(chatId, '❌ Link code invalid or expired. Generate a new code in the KachingScanner dashboard.');
+      await sendLinkFailure(chatId, linked.reason);
       return;
     }
 
@@ -378,7 +481,7 @@ async function handleCommand(chatId, text, fromUsername) {
       );
       return;
     }
-    await sendMessage(chatId, '❌ Could not link account. Check your code and Pro/Premium subscription.');
+    await sendLinkFailure(chatId, linked.reason);
     return;
   }
 
@@ -426,7 +529,7 @@ async function handleCommand(chatId, text, fromUsername) {
         '/help — show this message',
         '',
         '<b>Auto Trading</b>',
-        'Telegram is notifications only. Connect MT5 in the dashboard.',
+        'Telegram is notifications only. Pair MT5 in the dashboard.',
         'Manual mode: tap Execute on entry alerts. Premium Auto mode queues trades without Telegram.'
       ].join('\n')
     );
@@ -468,7 +571,7 @@ async function handleExecuteCallback(callbackQuery) {
   if (!result.ok) {
     const messages = {
       subscription_required: 'MT5 execution requires Pro or Premium.',
-      mt5_not_linked: 'Connect MT5 in your dashboard first.',
+      mt5_not_linked: 'Pair MT5 in your dashboard first.',
       mt5_disabled: 'MT5 auto trading is paused in your dashboard.',
       lot_size_unavailable:
         'Premium: sync MT5 balance via the EA first. Pro: set a fixed lot size in the dashboard.',
@@ -642,6 +745,7 @@ module.exports = {
   isConfigured,
   getConfig,
   createLinkCode,
+  linkByCode,
   unlinkUser,
   getPublicStatus,
   notifySubscriber,
@@ -651,5 +755,8 @@ module.exports = {
   startPolling,
   stopPolling,
   ensureDeliveryMode,
-  getBotDeepLink
+  getBotDeepLink,
+  // Test helpers
+  _resolveLinkCode: resolveLinkCode,
+  _clearLinkCodeIndex: () => linkCodeIndex.clear()
 };

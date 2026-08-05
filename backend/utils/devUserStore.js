@@ -83,11 +83,24 @@ function findByChatId(chatId) {
   return Object.values(store).find(u => String(u.telegram?.chatId || '') === String(chatId)) || null;
 }
 
-function findByMt5Token(token) {
+function findByLinkCode(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) return null;
+  const store = readStore();
+  return Object.values(store).find(
+    u => String(u.telegram?.linkCode || '').trim().toUpperCase() === normalized
+  ) || null;
+}
+
+function findByMt5DeviceToken(token, field = 'accessToken') {
   const normalized = String(token || '').trim();
   if (!normalized) return null;
   const store = readStore();
-  return Object.values(store).find(u => String(u.mt5?.linkToken || '') === normalized) || null;
+  return (
+    Object.values(store).find(u =>
+      (u.mt5?.devices || []).some(d => d && !d.revokedAt && String(d[field] || '') === normalized)
+    ) || null
+  );
 }
 
 module.exports = {
@@ -96,7 +109,8 @@ module.exports = {
   findByEmail,
   findByHashedToken,
   findByChatId,
-  findByMt5Token,
+  findByLinkCode,
+  findByMt5DeviceToken,
   createUser,
   listActiveSubscribers
 };

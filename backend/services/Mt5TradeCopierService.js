@@ -23,14 +23,69 @@ async function findUserById(userId) {
   return devUserStore.findById(userId);
 }
 
-async function findUserByMt5Token(token) {
-  const normalized = String(token || '').trim();
-  if (!normalized) return null;
+const ACCESS_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const REFRESH_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const HEARTBEAT_OFFLINE_MS = 90 * 1000;
 
-  if (isDbConnected()) {
-    return UserConfig.findOne({ 'mt5.linkToken': normalized });
+function activeDevices(mt5) {
+  return (mt5?.devices || []).filter(d => d && !d.revokedAt);
+}
+
+function isMt5Linked(mt5) {
+  return activeDevices(mt5).length > 0;
+}
+
+function findDevUserByDeviceToken(token, field) {
+  if (typeof devUserStore.findByMt5DeviceToken === 'function') {
+    return devUserStore.findByMt5DeviceToken(token, field);
   }
-  return devUserStore.findByMt5Token(normalized);
+  const fs = require('fs');
+  const path = require('path');
+  const STORE_PATH = path.join(__dirname, '..', 'dev-users.json');
+  if (!fs.existsSync(STORE_PATH)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+    return (
+      Object.values(data).find(u =>
+        (u.mt5?.devices || []).some(d => d && !d.revokedAt && String(d[field]) === token)
+      ) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve bridge auth via device accessToken only (PairCode → device tokens).
+ */
+async function resolveMt5Auth(token) {
+  const normalized = String(token || '').trim();
+  if (!normalized) return { user: null, reason: 'invalid_token' };
+
+  let user = null;
+  if (isDbConnected()) {
+    user = await UserConfig.findOne({ 'mt5.devices.accessToken': normalized });
+  } else {
+    user = findDevUserByDeviceToken(normalized, 'accessToken');
+  }
+  if (!user) return { user: null, reason: 'invalid_token' };
+
+  const device = (user.mt5?.devices || []).find(
+    d => d && String(d.accessToken) === normalized && !d.revokedAt
+  );
+  if (!device) return { user: null, reason: 'invalid_token' };
+
+  if (device.accessExpiresAt && new Date(device.accessExpiresAt).getTime() < Date.now()) {
+    return { user, device, authType: 'device', reason: 'access_expired' };
+  }
+
+  return { user, device, authType: 'device' };
+}
+
+async function findUserByMt5Token(token) {
+  const resolved = await resolveMt5Auth(token);
+  if (!resolved.user || resolved.reason) return null;
+  return resolved.user;
 }
 
 async function persistUserMt5(userId, mt5) {
@@ -42,7 +97,6 @@ async function persistUserMt5(userId, mt5) {
 
 function defaultMt5Config() {
   return {
-    linkToken: null,
     enabled: false,
     accountBalance: null,
     accountCurrency: 'USD',
@@ -52,8 +106,251 @@ function defaultMt5Config() {
     executionMode: null,
     lastSyncAt: null,
     linkedAt: null,
-    terminalId: null
+    terminalId: null,
+    lastPairAt: null,
+    broker: null,
+    build: null,
+    machineFingerprint: null,
+    accountNumber: null,
+    devices: []
   };
+}
+
+/**
+ * Overlay EA identity fields after a successful PairCode exchange.
+ */
+async function attachPairMetadata(userId, meta = {}) {
+  const user = await findUserById(userId);
+  const current = user?.mt5 || defaultMt5Config();
+  const mt5 = {
+    ...current,
+    terminalId:
+      meta.terminalId != null ? String(meta.terminalId) : current.terminalId,
+    broker: meta.broker != null ? String(meta.broker) : current.broker,
+    build:
+      meta.terminalBuild != null
+        ? String(meta.terminalBuild)
+        : meta.build != null
+          ? String(meta.build)
+          : current.build,
+    machineFingerprint:
+      meta.machineFingerprint != null
+        ? String(meta.machineFingerprint)
+        : current.machineFingerprint,
+    accountNumber:
+      meta.accountNumber != null ? String(meta.accountNumber) : current.accountNumber,
+    lastPairAt: new Date(),
+    linkedAt: current.linkedAt || new Date(),
+    enabled: true
+  };
+  await persistUserMt5(userId, mt5);
+  return mt5;
+}
+
+/**
+ * Register a new authorized device (multi-device PairCode auth).
+ */
+async function registerPairedDevice(userId, meta = {}) {
+  const user = await findUserById(userId);
+  const current = user?.mt5 || defaultMt5Config();
+  const devices = Array.isArray(current.devices) ? [...current.devices] : [];
+
+  const deviceId = crypto.randomBytes(12).toString('hex');
+  const accessToken = crypto.randomBytes(24).toString('hex');
+  const refreshToken = crypto.randomBytes(32).toString('hex');
+  const now = new Date();
+  const accessExpiresAt = new Date(now.getTime() + ACCESS_TOKEN_TTL_MS);
+  const refreshExpiresAt = new Date(now.getTime() + REFRESH_TOKEN_TTL_MS);
+  const friendlyName =
+    meta.friendlyName || meta.label || meta.deviceLabel || 'MT5 Terminal';
+
+  const device = {
+    deviceId,
+    accessToken,
+    refreshToken,
+    accessExpiresAt,
+    refreshExpiresAt,
+    friendlyName,
+    label: friendlyName,
+    broker: meta.broker != null ? String(meta.broker) : null,
+    accountNumber: meta.accountNumber != null ? String(meta.accountNumber) : null,
+    platform: meta.platform || 'Windows',
+    terminalBuild:
+      meta.terminalBuild != null
+        ? String(meta.terminalBuild)
+        : meta.build != null
+          ? String(meta.build)
+          : null,
+    eaVersion: meta.eaVersion != null ? String(meta.eaVersion) : null,
+    machineFingerprint:
+      meta.machineFingerprint != null ? String(meta.machineFingerprint) : null,
+    terminalId: meta.terminalId != null ? String(meta.terminalId) : null,
+    firstPairedAt: now,
+    lastHeartbeatAt: now,
+    lastSeenIP: meta.lastSeenIP != null ? String(meta.lastSeenIP) : null,
+    createdAt: now,
+    revokedAt: null
+  };
+
+  devices.push(device);
+
+  // Strip any leftover legacy linkToken field if present on older documents.
+  const { linkToken: _dropLegacy, ...rest } = current;
+  const mt5 = {
+    ...rest,
+    devices,
+    enabled: true,
+    linkedAt: current.linkedAt || now,
+    lastPairAt: now,
+    terminalId: device.terminalId || current.terminalId,
+    broker: device.broker || current.broker,
+    build: device.terminalBuild || current.build,
+    machineFingerprint: device.machineFingerprint || current.machineFingerprint,
+    accountNumber: device.accountNumber || current.accountNumber
+  };
+
+  await persistUserMt5(userId, mt5);
+  return device;
+}
+
+async function refreshDeviceAccess(refreshToken, deviceIdHint = null) {
+  const normalized = String(refreshToken || '').trim();
+  if (!normalized) return { ok: false, reason: 'invalid_refresh' };
+
+  let user = null;
+  if (isDbConnected()) {
+    user = await UserConfig.findOne({ 'mt5.devices.refreshToken': normalized });
+  } else {
+    user = findDevUserByDeviceToken(normalized, 'refreshToken');
+  }
+  if (!user) return { ok: false, reason: 'invalid_refresh' };
+
+  const userId = user._id?.toString() || user.id;
+  const devices = Array.isArray(user.mt5?.devices) ? [...user.mt5.devices] : [];
+  const idx = devices.findIndex(
+    d =>
+      d &&
+      !d.revokedAt &&
+      String(d.refreshToken) === normalized &&
+      (!deviceIdHint || String(d.deviceId) === String(deviceIdHint))
+  );
+  if (idx < 0) return { ok: false, reason: 'invalid_refresh' };
+
+  const device = devices[idx];
+  if (device.refreshExpiresAt && new Date(device.refreshExpiresAt).getTime() < Date.now()) {
+    return { ok: false, reason: 'refresh_expired' };
+  }
+
+  const accessToken = crypto.randomBytes(24).toString('hex');
+  const accessExpiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS);
+  devices[idx] = {
+    ...device,
+    accessToken,
+    accessExpiresAt,
+    lastHeartbeatAt: new Date()
+  };
+
+  await persistUserMt5(userId, { ...user.mt5, devices, enabled: true });
+  return {
+    ok: true,
+    accessToken,
+    accessExpiresAt,
+    deviceId: device.deviceId
+  };
+}
+
+async function recordDeviceHeartbeat(token, payload = {}, meta = {}) {
+  const resolved = await resolveMt5Auth(token);
+  if (!resolved.user) return { ok: false, reason: resolved.reason || 'invalid_token' };
+  if (resolved.reason === 'access_expired') {
+    return { ok: false, reason: 'access_expired' };
+  }
+  if (!resolved.device) {
+    return { ok: false, reason: 'invalid_token' };
+  }
+
+  const userId = resolved.user._id?.toString() || resolved.user.id;
+  const current = resolved.user.mt5 || defaultMt5Config();
+  const seenIp = meta.ip != null ? String(meta.ip) : payload.lastSeenIP || null;
+
+  const devices = (current.devices || []).map(d => {
+    if (String(d.deviceId) !== String(resolved.device.deviceId)) return d;
+    return {
+      ...d,
+      lastHeartbeatAt: new Date(),
+      lastSeenIP: seenIp != null ? String(seenIp) : d.lastSeenIP,
+      broker: payload.broker != null ? String(payload.broker) : d.broker,
+      accountNumber:
+        payload.accountNumber != null ? String(payload.accountNumber) : d.accountNumber,
+      eaVersion: payload.eaVersion != null ? String(payload.eaVersion) : d.eaVersion,
+      terminalBuild:
+        payload.terminalBuild != null
+          ? String(payload.terminalBuild)
+          : payload.build != null
+            ? String(payload.build)
+            : d.terminalBuild
+    };
+  });
+  const mt5 = {
+    ...current,
+    devices,
+    accountBalance:
+      payload.balance != null || payload.accountBalance != null
+        ? Number(payload.balance ?? payload.accountBalance)
+        : current.accountBalance,
+    accountCurrency:
+      payload.currency || payload.accountCurrency || current.accountCurrency || 'USD',
+    lastSyncAt: new Date(),
+    enabled: true
+  };
+  await persistUserMt5(userId, mt5);
+  return { ok: true, deviceId: resolved.device.deviceId, mt5 };
+}
+
+async function listAuthorizedDevices(userId) {
+  const user = await findUserById(userId);
+  const mt5 = user?.mt5 || defaultMt5Config();
+  const now = Date.now();
+  return activeDevices(mt5).map(d => {
+    const lastHb = d.lastHeartbeatAt ? new Date(d.lastHeartbeatAt).getTime() : 0;
+    const online = lastHb > 0 && now - lastHb <= HEARTBEAT_OFFLINE_MS;
+    const friendlyName = d.friendlyName || d.label || 'MT5 Terminal';
+    return {
+      deviceId: d.deviceId,
+      friendlyName,
+      label: friendlyName,
+      broker: d.broker,
+      accountNumber: d.accountNumber,
+      platform: d.platform || 'Windows',
+      terminalBuild: d.terminalBuild,
+      eaVersion: d.eaVersion,
+      firstPairedAt: d.firstPairedAt || d.createdAt,
+      lastHeartbeatAt: d.lastHeartbeatAt,
+      lastSeenIP: d.lastSeenIP || null,
+      createdAt: d.createdAt,
+      online,
+      status: online ? 'Active' : 'Offline'
+    };
+  });
+}
+
+async function revokeDevice(userId, deviceId) {
+  const user = await findUserById(userId);
+  if (!user) return { ok: false, reason: 'user_not_found' };
+  const current = user.mt5 || defaultMt5Config();
+  const devices = Array.isArray(current.devices) ? [...current.devices] : [];
+  const idx = devices.findIndex(d => d && String(d.deviceId) === String(deviceId) && !d.revokedAt);
+  if (idx < 0) return { ok: false, reason: 'device_not_found' };
+
+  devices[idx] = {
+    ...devices[idx],
+    revokedAt: new Date(),
+    accessToken: null,
+    refreshToken: null
+  };
+
+  await persistUserMt5(userId, { ...current, devices });
+  return { ok: true, deviceId: String(deviceId) };
 }
 
 /**
@@ -72,21 +369,6 @@ function resolveExecutionMode(user) {
   }
 
   return canAuto ? 'auto' : 'manual';
-}
-
-async function generateLinkToken(userId) {
-  const token = crypto.randomBytes(24).toString('hex');
-  const current = (await findUserById(userId))?.mt5 || defaultMt5Config();
-
-  const mt5 = {
-    ...current,
-    linkToken: token,
-    enabled: true,
-    linkedAt: current.linkedAt || new Date()
-  };
-
-  await persistUserMt5(userId, mt5);
-  return { token, mt5 };
 }
 
 const RISK_PERCENT_MIN = 0.1;
@@ -144,13 +426,31 @@ async function updateSettings(userId, settings = {}) {
 }
 
 async function syncAccountFromEa(token, payload = {}) {
-  const user = await findUserByMt5Token(token);
-  if (!user) return { ok: false, reason: 'invalid_token' };
+  const resolved = await resolveMt5Auth(token);
+  if (!resolved.user) return { ok: false, reason: resolved.reason || 'invalid_token' };
+  if (resolved.reason === 'access_expired') return { ok: false, reason: 'access_expired' };
 
+  const user = resolved.user;
   const userId = user._id?.toString() || user.id;
   const current = user.mt5 || defaultMt5Config();
+
+  let devices = current.devices || [];
+  if (resolved.authType === 'device' && resolved.device) {
+    devices = devices.map(d => {
+      if (String(d.deviceId) !== String(resolved.device.deviceId)) return d;
+      return {
+        ...d,
+        lastHeartbeatAt: new Date(),
+        broker: payload.broker != null ? String(payload.broker) : d.broker,
+        accountNumber:
+          payload.accountNumber != null ? String(payload.accountNumber) : d.accountNumber
+      };
+    });
+  }
+
   const mt5 = {
     ...current,
+    devices,
     accountBalance: Number(payload.balance ?? payload.accountBalance ?? current.accountBalance),
     accountCurrency: payload.currency || payload.accountCurrency || current.accountCurrency || 'USD',
     terminalId: payload.terminalId || payload.terminal_id || current.terminalId,
@@ -271,7 +571,7 @@ async function createExecution(user, signalDoc, options = {}) {
   }
 
   const mt5 = user.mt5 || {};
-  if (!mt5.linkToken) {
+  if (!isMt5Linked(mt5)) {
     return { ok: false, reason: 'mt5_not_linked' };
   }
 
@@ -346,9 +646,11 @@ async function queueExecutionForUser(userId, signalId, options = {}) {
 }
 
 async function getPendingExecutions(token) {
-  const user = await findUserByMt5Token(token);
-  if (!user) return { ok: false, reason: 'invalid_token' };
+  const resolved = await resolveMt5Auth(token);
+  if (!resolved.user) return { ok: false, reason: resolved.reason || 'invalid_token' };
+  if (resolved.reason === 'access_expired') return { ok: false, reason: 'access_expired' };
 
+  const user = resolved.user;
   const userId = user._id?.toString() || user.id;
 
   if (isDbConnected()) {
@@ -387,9 +689,11 @@ async function getPendingExecutions(token) {
 }
 
 async function reportExecution(token, payload = {}) {
-  const user = await findUserByMt5Token(token);
-  if (!user) return { ok: false, reason: 'invalid_token' };
+  const resolved = await resolveMt5Auth(token);
+  if (!resolved.user) return { ok: false, reason: resolved.reason || 'invalid_token' };
+  if (resolved.reason === 'access_expired') return { ok: false, reason: 'access_expired' };
 
+  const user = resolved.user;
   const executionId = String(payload.executionId || payload.id || '');
   if (!executionId) return { ok: false, reason: 'missing_execution_id' };
 
@@ -448,13 +752,16 @@ async function getPublicStatus(user) {
     }
   }
 
+  const devices = await listAuthorizedDevices(userId);
+  const anyOnline = devices.some(d => d.online);
+
   return {
     featureEnabled,
     autoLotSizing: userHasTierFeature(user, 'autoLotSizing'),
     mt5AutoExecution: userHasTierFeature(user, 'mt5AutoExecution'),
     trailingStop: userHasTierFeature(user, 'trailingStop'),
     breakEvenAutomation: userHasTierFeature(user, 'breakEvenAutomation'),
-    linked: Boolean(mt5.linkToken),
+    linked: isMt5Linked(mt5),
     enabled: mt5.enabled !== false,
     executionMode: resolveExecutionMode(user),
     accountBalance: mt5.accountBalance,
@@ -465,7 +772,9 @@ async function getPublicStatus(user) {
     lastSyncAt: mt5.lastSyncAt,
     linkedAt: mt5.linkedAt,
     pendingCount,
-    recentExecutions
+    recentExecutions,
+    devices,
+    deviceOnline: anyOnline
   };
 }
 
@@ -484,7 +793,14 @@ function formatExecutionSummary(execution) {
 module.exports = {
   defaultMt5Config,
   resolveExecutionMode,
-  generateLinkToken,
+  attachPairMetadata,
+  registerPairedDevice,
+  refreshDeviceAccess,
+  recordDeviceHeartbeat,
+  listAuthorizedDevices,
+  revokeDevice,
+  resolveMt5Auth,
+  isMt5Linked,
   updateSettings,
   syncAccountFromEa,
   queueExecutionForUser,
@@ -494,5 +810,8 @@ module.exports = {
   formatExecutionSummary,
   computeLotSize,
   buildTradeManagementParams,
-  findUserByMt5Token
+  findUserByMt5Token,
+  HEARTBEAT_OFFLINE_MS,
+  ACCESS_TOKEN_TTL_MS,
+  REFRESH_TOKEN_TTL_MS
 };

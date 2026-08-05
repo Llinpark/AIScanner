@@ -89,7 +89,9 @@ export const telegramApi = {
 
 export const mt5Api = {
   getStatus: () => api.get('/api/mt5/status'),
-  createLinkToken: () => api.post('/api/mt5/link-token'),
+  startPair: () => api.post('/api/mt5/pair/start'),
+  listDevices: () => api.get('/api/mt5/devices'),
+  revokeDevice: deviceId => api.post(`/api/mt5/devices/${deviceId}/revoke`),
   updateSettings: payload => api.post('/api/mt5/settings', payload)
 };
 

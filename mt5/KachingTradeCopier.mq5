@@ -2,25 +2,29 @@
 //|                                         KachingTradeCopier.mq5   |
 //|                        KachingScanner Telegram Trade Copier EA   |
 //|                                                                  |
+//| Auth (v1.14+):                                                   |
+//|  1) Saved device credentials (access + refresh) auto-reconnect   |
+//|  2) PairCode → POST /api/mt5/pair/complete                       |
+//|     (uses built-in default backend URL for bootstrap only)       |
+//|                                                                  |
 //| Trade management (Pro+ when flags are set on pending payload):   |
-//|  - Break-even: when price reaches breakEvenTriggerR × initial R  |
-//|    (entry→SL distance), move SL to entry ± breakEvenOffsetPips.  |
-//|  - Trailing stop: after fill, trail SL by trailDistancePips from |
-//|    price; only tighten when improvement ≥ trailStepPips.         |
-//| Defaults come from the bridge JSON (backend sets SL-distance     |
-//| trail, 20% step, 1R BE trigger, 2-pip BE offset).                |
+//|  - Break-even / Trailing stop managed on tick + timer            |
 //+------------------------------------------------------------------+
 #property copyright "KachingScanner"
-#property version   "1.11"
+#property version   "1.14"
 #property strict
 
-input string BackendURL = "http://localhost:4000";
-input string LinkToken  = "";
-// Default 1s for lower copy latency; raise if broker/WebRequest rate-limits. Recompile after change.
-input int    PollSeconds = 1;
+// Primary inputs
+input string PairCode   = "";          // 8-char Pair Code from dashboard (one-time)
+input int    PollSeconds = 1;          // Bridge poll interval (seconds)
 input int    MagicNumber = 88001;
+input double RiskPercent = 1.0;        // Chart display reference (lot sizing from dashboard)
 input double MaxSlippagePoints = 30;
 
+#define KACHING_DEFAULT_BACKEND "https://api.kachingscanner.com"
+#define KACHING_EA_VERSION "1.14"
+#define CRED_FILE "KachingAI_credentials.txt"
+#define HEARTBEAT_SECONDS 30
 #define MAX_MANAGED 64
 
 struct ManagedTrade
@@ -30,54 +34,143 @@ struct ManagedTrade
    bool   isBuy;
    double entry;
    double initialSl;
-   double initialR;          // |entry - initialSl|
+   double initialR;
    bool   trailingStop;
    bool   breakEven;
-   double trailDistance;     // price units
-   double trailStep;         // price units
+   double trailDistance;
+   double trailStep;
    double breakEvenTriggerR;
-   double breakEvenOffset;   // price units
+   double breakEvenOffset;
    bool   breakEvenDone;
    bool   active;
 };
 
 ManagedTrade g_managed[MAX_MANAGED];
 datetime lastPoll = 0;
+datetime g_lastHeartbeat = 0;
 
-bool HttpGet(const string url, string &response)
+string g_backendUrl = "";
+string g_token = "";
+string g_refreshToken = "";
+string g_deviceId = "";
+string g_subscriberId = "";
+string g_accessExpiresAt = "";
+string g_statusLine = "Waiting for Pair Code";
+string g_lastError = "";
+datetime g_lastSyncAt = 0;
+bool   g_connected = false;
+bool   g_needsRepair = false;
+
+string EffectiveBackendUrl()
 {
-   char data[];
-   char result[];
-   string headers = "X-MT5-Token: " + LinkToken + "\r\n";
-   int timeout = 10000;
-   ResetLastError();
-   int code = WebRequest("GET", url, headers, timeout, data, result, headers);
-   if(code == -1)
+   if(StringLen(g_backendUrl) > 0) return g_backendUrl;
+   return KACHING_DEFAULT_BACKEND;
+}
+
+string MachineFingerprint()
+{
+   return StringFormat("%d-%I64d-%s",
+      TerminalInfoInteger(TERMINAL_BUILD),
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      AccountInfoString(ACCOUNT_SERVER));
+}
+
+bool SaveCredentials()
+{
+   int handle = FileOpen(CRED_FILE, FILE_WRITE|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(handle == INVALID_HANDLE)
    {
-      Print("WebRequest failed. Allow URL in Tools -> Options -> Expert Advisors: ", url);
+      Print("Failed to save credentials: ", GetLastError());
       return false;
    }
-   response = CharArrayToString(result);
+   FileWriteString(handle, "v2\n");
+   FileWriteString(handle, g_backendUrl + "\n");
+   FileWriteString(handle, g_token + "\n");
+   FileWriteString(handle, g_refreshToken + "\n");
+   FileWriteString(handle, g_deviceId + "\n");
+   FileWriteString(handle, g_subscriberId + "\n");
+   FileWriteString(handle, g_accessExpiresAt + "\n");
+   FileClose(handle);
    return true;
 }
 
-bool HttpPostJson(const string url, const string body, string &response)
+bool LoadCredentials()
 {
-   char data[];
-   char result[];
-   StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
-   ArrayResize(data, StringLen(body));
-   string headers = "Content-Type: application/json\r\nX-MT5-Token: " + LinkToken + "\r\n";
-   int timeout = 10000;
-   ResetLastError();
-   int code = WebRequest("POST", url, headers, timeout, data, result, headers);
-   if(code == -1)
-   {
-      Print("WebRequest POST failed: ", url);
+   if(!FileIsExist(CRED_FILE, FILE_COMMON))
       return false;
+
+   int handle = FileOpen(CRED_FILE, FILE_READ|FILE_TXT|FILE_ANSI|FILE_COMMON);
+   if(handle == INVALID_HANDLE)
+      return false;
+
+   string line1 = FileReadString(handle);
+   StringTrimLeft(line1); StringTrimRight(line1);
+
+   if(line1 == "v2")
+   {
+      g_backendUrl = FileReadString(handle);
+      g_token = FileReadString(handle);
+      g_refreshToken = FileReadString(handle);
+      g_deviceId = FileReadString(handle);
+      g_subscriberId = FileReadString(handle);
+      if(!FileIsEnding(handle))
+         g_accessExpiresAt = FileReadString(handle);
    }
-   response = CharArrayToString(result);
-   return true;
+   else
+   {
+      g_backendUrl = line1;
+      g_token = FileReadString(handle);
+      g_subscriberId = "";
+      if(!FileIsEnding(handle))
+         g_subscriberId = FileReadString(handle);
+      g_refreshToken = "";
+      g_deviceId = "";
+      g_accessExpiresAt = "";
+   }
+   FileClose(handle);
+
+   StringTrimLeft(g_backendUrl); StringTrimRight(g_backendUrl);
+   StringTrimLeft(g_token); StringTrimRight(g_token);
+   StringTrimLeft(g_refreshToken); StringTrimRight(g_refreshToken);
+   StringTrimLeft(g_deviceId); StringTrimRight(g_deviceId);
+   StringTrimLeft(g_subscriberId); StringTrimRight(g_subscriberId);
+   StringTrimLeft(g_accessExpiresAt); StringTrimRight(g_accessExpiresAt);
+
+   return (StringLen(g_backendUrl) > 0 && StringLen(g_token) > 0);
+}
+
+void ClearSavedCredentials()
+{
+   if(FileIsExist(CRED_FILE, FILE_COMMON))
+      FileDelete(CRED_FILE, FILE_COMMON);
+   g_token = "";
+   g_refreshToken = "";
+   g_deviceId = "";
+   g_accessExpiresAt = "";
+   g_connected = false;
+   g_needsRepair = true;
+}
+
+void UpdateChartComment()
+{
+   string broker = AccountInfoString(ACCOUNT_COMPANY);
+   if(StringLen(broker) == 0)
+      broker = AccountInfoString(ACCOUNT_SERVER);
+   long account = AccountInfoInteger(ACCOUNT_LOGIN);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   string syncStr = g_lastSyncAt > 0 ? TimeToString(g_lastSyncAt, TIME_DATE|TIME_SECONDS) : "—";
+
+   string text;
+   if(g_needsRepair)
+      text = "Kaching AI\nStatus: Connection Lost\nPlease Pair Again";
+   else if(!g_connected)
+      text = StringFormat("Kaching AI\nStatus: %s\n%s", g_statusLine,
+         StringLen(g_lastError) > 0 ? g_lastError : "Enter PairCode from dashboard");
+   else
+      text = StringFormat(
+         "Kaching AI\nStatus: Connected\nBroker: %s\nAccount: %I64d\nBalance: %.2f %s\nRisk: %.2f%%\nLast Sync: %s",
+         broker, account, balance, AccountInfoString(ACCOUNT_CURRENCY), RiskPercent, syncStr);
+   Comment(text);
 }
 
 string JsonGetString(const string json, const string key)
@@ -114,6 +207,125 @@ bool JsonGetBool(const string json, const string key)
    return StringFind(tail, "true") >= 0;
 }
 
+int HttpRequestRaw(const string method, const string url, const string body, const bool useToken, string &response)
+{
+   char data[];
+   char result[];
+   if(StringLen(body) > 0)
+   {
+      StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
+      ArrayResize(data, StringLen(body));
+   }
+   string headers = "";
+   if(StringLen(body) > 0)
+      headers += "Content-Type: application/json\r\n";
+   if(useToken && StringLen(g_token) > 0)
+      headers += "X-MT5-Token: " + g_token + "\r\n";
+   ResetLastError();
+   int code = WebRequest(method, url, headers, 15000, data, result, headers);
+   if(code == -1)
+   {
+      response = "";
+      return -1;
+   }
+   response = CharArrayToString(result);
+   return code;
+}
+
+bool TryRefreshAccessToken()
+{
+   if(StringLen(g_refreshToken) == 0)
+      return false;
+
+   string url = EffectiveBackendUrl() + "/api/mt5/pair/refresh";
+   string body = StringFormat("{\"refreshToken\":\"%s\",\"deviceId\":\"%s\"}", g_refreshToken, g_deviceId);
+   string response;
+   int code = HttpRequestRaw("POST", url, body, false, response);
+   if(code < 200 || code >= 300)
+   {
+      Print("Token refresh failed HTTP ", code);
+      ClearSavedCredentials();
+      g_statusLine = "Connection Lost";
+      g_lastError = "Please Pair Again";
+      UpdateChartComment();
+      return false;
+   }
+
+   string access = JsonGetString(response, "accessToken");
+   if(StringLen(access) == 0)
+      access = JsonGetString(response, "token");
+   if(StringLen(access) == 0)
+   {
+      ClearSavedCredentials();
+      return false;
+   }
+   g_token = access;
+   g_accessExpiresAt = JsonGetString(response, "accessExpiresAt");
+   SaveCredentials();
+   g_needsRepair = false;
+   return true;
+}
+
+bool EnsureAccessToken()
+{
+   if(g_needsRepair) return false;
+   return StringLen(g_token) > 0;
+}
+
+bool HttpGet(const string url, string &response)
+{
+   if(!EnsureAccessToken()) return false;
+   int code = HttpRequestRaw("GET", url, "", true, response);
+   if(code == -1)
+   {
+      g_statusLine = "Unable to reach Kaching AI";
+      g_lastError = "Retrying...";
+      UpdateChartComment();
+      return false;
+   }
+   if(code == 401 && StringFind(response, "access_expired") >= 0)
+   {
+      if(TryRefreshAccessToken())
+         code = HttpRequestRaw("GET", url, "", true, response);
+      else
+         return false;
+   }
+   if(code == 401)
+   {
+      ClearSavedCredentials();
+      UpdateChartComment();
+      return false;
+   }
+   return (code >= 200 && code < 300);
+}
+
+bool HttpPostJsonAuth(const string url, const string body, string &response)
+{
+   if(!EnsureAccessToken()) return false;
+   int code = HttpRequestRaw("POST", url, body, true, response);
+   if(code == -1)
+   {
+      g_statusLine = "Unable to reach Kaching AI";
+      g_lastError = "Retrying...";
+      UpdateChartComment();
+      return false;
+   }
+   if(code == 401 && StringFind(response, "access_expired") >= 0)
+   {
+      if(TryRefreshAccessToken())
+         code = HttpRequestRaw("POST", url, body, true, response);
+      else
+         return false;
+   }
+   if(code == 401)
+   {
+      ClearSavedCredentials();
+      UpdateChartComment();
+      return false;
+   }
+   return (code >= 200 && code < 300);
+}
+
 double PipSize(const string symbol)
 {
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
@@ -128,36 +340,150 @@ double PipsToPrice(const string symbol, const double pips)
    return pips * PipSize(symbol);
 }
 
-void SyncAccount()
+bool CompletePairing()
 {
-   string url = BackendURL + "/api/mt5/bridge/sync";
+   g_statusLine = "Connecting...";
+   g_lastError = "";
+   g_needsRepair = false;
+   UpdateChartComment();
+
+   string bootstrap = KACHING_DEFAULT_BACKEND;
+   string url = bootstrap + "/api/mt5/pair/complete";
+   string broker = AccountInfoString(ACCOUNT_COMPANY);
+   StringReplace(broker, "\\", "/");
+   StringReplace(broker, "\"", "'");
+   string fingerprint = MachineFingerprint();
+   StringReplace(fingerprint, "\\", "/");
+   StringReplace(fingerprint, "\"", "'");
+   string pair = PairCode;
+   StringTrimLeft(pair); StringTrimRight(pair); StringToUpper(pair);
+
    string body = StringFormat(
-      "{\"balance\":%.2f,\"currency\":\"%s\",\"terminalId\":\"%d\"}",
+      "{\"pairCode\":\"%s\",\"terminalId\":\"%d\",\"accountNumber\":\"%I64d\",\"broker\":\"%s\",\"terminalBuild\":\"%d\",\"eaVersion\":\"%s\",\"machineFingerprint\":\"%s\",\"platform\":\"Windows\"}",
+      pair,
+      TerminalInfoInteger(TERMINAL_BUILD),
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      broker,
+      TerminalInfoInteger(TERMINAL_BUILD),
+      KACHING_EA_VERSION,
+      fingerprint
+   );
+
+   string response;
+   int httpCode = HttpRequestRaw("POST", url, body, false, response);
+   if(httpCode == -1)
+   {
+      g_lastError = "Unable to reach Kaching AI — Retrying...";
+      g_statusLine = "Unable to reach Kaching AI";
+      UpdateChartComment();
+      return false;
+   }
+   if(httpCode == 410 || StringFind(response, "Pair Code Expired") >= 0 || StringFind(response, "\"expired\"") >= 0)
+   {
+      g_lastError = "Pair Code Expired";
+      g_statusLine = "Pair Code Expired";
+      UpdateChartComment();
+      return false;
+   }
+   if(httpCode < 200 || httpCode >= 300)
+   {
+      g_lastError = "Invalid Pair Code";
+      g_statusLine = "Invalid Pair Code";
+      UpdateChartComment();
+      return false;
+   }
+
+   string access = JsonGetString(response, "accessToken");
+   if(StringLen(access) == 0) access = JsonGetString(response, "token");
+   string refresh = JsonGetString(response, "refreshToken");
+   string backendUrl = JsonGetString(response, "backendUrl");
+   string subscriberId = JsonGetString(response, "subscriberId");
+   string deviceId = JsonGetString(response, "deviceId");
+   string accessExp = JsonGetString(response, "accessExpiresAt");
+
+   if(StringLen(access) == 0 || StringLen(backendUrl) == 0)
+   {
+      g_lastError = "Invalid Pair Code";
+      g_statusLine = "Invalid Pair Code";
+      UpdateChartComment();
+      return false;
+   }
+
+   g_token = access;
+   g_refreshToken = refresh;
+   g_backendUrl = backendUrl;
+   g_subscriberId = subscriberId;
+   g_deviceId = deviceId;
+   g_accessExpiresAt = accessExp;
+   SaveCredentials();
+
+   g_connected = true;
+   g_needsRepair = false;
+   g_statusLine = "Connected";
+   g_lastError = "";
+   UpdateChartComment();
+   Print("KachingTradeCopier paired. Device=", g_deviceId, " Backend=", g_backendUrl);
+   return true;
+}
+
+void SendHeartbeat()
+{
+   string url = EffectiveBackendUrl() + "/api/mt5/bridge/heartbeat";
+   string broker = AccountInfoString(ACCOUNT_COMPANY);
+   StringReplace(broker, "\"", "'");
+   string body = StringFormat(
+      "{\"balance\":%.2f,\"currency\":\"%s\",\"broker\":\"%s\",\"accountNumber\":\"%I64d\",\"deviceId\":\"%s\"}",
       AccountInfoDouble(ACCOUNT_BALANCE),
       AccountInfoString(ACCOUNT_CURRENCY),
-      TerminalInfoInteger(TERMINAL_BUILD)
+      broker,
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      g_deviceId
    );
    string response;
-   HttpPostJson(url, body, response);
+   if(HttpPostJsonAuth(url, body, response))
+   {
+      g_lastHeartbeat = TimeCurrent();
+      g_lastSyncAt = TimeCurrent();
+      g_connected = true;
+      g_statusLine = "Connected";
+      UpdateChartComment();
+   }
+}
+
+void SyncAccount()
+{
+   string url = EffectiveBackendUrl() + "/api/mt5/bridge/sync";
+   string body = StringFormat(
+      "{\"balance\":%.2f,\"currency\":\"%s\",\"terminalId\":\"%d\",\"accountNumber\":\"%I64d\"}",
+      AccountInfoDouble(ACCOUNT_BALANCE),
+      AccountInfoString(ACCOUNT_CURRENCY),
+      TerminalInfoInteger(TERMINAL_BUILD),
+      AccountInfoInteger(ACCOUNT_LOGIN)
+   );
+   string response;
+   if(HttpPostJsonAuth(url, body, response))
+   {
+      g_lastSyncAt = TimeCurrent();
+      g_connected = true;
+      g_statusLine = "Connected";
+      UpdateChartComment();
+   }
 }
 
 void ReportExecution(const string executionId, const string status, ulong ticket, double fillPrice, const string errorMessage)
 {
-   string url = BackendURL + "/api/mt5/bridge/report";
+   string url = EffectiveBackendUrl() + "/api/mt5/bridge/report";
    string err = errorMessage;
    StringReplace(err, "\"", "'");
    string body = StringFormat(
       "{\"executionId\":\"%s\",\"status\":\"%s\",\"ticket\":\"%I64u\",\"fillPrice\":%.5f,\"balance\":%.2f,\"currency\":\"%s\",\"error\":\"%s\"}",
-      executionId,
-      status,
-      ticket,
-      fillPrice,
+      executionId, status, ticket, fillPrice,
       AccountInfoDouble(ACCOUNT_BALANCE),
       AccountInfoString(ACCOUNT_CURRENCY),
       err
    );
    string response;
-   HttpPostJson(url, body, response);
+   HttpPostJsonAuth(url, body, response);
 }
 
 int FindManagedSlot()
@@ -442,7 +768,7 @@ bool ExecuteTradeFromJson(const string tradeJson)
 
 void PollPendingTrades()
 {
-   string url = BackendURL + "/api/mt5/bridge/pending";
+   string url = EffectiveBackendUrl() + "/api/mt5/bridge/pending";
    string response;
    if(!HttpGet(url, response))
       return;
@@ -460,20 +786,41 @@ void PollPendingTrades()
    }
 }
 
+
 int OnInit()
 {
-   if(StringLen(LinkToken) == 0)
-   {
-      Print("Set LinkToken from the KachingScanner dashboard.");
-      return INIT_PARAMETERS_INCORRECT;
-   }
-
    for(int i = 0; i < MAX_MANAGED; i++)
       g_managed[i].active = false;
 
-   EventSetTimer(PollSeconds);
+   g_connected = false;
+   g_needsRepair = false;
+   g_statusLine = "Waiting for Pair Code";
+   g_lastError = "";
+
+   if(LoadCredentials())
+   {
+      g_connected = true;
+      g_statusLine = "Connected";
+      Print("KachingTradeCopier v1.14 restored saved credentials. Backend: ", g_backendUrl);
+   }
+   else if(StringLen(PairCode) > 0)
+   {
+      if(!CompletePairing())
+         return INIT_FAILED;
+   }
+   else
+   {
+      g_statusLine = "Waiting for Pair Code";
+      UpdateChartComment();
+      Print("Set PairCode from the dashboard (Auto Trading → Pair MT5).");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
+   EventSetTimer(MathMax(1, PollSeconds));
    SyncAccount();
-   Print("KachingTradeCopier v1.11 started. Backend: ", BackendURL);
+   SendHeartbeat();
+   UpdateChartComment();
+   Print("KachingTradeCopier v1.14 started. Backend: ", EffectiveBackendUrl());
    Print("Trail + break-even managed on OnTick for MagicNumber=", MagicNumber);
    return INIT_SUCCEEDED;
 }
@@ -481,18 +828,34 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   Comment("");
 }
 
 void OnTimer()
 {
+   if(g_needsRepair)
+   {
+      UpdateChartComment();
+      return;
+   }
+   if(!g_connected && StringLen(g_token) == 0)
+      return;
+
+   if(TimeCurrent() - g_lastHeartbeat >= HEARTBEAT_SECONDS)
+      SendHeartbeat();
+
    SyncAccount();
    PollPendingTrades();
    ManageOpenPositions();
+   UpdateChartComment();
 }
 
 void OnTick()
 {
    ManageOpenPositions();
+
+   if(g_needsRepair || (!g_connected && StringLen(g_token) == 0))
+      return;
 
    if(TimeCurrent() - lastPoll >= PollSeconds)
    {

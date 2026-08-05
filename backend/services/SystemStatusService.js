@@ -37,7 +37,8 @@ function createSystemStatusService({
     }
 
     const telegramLinked = Boolean(user?.telegram?.chatId || user?.telegram?.linked);
-    const mt5Linked = Boolean(user?.mt5?.linkToken);
+    const mt5Linked =
+      Array.isArray(user?.mt5?.devices) && user.mt5.devices.some(d => d && !d.revokedAt);
 
     return {
       architecture: 'tradingview_webhook_distribution',

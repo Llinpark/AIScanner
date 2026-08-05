@@ -2198,6 +2198,23 @@ listenOnPort(activePort);
 server.on('listening', () => {
   console.log(`Backend listening on http://${host}:${activePort}`);
   console.log(`Domain: ${APP_DOMAIN} | API: ${PUBLIC_BACKEND_URL} | Frontend: ${FRONTEND_URL}`);
+
+  // Production: Redis is mandatory for MT5 PairCode storage (fail boot if unreachable).
+  try {
+    const Mt5PairingService = require('./services/Mt5PairingService');
+    Mt5PairingService.assertProductionRedisReady().catch(err => {
+      console.error('[Mt5Pairing] Production Redis check failed:', err.message);
+      if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+        process.exit(1);
+      }
+    });
+  } catch (err) {
+    console.error('[Mt5Pairing] Unable to load pairing service at boot:', err.message);
+    if (String(process.env.NODE_ENV || '').toLowerCase() === 'production') {
+      process.exit(1);
+    }
+  }
+
   WeightLearningService.initWeightLearning().catch(err => {
     console.error('[WeightLearning] Boot init error (scanner continues):', err.message);
   });

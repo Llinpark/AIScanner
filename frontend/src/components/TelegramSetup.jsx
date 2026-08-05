@@ -12,11 +12,31 @@ function normalizeRiskPercent(value) {
   return Math.min(RISK_MAX, Math.max(RISK_MIN, Number(n.toFixed(2))));
 }
 
+function formatCountdown(expiresAt) {
+  if (!expiresAt) return '';
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) return 'Expired';
+  const totalSec = Math.ceil(ms / 1000);
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  return `Expires in ${mins}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatDeviceActive(iso) {
+  if (!iso) return 'Never';
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return '—';
+  }
+}
+
 export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
   const [status, setStatus] = useState(null);
   const [mt5Status, setMt5Status] = useState(null);
   const [linkInfo, setLinkInfo] = useState(null);
-  const [mt5LinkInfo, setMt5LinkInfo] = useState(null);
+  const [mt5PairInfo, setMt5PairInfo] = useState(null);
+  const [pairCountdown, setPairCountdown] = useState('');
   const [riskPercent, setRiskPercent] = useState(1);
   const [fixedLotSize, setFixedLotSize] = useState(0.01);
   const [symbolSuffix, setSymbolSuffix] = useState('');
@@ -25,6 +45,8 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saveNotice, setSaveNotice] = useState('');
+
+  const [copyNotice, setCopyNotice] = useState('');
 
   const canTelegram = Boolean(tierLimits.telegramAlerts);
   const canMt5 = Boolean(tierLimits.mt5Execution);
@@ -65,6 +87,28 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
     }
   }, [canTelegram, canMt5, loadStatus]);
 
+  useEffect(() => {
+    if (!mt5PairInfo?.expiresAt) {
+      setPairCountdown('');
+      return undefined;
+    }
+    const tick = () => setPairCountdown(formatCountdown(mt5PairInfo.expiresAt));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [mt5PairInfo?.expiresAt]);
+
+  useEffect(() => {
+    if (!canMt5) return undefined;
+    const id = setInterval(() => {
+      mt5Api
+        .getStatus()
+        .then(res => setMt5Status(res.data))
+        .catch(() => {});
+    }, 15000);
+    return () => clearInterval(id);
+  }, [canMt5]);
+
   if (!canTelegram && !canMt5) {
     return (
       <div className="insights-section auto-trading-page">
@@ -93,15 +137,42 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
     }
   };
 
-  const generateMt5Token = async () => {
+  const startMt5Pair = async () => {
+    setBusy(true);
+    setError('');
+    setCopyNotice('');
+    try {
+      const res = await mt5Api.startPair();
+      setMt5PairInfo(res.data);
+      await loadStatus();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to start MT5 pairing.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyPairCode = async () => {
+    if (!mt5PairInfo?.pairCode) return;
+    try {
+      await navigator.clipboard.writeText(mt5PairInfo.pairCode);
+      setCopyNotice('Copied');
+      setTimeout(() => setCopyNotice(''), 1500);
+    } catch {
+      setCopyNotice('Select and copy manually');
+    }
+  };
+
+  const revokeDevice = async deviceId => {
+    if (!deviceId) return;
     setBusy(true);
     setError('');
     try {
-      const res = await mt5Api.createLinkToken();
-      setMt5LinkInfo(res.data);
-      await loadStatus();
+      const res = await mt5Api.revokeDevice(deviceId);
+      if (res.data?.status) setMt5Status(res.data.status);
+      else await loadStatus();
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to generate MT5 link token.');
+      setError(err.response?.data?.message || 'Failed to disconnect device.');
     } finally {
       setBusy(false);
     }
@@ -180,6 +251,8 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
   const eaConnected = Boolean(mt5Status?.linked);
   const mt5Enabled = mt5Status?.enabled !== false;
   const modeLabel = (mt5Status?.executionMode || executionMode) === 'auto' ? 'Auto' : 'Manual';
+  const pairExpired =
+    mt5PairInfo?.expiresAt && new Date(mt5PairInfo.expiresAt).getTime() <= Date.now();
 
   return (
     <div className="insights-section telegram-setup auto-trading-page">
@@ -187,7 +260,7 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
         <p className="auto-trading-kicker">Execution</p>
         <h3>Auto Trading</h3>
         <p>
-          Connect MT5 to place trades from TradingView entry signals. Telegram is optional and
+          Pair MT5 to place trades from TradingView entry signals. Telegram is optional and
           notifications-only — the EA never depends on Telegram.
         </p>
       </header>
@@ -203,23 +276,29 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
           <div className="auto-trading-card-head">
             <div>
               <h4>MT5 execution</h4>
-              <p>Compile the EA, allow WebRequest, then connect with a link token.</p>
+              <p>Compile the EA, allow WebRequest, then pair with an 8-character Pair Code.</p>
             </div>
-            <span className={`auto-status-pill ${eaConnected ? 'is-live' : 'is-idle'}`}>
-              {eaConnected ? (mt5Enabled ? 'Connected' : 'Paused') : 'Not connected'}
+            <span className={`auto-status-pill ${eaConnected ? (mt5Status?.deviceOnline ? 'is-live' : 'is-idle') : 'is-idle'}`}>
+              {eaConnected
+                ? mt5Status?.deviceOnline
+                  ? 'Connected'
+                  : mt5Enabled
+                    ? 'Paired'
+                    : 'Paused'
+                : 'Not connected'}
             </span>
           </div>
 
           <ol className="auto-setup-steps">
             <li>
-              Compile and attach <code>mt5/KachingTradeCopier.mq5</code> (v1.11+) on your MT5 terminal.
+              Compile and attach <code>mt5/KachingTradeCopier.mq5</code> (v1.14+) on your MT5 terminal.
             </li>
             <li>
               In MT5: Tools → Options → Expert Advisors → allow WebRequest for your Kaching backend URL.
             </li>
             <li>
-              Click <strong>Connect MT5</strong>, paste the link token into the EA, and set the Backend URL
-              shown below.
+              Click <strong>Pair MT5</strong>, enter the 8-character code in the EA <code>PairCode</code> input.
+              Backend URL and tokens are set automatically. Pair multiple PCs independently.
             </li>
             <li>Enable Algo Trading, attach the EA to a chart, and keep it running.</li>
             {canAuto ? (
@@ -247,11 +326,17 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
 
           {!eaConnected ? (
             <div className="telegram-actions">
-              <button type="button" className="btn-fetch" disabled={busy} onClick={generateMt5Token}>
-                {busy ? 'Working…' : 'Connect MT5'}
+              <button type="button" className="btn-fetch" disabled={busy} onClick={startMt5Pair}>
+                {busy ? 'Working…' : 'Pair MT5'}
               </button>
             </div>
           ) : (
+            <>
+              <div className="telegram-actions" style={{ marginBottom: 12 }}>
+                <button type="button" className="btn-fetch" disabled={busy} onClick={startMt5Pair}>
+                  {busy ? 'Working…' : 'Pair another device'}
+                </button>
+              </div>
             <dl className="auto-status-grid">
               <div>
                 <dt>Status</dt>
@@ -289,6 +374,39 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                 <dd>{mt5Status.pendingCount || 0}</dd>
               </div>
             </dl>
+            </>
+          )}
+
+          {Array.isArray(mt5Status?.devices) && mt5Status.devices.length > 0 && (
+            <div className="mt5-devices">
+              <h5>Authorized devices</h5>
+              <ul className="mt5-device-list">
+                  {mt5Status.devices.map(device => (
+                  <li key={device.deviceId} className="mt5-device-row">
+                    <div>
+                      <strong>{device.friendlyName || device.label || 'MT5 Terminal'}</strong>
+                      <span className={`mt5-device-dot ${device.online || device.status === 'Active' ? 'is-online' : 'is-offline'}`}>
+                        {device.status === 'Active' || device.online ? 'Connected' : 'Offline'}
+                      </span>
+                      <p>
+                        {[device.broker, device.platform, device.accountNumber ? `#${device.accountNumber}` : null]
+                          .filter(Boolean)
+                          .join(' · ') || 'MT5'}
+                      </p>
+                      <p className="mt5-device-meta">Last active: {formatDeviceActive(device.lastHeartbeatAt)}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-small btn-danger"
+                      disabled={busy}
+                      onClick={() => revokeDevice(device.deviceId)}
+                    >
+                      Disconnect
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
 
           {eaConnected && (
@@ -389,8 +507,8 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
                 <button type="button" className="btn-small" disabled={busy} onClick={saveMt5Settings}>
                   {usesRiskPercent ? 'Save risk settings' : 'Save settings'}
                 </button>
-                <button type="button" className="btn-fetch" disabled={busy} onClick={generateMt5Token}>
-                  Regenerate MT5 token
+                <button type="button" className="btn-fetch" disabled={busy} onClick={startMt5Pair}>
+                  Re-pair / add device
                 </button>
               </div>
               {saveNotice && <p className="auto-notice is-success">{saveNotice}</p>}
@@ -403,27 +521,38 @@ export default function TelegramSetup({ tierLimits, onNavigatePricing }) {
               )}
               {(tierLimits.trailingStop || tierLimits.breakEvenAutomation) && (
                 <p className="auto-notice">
-                  Install EA v1.11+ so trailing stop and break-even run on open positions after fill.
+                  Install EA v1.14+ so pairing, heartbeat, trailing stop, and break-even run after fill.
                 </p>
               )}
             </>
           )}
 
-          {mt5LinkInfo && (
-            <div className="telegram-link-box">
+          {mt5PairInfo && (
+            <div className="telegram-link-box mt5-pair-box">
               <p>
-                <strong>MT5 link token</strong>
+                <strong>Pair Code</strong> — enter this in the EA <code>PairCode</code> input. Permanent tokens
+                are never shown here.
               </p>
-              <pre>{mt5LinkInfo.token}</pre>
-              <p>
-                <strong>Backend URL:</strong>{' '}
-                <code>
-                  {mt5LinkInfo.bridgeUrl?.replace('/bridge', '') ||
-                    mt5Status?.bridgeUrl?.replace('/bridge', '')}
-                </code>
-              </p>
+              <div className="mt5-pair-code">
+                <pre className="mt5-pair-code-value" aria-label="MT5 pair code">
+                  {mt5PairInfo.pairCode}
+                </pre>
+                <p className={`mt5-pair-expiry${pairExpired ? ' is-expired' : ''}`}>
+                  {pairExpired ? 'Expired' : pairCountdown}
+                </p>
+              </div>
+              <div className="mt5-pair-actions">
+                {!pairExpired && (
+                  <button type="button" className="btn-small" disabled={busy} onClick={copyPairCode}>
+                    {copyNotice || 'Copy'}
+                  </button>
+                )}
+                <button type="button" className="btn-fetch" disabled={busy} onClick={startMt5Pair}>
+                  {busy ? 'Working…' : pairExpired ? 'Generate New Code' : 'Regenerate'}
+                </button>
+              </div>
               <ol>
-                {(mt5LinkInfo.instructions || []).map(step => (
+                {(mt5PairInfo.instructions || []).map(step => (
                   <li key={step}>{step}</li>
                 ))}
               </ol>
