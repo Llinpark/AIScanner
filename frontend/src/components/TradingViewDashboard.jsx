@@ -8,7 +8,10 @@ import MarketChartPanel from './charts/MarketChartPanel';
 import { alertMatchesSymbol } from '../constants/markets';
 import { isInsightsSignal } from '../utils/insightsSignal';
 import { formatInstrumentPrice } from '../utils/pricePrecision';
-import { getStrategyArchitecture } from '../constants/strategyArchitecture';
+import {
+  formatEntryHtfLine,
+  getStrategyArchitecture
+} from '../constants/strategyArchitecture';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -85,7 +88,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   const [pineMeta, setPineMeta] = useState(null);
   const [pineCopyState, setPineCopyState] = useState('idle');
   const [pineLoadError, setPineLoadError] = useState('');
-  const [pineStrategy, setPineStrategy] = useState('scalping');
+  // Day Trading first: default entry is 15m (common for gold). Scalping blocks 15m (HTF only).
+  const [pineStrategy, setPineStrategy] = useState('daytrading');
   const pineScriptRef = useRef('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
   const [tvUsernameInput, setTvUsernameInput] = useState('');
@@ -556,6 +560,12 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       <option value="daytrading">Liquidity Sweep + FVG (Day Trading)</option>
                       <option value="scalping">Liquidity Sweep + FVG (Scalping)</option>
                     </select>
+                    <p className="setup-note pine-tf-tip" role="note">
+                      {formatEntryHtfLine(pineStrategy)}
+                      {getStrategyArchitecture(pineStrategy)?.chartHint
+                        ? ` — ${getStrategyArchitecture(pineStrategy).chartHint}`
+                        : ''}
+                    </p>
                     {pineMeta?.strategyName && (
                       <p className="setup-note">Active: {pineMeta.strategyName}</p>
                     )}
@@ -600,9 +610,6 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                       <p className="setup-note">
                         Keep the script on the chart so Entry, SL, and TP1–3 draw when signals fire. Charts are
                         display-only and never block alerts.
-                        {getStrategyArchitecture(pineStrategy)?.chartHint
-                          ? ` ${getStrategyArchitecture(pineStrategy).chartHint}`
-                          : ''}
                       </p>
                     </div>
                   )}

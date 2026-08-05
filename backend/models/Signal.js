@@ -100,9 +100,19 @@ const SignalSchema = new mongoose.Schema({
   },
   executionStatus: {
     type: String,
-    enum: ['pending', 'sent', 'executed', 'skipped', 'failed'],
+    enum: ['pending', 'sent', 'executed', 'skipped', 'failed', 'expired', 'ignored'],
     default: 'pending'
   },
+  /**
+   * Pro Manual Confirmation window (Premium auto never sets these).
+   * pending → user must Execute before mt5ConfirmExpiresAt; else Expired (not queued).
+   */
+  mt5ConfirmStatus: {
+    type: String,
+    enum: ['none', 'pending', 'executed', 'ignored', 'expired'],
+    default: 'none'
+  },
+  mt5ConfirmExpiresAt: { type: Date },
   telegramSent: { type: Boolean, default: false },
   mt5Sent: { type: Boolean, default: false },
   emailSent: { type: Boolean, default: false },

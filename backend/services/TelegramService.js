@@ -253,7 +253,8 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
-function formatSignalMessage(signal, subscriber = null, { includeExecuteButton = false } = {}) {
+function formatSignalMessage(signal, subscriber = null, options = {}) {
+  const includeExecuteButton = Boolean(options.includeExecuteButton);
   const alertType = signal.alertType || 'signal';
   const title = escapeHtml(formatKachingAlertMessage(signal).split('|')[0]?.trim() || 'Kaching Alert');
   const sl = signal.stop_loss_1 ?? signal.stop_loss;
@@ -288,8 +289,12 @@ function formatSignalMessage(signal, subscriber = null, { includeExecuteButton =
   }
 
   if (includeExecuteButton && isEntryAlert(alertType)) {
+    const secs = Number(options.confirmSeconds) || 180;
+    const windowLabel = secs % 60 === 0 ? `${secs / 60} min` : `${secs}s`;
     lines.push(
-      '\n<i>Tap Execute to queue this trade for MT5 — entry, SL, TP, and lot size are filled automatically.</i>'
+      `\n<i>Pro Manual Confirmation — tap <b>Execute Trade</b> within ${windowLabel} to queue MT5. ` +
+        `After expiry this signal is marked Expired and will not execute. Tap <b>Ignore Trade</b> to discard. ` +
+        `Once queued, the EA manages SL/TP/BE/trail/partials — no further Telegram steps.</i>`
     );
   }
 
@@ -300,10 +305,20 @@ function buildExecuteCallbackData(signalId) {
   return `exec:${String(signalId)}`.slice(0, 64);
 }
 
+function buildIgnoreCallbackData(signalId) {
+  return `ign:${String(signalId)}`.slice(0, 64);
+}
+
 function parseExecuteCallbackData(data) {
   const raw = String(data || '');
   if (!raw.startsWith('exec:')) return null;
   return raw.slice(5);
+}
+
+function parseIgnoreCallbackData(data) {
+  const raw = String(data || '');
+  if (!raw.startsWith('ign:')) return null;
+  return raw.slice(4);
 }
 
 function buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton = false } = {}) {
@@ -326,7 +341,12 @@ function buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton = fal
   if (!signalId) return null;
 
   return {
-    inline_keyboard: [[{ text: '⚡ Execute on MT5', callback_data: buildExecuteCallbackData(signalId) }]]
+    inline_keyboard: [
+      [
+        { text: '⚡ Execute Trade', callback_data: buildExecuteCallbackData(signalId) },
+        { text: '✖ Ignore Trade', callback_data: buildIgnoreCallbackData(signalId) }
+      ]
+    ]
   };
 }
 
@@ -346,7 +366,7 @@ async function notifySubscriber(subscriber, signalDoc, options = {}) {
 
   const includeExecuteButton = Boolean(options.includeExecuteButton);
   const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
-  const text = formatSignalMessage(signal, subscriber, { includeExecuteButton });
+  const text = formatSignalMessage(signal, subscriber, options);
   const replyMarkup = buildSignalReplyMarkup(signal, subscriber, { includeExecuteButton });
   const result = await sendMessage(telegram.chatId, text, { replyMarkup });
   return Boolean(result);
@@ -530,7 +550,8 @@ async function handleCommand(chatId, text, fromUsername) {
         '',
         '<b>Auto Trading</b>',
         'Telegram is notifications only. Pair MT5 in the dashboard.',
-        'Manual mode: tap Execute on entry alerts. Premium Auto mode queues trades without Telegram.'
+        'Pro Manual Confirmation: Execute Trade / Ignore Trade (time-limited).',
+        'Premium Automatic: queues MT5 immediately; Telegram is informational only.'
       ].join('\n')
     );
   }
@@ -577,9 +598,17 @@ async function handleExecuteCallback(callbackQuery) {
         'Premium: sync MT5 balance via the EA first. Pro: set a fixed lot size in the dashboard.',
       already_queued: 'This trade is already queued or executed.',
       not_entry_signal: 'Only entry signals can be executed.',
-      signal_not_found: 'Signal expired or not found.'
+      signal_not_found: 'Signal not found.',
+      confirm_expired: 'Confirmation expired — signal marked Expired. Not queued.',
+      confirm_ignored: 'This trade was ignored.',
+      forbidden: 'Not allowed.'
     };
     await answerCallbackQuery(callbackId, messages[result.reason] || 'Unable to queue trade.', true);
+    if (result.reason === 'confirm_expired' && messageId) {
+      await editMessageReplyMarkup(chatId, messageId, {
+        inline_keyboard: [[{ text: '⏰ Expired — not queued', callback_data: 'noop' }]]
+      });
+    }
     return;
   }
 
@@ -587,7 +616,8 @@ async function handleExecuteCallback(callbackQuery) {
   await answerCallbackQuery(callbackId, 'Trade queued for MT5.');
   await sendMessage(
     chatId,
-    `✅ <b>Trade queued for MT5</b>\n\n${escapeHtml(summary)}\n\nYour MT5 EA will execute this automatically.`
+    `✅ <b>Trade queued for MT5</b>\n\n${escapeHtml(summary)}\n\n` +
+      `Your EA will execute and fully manage SL/TP1–TP3/BE/trail/partials — no further confirmation needed.`
   );
 
   if (messageId) {
@@ -597,11 +627,53 @@ async function handleExecuteCallback(callbackQuery) {
   }
 }
 
+async function handleIgnoreCallback(callbackQuery) {
+  const callbackId = callbackQuery.id;
+  const chatId = callbackQuery.message?.chat?.id;
+  const messageId = callbackQuery.message?.message_id;
+  const signalId = parseIgnoreCallbackData(callbackQuery.data);
+
+  if (!signalId) {
+    await answerCallbackQuery(callbackId, 'Invalid action.', true);
+    return;
+  }
+
+  const user = await findUserByChatId(chatId);
+  if (!user) {
+    await answerCallbackQuery(callbackId, 'Link your KachingScanner account first.', true);
+    return;
+  }
+
+  const userId = user._id?.toString() || user.id;
+  const TradeDeliveryService = require('./TradeDeliveryService');
+  const result = await TradeDeliveryService.ignoreManualExecution(userId, signalId);
+
+  if (!result.ok) {
+    const messages = {
+      signal_not_found: 'Signal not found.',
+      already_queued: 'Already queued — cannot ignore.',
+      confirm_expired: 'Already expired.',
+      forbidden: 'Not allowed.'
+    };
+    await answerCallbackQuery(callbackId, messages[result.reason] || 'Unable to ignore.', true);
+    return;
+  }
+
+  await answerCallbackQuery(callbackId, 'Trade ignored — not queued.');
+  if (messageId) {
+    await editMessageReplyMarkup(chatId, messageId, {
+      inline_keyboard: [[{ text: '✖ Ignored — not queued', callback_data: 'noop' }]]
+    });
+  }
+}
+
 async function processUpdate(update) {
   if (update?.callback_query) {
     const data = update.callback_query.data || '';
     if (data.startsWith('exec:')) {
       await handleExecuteCallback(update.callback_query);
+    } else if (data.startsWith('ign:')) {
+      await handleIgnoreCallback(update.callback_query);
     } else if (data !== 'noop') {
       await answerCallbackQuery(update.callback_query.id);
     }

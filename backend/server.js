@@ -2244,6 +2244,13 @@ server.on('listening', () => {
       console.error('[Telegram] Delivery mode setup failed:', err.message);
     });
   }
+  // Pro Manual Confirmation: expire unanswered Execute/Ignore windows (no MT5 queue).
+  try {
+    const TradeDeliveryService = require('./services/TradeDeliveryService');
+    TradeDeliveryService.startManualConfirmExpiryJob();
+  } catch (err) {
+    console.error('[TradeDelivery] Failed to start manual confirm expiry job:', err.message);
+  }
   // Hourly: revoke access when subscription.current_period_end (expiryDate) has passed.
   try {
     ActivationService.startExpiryJob(io);

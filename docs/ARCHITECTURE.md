@@ -95,8 +95,8 @@ HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.loo
 
 ### TradingView workflow
 
-1. Choose strategy (Scalping or Day Trading) in the app.
-2. Generate personal Pine (HTF default baked from Strategy Configuration).
+1. Choose strategy (Scalping or Day Trading) in the app. Setup defaults to **Day Trading** (5m/15m entries). Scalping is 3m/5m only — a 15m chart correctly locks Scalping because 15m is HTF Confirmation, not entry.
+2. Generate personal Pine (HTF default baked from Strategy Configuration). Lock labels include the strategy name (e.g. `Wrong Entry Timeframe (Scalping)`).
 3. Attach script to an allowed **Entry Timeframe** chart.
 4. Create alert → webhook → Kaching distribution (dashboard / Telegram / MT5).
 5. After admin TF/config changes or deploy: regenerate Pine and recreate the alert.

@@ -9,8 +9,25 @@ const { computeRiskMetrics } = require('../utils/signalRisk');
 const { toMt5Symbol, mt5OrderType } = require('../utils/mt5Symbols');
 const { isEntryAlert } = require('../utils/signalOutcome');
 const { formatTvPrice } = require('../utils/priceFormat');
+const {
+  applyManagementEvent,
+  formatManagementLabel
+} = require('../utils/mt5TradeManagement');
+const {
+  clampConfirmSeconds,
+  resolveConfirmSeconds,
+  formatConfirmWindowLabel
+} = require('../utils/mt5ManualConfirm');
+const {
+  shouldReclaimSentClaim,
+  shouldApplyReportEvent,
+  rememberAckedEventUuid
+} = require('../utils/mt5EaReliability');
 
 const devExecutions = new Map();
+
+/** Reclaim claim-without-fill after this window (preserves first-claimer during active attempt). */
+const SENT_RECLAIM_MS = 120 * 1000;
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -104,6 +121,7 @@ function defaultMt5Config() {
     fixedLotSize: 0.01,
     symbolSuffix: '',
     executionMode: null,
+    manualConfirmSeconds: null,
     lastSyncAt: null,
     linkedAt: null,
     terminalId: null,
@@ -405,6 +423,11 @@ async function updateSettings(userId, settings = {}) {
     }
   }
 
+  let manualConfirmSeconds = current.manualConfirmSeconds;
+  if (settings.manualConfirmSeconds != null) {
+    manualConfirmSeconds = clampConfirmSeconds(settings.manualConfirmSeconds);
+  }
+
   const mt5 = {
     ...current,
     riskPercent:
@@ -418,7 +441,8 @@ async function updateSettings(userId, settings = {}) {
     symbolSuffix:
       settings.symbolSuffix != null ? String(settings.symbolSuffix) : current.symbolSuffix || '',
     enabled: settings.enabled != null ? Boolean(settings.enabled) : current.enabled !== false,
-    executionMode
+    executionMode,
+    manualConfirmSeconds
   };
 
   await persistUserMt5(userId, mt5);
@@ -613,14 +637,28 @@ async function createExecution(user, signalDoc, options = {}) {
     entry: Number(signal.entry),
     stopLoss,
     takeProfit1: Number(signal.take_profit_1),
-    takeProfit2: Number(signal.take_profit_2),
-    takeProfit3: Number(signal.take_profit_3),
+    takeProfit2: Number(signal.take_profit_2) || null,
+    takeProfit3: Number(signal.take_profit_3) || null,
     lotSize: Number(lotSize.toFixed(2)),
     riskPercent: Number(mt5.riskPercent || 1),
     accountBalance: Number(mt5.accountBalance || 0) || null,
     ...management,
     status: 'pending',
-    source
+    source,
+    managementState: {
+      phase: 'queued',
+      tp1Hit: false,
+      tp2Hit: false,
+      tp3Hit: false,
+      breakEvenApplied: false,
+      trailingActive: false,
+      remainingVolume: Number(lotSize.toFixed(2)),
+      closedVolume: 0,
+      partialClosePercent: 0,
+      lastEvent: null,
+      lastEventAt: null,
+      events: []
+    }
   };
 
   let execution;
@@ -645,6 +683,93 @@ async function queueExecutionForUser(userId, signalId, options = {}) {
   return createExecution(user, signal, options);
 }
 
+/**
+ * Stuck sent-without-ticket → pending again so another (or same) device can retry.
+ * Heartbeat-aware: if claimer device heartbeat is alive, wait (healthy slow EA).
+ * Does not touch fills or ticketed claims (first-claimer / duplicate safety preserved).
+ */
+async function reclaimStaleSentClaims(userId) {
+  const user = await findUserById(userId);
+  const devices = activeDevices(user?.mt5 || defaultMt5Config());
+  const nowMs = Date.now();
+
+  if (isDbConnected()) {
+    const candidates = await TradeExecution.find({
+      userId,
+      status: 'sent',
+      $or: [{ mt5Ticket: null }, { mt5Ticket: '' }, { mt5Ticket: { $exists: false } }]
+    }).lean();
+
+    const ids = [];
+    for (const trade of candidates) {
+      if (
+        shouldReclaimSentClaim({
+          status: trade.status,
+          mt5Ticket: trade.mt5Ticket,
+          claimedAt: trade.claimedAt,
+          createdAt: trade.createdAt,
+          claimedByDeviceId: trade.claimedByDeviceId,
+          devices,
+          nowMs,
+          reclaimMs: SENT_RECLAIM_MS,
+          heartbeatOfflineMs: HEARTBEAT_OFFLINE_MS
+        })
+      ) {
+        ids.push(trade._id);
+      }
+    }
+
+    if (ids.length > 0) {
+      await TradeExecution.updateMany(
+        { _id: { $in: ids }, status: 'sent' },
+        {
+          $set: {
+            status: 'pending',
+            claimedAt: null,
+            claimedByDeviceId: null,
+            'managementState.phase': 'queued',
+            'managementState.lastEvent': 'reclaimed'
+          }
+        }
+      );
+    }
+    return { reclaimed: ids.length };
+  }
+
+  let reclaimed = 0;
+  for (const [id, trade] of devExecutions.entries()) {
+    if (trade.userId !== userId) continue;
+    if (
+      !shouldReclaimSentClaim({
+        status: trade.status,
+        mt5Ticket: trade.mt5Ticket,
+        claimedAt: trade.claimedAt,
+        createdAt: trade.createdAt,
+        claimedByDeviceId: trade.claimedByDeviceId,
+        devices,
+        nowMs,
+        reclaimMs: SENT_RECLAIM_MS,
+        heartbeatOfflineMs: HEARTBEAT_OFFLINE_MS
+      })
+    ) {
+      continue;
+    }
+    reclaimed += 1;
+    devExecutions.set(id, {
+      ...trade,
+      status: 'pending',
+      claimedAt: null,
+      claimedByDeviceId: null,
+      managementState: {
+        ...(trade.managementState || {}),
+        phase: 'queued',
+        lastEvent: 'reclaimed'
+      }
+    });
+  }
+  return { reclaimed };
+}
+
 async function getPendingExecutions(token) {
   const resolved = await resolveMt5Auth(token);
   if (!resolved.user) return { ok: false, reason: resolved.reason || 'invalid_token' };
@@ -652,6 +777,9 @@ async function getPendingExecutions(token) {
 
   const user = resolved.user;
   const userId = user._id?.toString() || user.id;
+  const claimerDeviceId = resolved.device?.deviceId ? String(resolved.device.deviceId) : null;
+
+  await reclaimStaleSentClaims(userId);
 
   if (isDbConnected()) {
     const items = await TradeExecution.find({ userId, status: 'pending' })
@@ -662,12 +790,22 @@ async function getPendingExecutions(token) {
     // Claim immediately so a slow report cannot double-fill on the next poll.
     if (items.length > 0) {
       const ids = items.map(t => t._id);
+      const claimedAt = new Date();
       await TradeExecution.updateMany(
         { _id: { $in: ids }, status: 'pending' },
-        { $set: { status: 'sent' } }
+        {
+          $set: {
+            status: 'sent',
+            claimedAt,
+            claimedByDeviceId: claimerDeviceId,
+            'managementState.phase': 'sent'
+          }
+        }
       );
       items.forEach(t => {
         t.status = 'sent';
+        t.claimedAt = claimedAt;
+        t.claimedByDeviceId = claimerDeviceId;
       });
     }
 
@@ -679,10 +817,19 @@ async function getPendingExecutions(token) {
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     .slice(0, 10);
 
+  const claimedAt = new Date();
   for (const trade of trades) {
-    const updated = { ...trade, status: 'sent' };
+    const updated = {
+      ...trade,
+      status: 'sent',
+      claimedAt,
+      claimedByDeviceId: claimerDeviceId,
+      managementState: { ...(trade.managementState || {}), phase: 'sent' }
+    };
     devExecutions.set(trade._id, updated);
     trade.status = 'sent';
+    trade.claimedAt = claimedAt;
+    trade.claimedByDeviceId = claimerDeviceId;
   }
 
   return { ok: true, userId, trades };
@@ -694,31 +841,97 @@ async function reportExecution(token, payload = {}) {
   if (resolved.reason === 'access_expired') return { ok: false, reason: 'access_expired' };
 
   const user = resolved.user;
+  const userId = user._id?.toString() || user.id;
   const executionId = String(payload.executionId || payload.id || '');
   if (!executionId) return { ok: false, reason: 'missing_execution_id' };
 
-  const status = ['filled', 'failed', 'sent'].includes(payload.status) ? payload.status : 'failed';
+  let existing = null;
+  if (isDbConnected()) {
+    existing = await TradeExecution.findOne({ _id: executionId, userId }).lean();
+  } else {
+    const row = devExecutions.get(executionId);
+    if (row && row.userId === userId) existing = row;
+  }
+  if (!existing) return { ok: false, reason: 'execution_not_found' };
+
+  const eventUuidRaw =
+    payload.eventUuid != null && String(payload.eventUuid).trim()
+      ? String(payload.eventUuid).trim()
+      : payload.eventId != null && String(payload.eventId).trim()
+        ? String(payload.eventId).trim()
+        : null;
+
+  const ackedPrev = existing.managementState?.ackedEventUuids || [];
+  if (eventUuidRaw && !shouldApplyReportEvent(ackedPrev, eventUuidRaw)) {
+    // Idempotent ack for durable EA queue retries
+    return {
+      ok: true,
+      acknowledged: true,
+      eventUuid: eventUuidRaw,
+      duplicate: true,
+      execution: existing
+    };
+  }
+
+  // Legacy shape: status filled/failed/sent without event → still works.
+  // Additive: event (tp1_hit, break_even, …) updates managementState.
+  const hasEvent = Boolean(payload.event);
+  const legacyStatus = ['filled', 'failed', 'sent', 'closed'].includes(payload.status)
+    ? payload.status
+    : hasEvent
+      ? existing.status
+      : 'failed';
+
+  const applied = applyManagementEvent(existing, {
+    ...payload,
+    eventUuid: eventUuidRaw,
+    status: legacyStatus,
+    event: payload.event || (legacyStatus === 'filled' ? 'opened' : legacyStatus)
+  });
+
+  if (eventUuidRaw) {
+    applied.managementState.ackedEventUuids = rememberAckedEventUuid(
+      applied.managementState.ackedEventUuids || ackedPrev,
+      eventUuidRaw
+    );
+  }
+
   const update = {
-    status,
-    mt5Ticket: payload.ticket ? String(payload.ticket) : undefined,
-    fillPrice: payload.fillPrice != null ? Number(payload.fillPrice) : undefined,
-    errorMessage: payload.error || payload.errorMessage || undefined,
-    executedAt: status === 'filled' || status === 'failed' ? new Date() : undefined
+    status: applied.status,
+    managementState: applied.managementState,
+    mt5Ticket: payload.ticket != null && payload.ticket !== ''
+      ? String(payload.ticket)
+      : existing.mt5Ticket,
+    fillPrice:
+      payload.fillPrice != null
+        ? Number(payload.fillPrice)
+        : payload.price != null && (applied.event === 'opened' || legacyStatus === 'filled')
+          ? Number(payload.price)
+          : existing.fillPrice,
+    errorMessage: payload.error || payload.errorMessage || existing.errorMessage,
+    executedAt:
+      applied.status === 'filled' || applied.status === 'failed'
+        ? existing.executedAt || new Date()
+        : existing.executedAt,
+    closedAt:
+      applied.status === 'closed' ? existing.closedAt || new Date() : existing.closedAt
   };
+
+  // Strip undefined so we don't wipe fields in mongo $set via spread elsewhere
+  Object.keys(update).forEach(k => {
+    if (update[k] === undefined) delete update[k];
+  });
 
   let execution;
   if (isDbConnected()) {
     execution = await TradeExecution.findOneAndUpdate(
-      { _id: executionId, userId: user._id?.toString() || user.id },
-      update,
+      { _id: executionId, userId },
+      { $set: update },
       { new: true }
     );
   } else {
-    const existing = devExecutions.get(executionId);
-    if (existing && existing.userId === (user._id?.toString() || user.id)) {
-      execution = { ...existing, ...update };
-      devExecutions.set(executionId, execution);
-    }
+    execution = { ...existing, ...update };
+    devExecutions.set(executionId, execution);
   }
 
   if (!execution) return { ok: false, reason: 'execution_not_found' };
@@ -727,7 +940,13 @@ async function reportExecution(token, payload = {}) {
     await syncAccountFromEa(token, payload);
   }
 
-  return { ok: true, execution };
+  return {
+    ok: true,
+    acknowledged: true,
+    eventUuid: eventUuidRaw || applied.eventUuid || null,
+    duplicate: false,
+    execution
+  };
 }
 
 async function getPublicStatus(user) {
@@ -764,6 +983,13 @@ async function getPublicStatus(user) {
     linked: isMt5Linked(mt5),
     enabled: mt5.enabled !== false,
     executionMode: resolveExecutionMode(user),
+    /** Human-readable mode for dashboard (only two modes). */
+    executionModeLabel:
+      resolveExecutionMode(user) === 'auto'
+        ? 'Automatic (Premium)'
+        : 'Manual Confirmation (Pro)',
+    manualConfirmSeconds: resolveConfirmSeconds(mt5),
+    manualConfirmWindowLabel: formatConfirmWindowLabel(resolveConfirmSeconds(mt5)),
     accountBalance: mt5.accountBalance,
     accountCurrency: mt5.accountCurrency || 'USD',
     riskPercent: clampRiskPercent(mt5.riskPercent ?? 1),
@@ -780,14 +1006,35 @@ async function getPublicStatus(user) {
 
 function formatExecutionSummary(execution) {
   if (!execution) return '';
-  return [
+  const phase = formatManagementLabel(execution.managementState);
+  const lines = [
     `Symbol: ${execution.symbol}`,
     `Direction: ${String(execution.direction).toUpperCase()}`,
     `Entry: ${formatTvPrice(execution.entry)}`,
     `SL: ${formatTvPrice(execution.stopLoss)}`,
     `TP1: ${formatTvPrice(execution.takeProfit1)}`,
     `Lot: ${Number(execution.lotSize).toFixed(2)}`
-  ].join('\n');
+  ];
+  if (phase) lines.push(`State: ${phase}`);
+  if (execution.managementState?.remainingVolume != null) {
+    lines.push(`Remaining: ${Number(execution.managementState.remainingVolume).toFixed(2)}`);
+  }
+  return lines.join('\n');
+}
+
+function _clearDevExecutions() {
+  devExecutions.clear();
+}
+
+function _setDevExecution(execution) {
+  const id = String(execution._id || execution.id);
+  const row = { ...execution, _id: id, id };
+  devExecutions.set(id, row);
+  return row;
+}
+
+function _getDevExecution(id) {
+  return devExecutions.get(String(id)) || null;
 }
 
 module.exports = {
@@ -810,8 +1057,13 @@ module.exports = {
   formatExecutionSummary,
   computeLotSize,
   buildTradeManagementParams,
+  reclaimStaleSentClaims,
   findUserByMt5Token,
   HEARTBEAT_OFFLINE_MS,
   ACCESS_TOKEN_TTL_MS,
-  REFRESH_TOKEN_TTL_MS
+  REFRESH_TOKEN_TTL_MS,
+  SENT_RECLAIM_MS,
+  _clearDevExecutions,
+  _setDevExecution,
+  _getDevExecution
 };

@@ -306,7 +306,13 @@ function createMt5Router() {
               : 400;
         return res.status(status).json({ message: 'Unable to report execution', reason: result.reason });
       }
-      res.json({ ok: true, execution: result.execution });
+      res.json({
+        ok: true,
+        acknowledged: result.acknowledged !== false,
+        eventUuid: result.eventUuid || null,
+        duplicate: Boolean(result.duplicate),
+        execution: result.execution
+      });
     } catch (error) {
       console.error('MT5 report error:', error);
       res.status(500).json({ message: 'Unable to report execution', error: error.message });

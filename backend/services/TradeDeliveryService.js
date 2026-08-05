@@ -10,9 +10,96 @@ const { sendTradeAlertEmail } = require('../utils/mailer');
 const TelegramService = require('./TelegramService');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
 const { logPipeline, extractPipelineMeta } = require('../utils/pipelineLog');
+const {
+  resolveConfirmSeconds,
+  computeConfirmExpiresAt,
+  isConfirmExpired,
+  formatConfirmWindowLabel
+} = require('../utils/mt5ManualConfirm');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
+}
+
+async function loadSignalById(signalId) {
+  if (!signalId) return null;
+  if (isDbConnected()) {
+    try {
+      return Signal.findById(signalId);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Mark a Pro Manual confirmation as Expired — never queues MT5.
+ */
+async function markManualConfirmExpired(signalDoc, reason = 'mt5_confirm_expired') {
+  if (!signalDoc) return null;
+  const id = signalDoc._id || signalDoc.id;
+  const patch = {
+    executionStatus: 'expired',
+    mt5ConfirmStatus: 'expired',
+    closedReason: reason,
+    tradeStatus: 'expired',
+    outcome: 'expired',
+    closedAt: new Date()
+  };
+
+  if (isDbConnected() && id && !String(id).startsWith('mem_')) {
+    return Signal.findByIdAndUpdate(id, patch, { new: true });
+  }
+
+  Object.assign(signalDoc, patch);
+  return signalDoc;
+}
+
+/**
+ * Mark Ignore Trade — discard, no MT5 queue.
+ */
+async function markManualConfirmIgnored(signalDoc) {
+  if (!signalDoc) return null;
+  const id = signalDoc._id || signalDoc.id;
+  const patch = {
+    executionStatus: 'ignored',
+    mt5ConfirmStatus: 'ignored',
+    closedReason: 'mt5_confirm_ignored',
+    tradeStatus: 'cancelled',
+    outcome: 'cancelled',
+    closedAt: new Date()
+  };
+
+  if (isDbConnected() && id && !String(id).startsWith('mem_')) {
+    return Signal.findByIdAndUpdate(id, patch, { new: true });
+  }
+
+  Object.assign(signalDoc, patch);
+  return signalDoc;
+}
+
+/**
+ * Sweeper: pending Pro confirmations past mt5ConfirmExpiresAt → Expired (no queue).
+ */
+async function expirePendingManualConfirmations({ limit = 50 } = {}) {
+  if (!isDbConnected()) return { expired: 0 };
+  const now = new Date();
+  const due = await Signal.find({
+    mt5ConfirmStatus: 'pending',
+    mt5Sent: { $ne: true },
+    mt5ConfirmExpiresAt: { $lte: now },
+    executionStatus: { $in: ['pending', 'skipped'] }
+  })
+    .limit(limit)
+    .lean();
+
+  let expired = 0;
+  for (const row of due) {
+    await markManualConfirmExpired(row);
+    expired += 1;
+  }
+  return { expired };
 }
 
 /**
@@ -211,11 +298,24 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
 
   const executionMode = subscriber ? resolveExecutionMode(subscriber) : 'manual';
   const isEntry = isEntryAlert(signal.alertType || 'signal');
+  const mt5Linked =
+    Boolean(subscriber) && Mt5TradeCopierService.isMt5Linked(subscriber.mt5 || {});
+  // Pro Manual: Telegram Execute/Ignore (time-limited). Premium Auto: never confirm buttons.
   const includeExecuteButton =
     Boolean(subscriber) &&
     isEntry &&
     executionMode === 'manual' &&
-    userHasTierFeature(subscriber, 'mt5Execution');
+    userHasTierFeature(subscriber, 'mt5Execution') &&
+    mt5Linked;
+
+  const confirmSeconds = subscriber ? resolveConfirmSeconds(subscriber) : 180;
+  let mt5ConfirmStatus = signal.mt5ConfirmStatus || 'none';
+  let mt5ConfirmExpiresAt = signal.mt5ConfirmExpiresAt || null;
+
+  if (includeExecuteButton) {
+    mt5ConfirmStatus = 'pending';
+    mt5ConfirmExpiresAt = computeConfirmExpiresAt(new Date(), confirmSeconds);
+  }
 
   if (subscriber) {
     const emailOk = await deliverEmail(subscriber, signal);
@@ -231,22 +331,29 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
           : `skipped_or_failed; sub=${subLabel}`
     });
 
-    const tgOk = await deliverTelegram(subscriber, signal, { includeExecuteButton });
+    const tgOk = await deliverTelegram(subscriber, signal, {
+      includeExecuteButton,
+      confirmExpiresAt: mt5ConfirmExpiresAt,
+      confirmSeconds
+    });
     if (tgOk) telegramSent = true;
     logPipeline('DeliveryTelegram', tgOk || emailSelfTest ? 'PASS' : 'FAIL', {
       ...meta,
       reason: tgOk
-        ? `sub=${subLabel}`
+        ? `sub=${subLabel}; mode=${executionMode}`
         : emailSelfTest
           ? `self_test_skip; sub=${subLabel}`
           : `skipped_or_failed; sub=${subLabel}`
     });
 
+    // Premium Automatic only — Pro Manual never auto-queues (confirm or expire).
     const mt5Result = await deliverMt5Auto(subscriber, signal);
     mt5Reason = mt5Result?.reason || (mt5Result?.ok ? 'queued' : 'skipped');
     if (mt5Result?.ok) {
       mt5Sent = true;
       executionStatus = 'sent';
+      mt5ConfirmStatus = 'none';
+      mt5ConfirmExpiresAt = null;
     } else if (
       mt5Result?.reason === 'mt5_not_linked' ||
       mt5Result?.reason === 'mt5_disabled' ||
@@ -260,7 +367,7 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     const mt5Ok = Boolean(mt5Result?.ok) || mt5Reason === 'self_test_skip';
     logPipeline('DeliveryMT5', mt5Ok ? 'PASS' : 'FAIL', {
       ...meta,
-      reason: `${mt5Reason}; sub=${subLabel}`
+      reason: `${mt5Reason}; mode=${executionMode}; sub=${subLabel}`
     });
   }
 
@@ -270,6 +377,8 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     mt5Sent,
     emailSent,
     executionStatus,
+    mt5ConfirmStatus,
+    mt5ConfirmExpiresAt,
     deliveryStatus: 'delivered'
   };
 
@@ -278,6 +387,8 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     mt5Sent,
     emailSent,
     executionStatus,
+    mt5ConfirmStatus,
+    mt5ConfirmExpiresAt,
     deliveryStatus: 'delivered'
   });
 
@@ -290,10 +401,101 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
 }
 
 /**
- * Manual Execute path (Telegram callback / future in-app). Always queues when allowed.
+ * Manual Execute path (Telegram callback / future in-app).
+ * Time-limited: expired confirmations never queue. Identical MT5 engine after queue.
  */
 async function queueManualExecution(userId, signalId) {
-  return Mt5TradeCopierService.queueExecutionForUser(userId, signalId, { source: 'manual' });
+  const signal = await loadSignalById(signalId);
+  if (!signal) {
+    return { ok: false, reason: 'signal_not_found' };
+  }
+
+  const plain = signal.toObject ? signal.toObject() : signal;
+
+  if (plain.mt5Sent || ['sent', 'executed'].includes(plain.executionStatus)) {
+    return { ok: false, reason: 'already_queued' };
+  }
+
+  if (plain.userId && String(plain.userId) !== String(userId)) {
+    return { ok: false, reason: 'forbidden' };
+  }
+
+  if (plain.mt5ConfirmStatus === 'ignored' || plain.executionStatus === 'ignored') {
+    return { ok: false, reason: 'confirm_ignored' };
+  }
+
+  if (
+    plain.mt5ConfirmStatus === 'expired' ||
+    plain.executionStatus === 'expired' ||
+    isConfirmExpired(plain.mt5ConfirmExpiresAt)
+  ) {
+    if (plain.mt5ConfirmStatus !== 'expired') {
+      await markManualConfirmExpired(plain);
+    }
+    return { ok: false, reason: 'confirm_expired' };
+  }
+
+  const result = await Mt5TradeCopierService.queueExecutionForUser(userId, signalId, {
+    source: 'manual'
+  });
+
+  if (result.ok && isDbConnected()) {
+    await Signal.findByIdAndUpdate(signalId, {
+      mt5ConfirmStatus: 'executed',
+      mt5Sent: true,
+      executionStatus: 'sent'
+    }).catch(() => {});
+  }
+
+  return result;
+}
+
+/**
+ * Ignore Trade — discard confirmation; never queues.
+ */
+async function ignoreManualExecution(userId, signalId) {
+  const signal = await loadSignalById(signalId);
+  if (!signal) {
+    return { ok: false, reason: 'signal_not_found' };
+  }
+  const plain = signal.toObject ? signal.toObject() : signal;
+
+  if (plain.userId && String(plain.userId) !== String(userId)) {
+    return { ok: false, reason: 'forbidden' };
+  }
+
+  if (plain.mt5Sent || plain.mt5ConfirmStatus === 'executed') {
+    return { ok: false, reason: 'already_queued' };
+  }
+
+  if (plain.mt5ConfirmStatus === 'expired' || isConfirmExpired(plain.mt5ConfirmExpiresAt)) {
+    await markManualConfirmExpired(plain);
+    return { ok: false, reason: 'confirm_expired' };
+  }
+
+  await markManualConfirmIgnored(plain);
+  return { ok: true, ignored: true };
+}
+
+let confirmExpiryTimer = null;
+
+function startManualConfirmExpiryJob() {
+  if (confirmExpiryTimer) return;
+  const tick = () => {
+    expirePendingManualConfirmations().catch(err =>
+      console.warn('[TradeDelivery] confirm expiry sweep failed:', err.message)
+    );
+  };
+  tick();
+  confirmExpiryTimer = setInterval(tick, 30 * 1000);
+  if (typeof confirmExpiryTimer.unref === 'function') confirmExpiryTimer.unref();
+}
+
+function stopManualConfirmExpiryJob() {
+  if (confirmExpiryTimer) {
+    clearInterval(confirmExpiryTimer);
+    confirmExpiryTimer = null;
+  }
 }
 
 module.exports = {
@@ -305,5 +507,13 @@ module.exports = {
   deliverEmail,
   deliverTelegram,
   deliverMt5Auto,
-  queueManualExecution
+  queueManualExecution,
+  ignoreManualExecution,
+  markManualConfirmExpired,
+  markManualConfirmIgnored,
+  expirePendingManualConfirmations,
+  startManualConfirmExpiryJob,
+  stopManualConfirmExpiryJob,
+  resolveConfirmSeconds,
+  formatConfirmWindowLabel
 };

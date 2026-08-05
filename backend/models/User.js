@@ -31,10 +31,12 @@ const UserConfigSchema = new mongoose.Schema({
     symbolSuffix: { type: String, default: '' },
     /**
      * Auto: queue MT5 on entry signal (Premium).
-     * Manual: notify + Execute button only (Pro default).
-     * Undefined = resolve from tier (Premium→auto, Pro→manual).
+     * Manual: Telegram Execute/Ignore with time-limited confirm (Pro default).
+     * Only these two modes — Undefined = resolve from tier (Premium→auto, Pro→manual).
      */
     executionMode: { type: String, enum: ['auto', 'manual'], required: false },
+    /** Pro Manual confirm window in seconds (clamped 120–300). Null → env/default. */
+    manualConfirmSeconds: { type: Number, default: null },
     lastSyncAt: { type: Date, default: null },
     linkedAt: { type: Date, default: null },
     terminalId: { type: String, default: null },

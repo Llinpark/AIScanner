@@ -1,11 +1,83 @@
-# MT5 trade automation (trail + break-even)
+# MT5 trade automation (EA full trade manager)
 
-Requires **KachingTradeCopier.mq5 v1.14+** compiled and attached in MT5.
+Requires **KachingTradeCopier.mq5 v1.22+** compiled and attached in MT5.
 
+> **v1.22:** Idempotent broker ops — broker is source of truth. Before OrderSend/Modify: validate Expected vs live volume/SL/history; if already done → sync local + report if needed (no resend). Reconciler on OnInit / reconnect / token refresh / every **60s**. Structured TX `sync` vs `execute`. Poll still **1s**.
+> **v1.21:** Production hardening — transactional TP/BE/trail flags (broker confirm first), partial/BE retry backoff (2→5→10→20→60s), durable event queue + UUID ack, heartbeat-aware reclaim, recovery flag repair, structured TX logs. Poll still **1s**.
+> **v1.20:** EA is the complete trade manager after ENTRY (local TP1/2/3, partials, BE, trailing, recovery, broker filling detect, auto symbol map, management reporting). Backend sends **entry signals only**.
 > **v1.14:** PairCode is the **only** MT5 auth. LinkToken / manual BackendURL inputs removed.
 > **v1.13:** 8-char Pair Codes, multi-device access/refresh tokens, heartbeat (~30s), dashboard device revoke.
 > **v1.11:** default `PollSeconds` is **1** (was 3).
 > Auth uses the `X-MT5-Token` / `Authorization: Bearer` header only — query-string `?token=` is rejected by the API.
+
+---
+
+## Subscription execution modes (only two)
+
+| Plan | Execution Mode | How trade reaches MT5 queue |
+|------|----------------|------------------------------|
+| **Pro** | **Manual Confirmation** | TradingView → backend validates → Telegram **Execute Trade** / **Ignore Trade** → Execute queues MT5 |
+| **Premium** | **Automatic** | TradingView → backend validates → **immediate** MT5 queue |
+
+**Identical after queue:** one EA trade-management engine (SL, TP1/TP2/TP3, BE, trail, partials, recovery, reporting). No duplicated MT5 logic per plan.
+
+### Pro — Manual Confirmation (time-limited)
+
+1. Entry signal validated and delivered (in-app / email / Telegram).
+2. Telegram shows **Execute Trade** and **Ignore Trade**.
+3. Confirmation window: **2–5 minutes** (default **3 min**).
+   - Env: `MT5_MANUAL_CONFIRM_SECONDS` (clamped 120–300)
+   - Optional user override: `mt5.manualConfirmSeconds`
+4. **Execute** → `TradeExecution` pending → EA poll → fill → full EA management (no further Telegram).
+5. **Ignore** → discard; `executionStatus=ignored`; **not queued**.
+6. **No response before expiry** → sweeper / on-tap marks **Expired** (`executionStatus=expired`, `mt5ConfirmStatus=expired`); **not queued**.
+
+### Premium — Automatic
+
+1. Entry signal validated → `deliverMt5Auto` queues immediately.
+2. Telegram (if linked) is **informational only** — never required, never shows Execute/Ignore for auto mode.
+3. EA poll → fill → **same** full management as Pro.
+
+Dashboard shows:
+
+- **Manual Confirmation (Pro)** + confirm window explanation
+- **Automatic (Premium)** + “Telegram informational only”
+
+---
+
+## Architecture (post-queue)
+
+```
+TradingView ENTRY
+       │
+       ▼
+  Backend validate
+       │
+       ├─ Premium Automatic ──────────────► MT5 queue (TradeExecution pending)
+       │
+       └─ Pro Manual Confirm
+              │
+              ├─ Execute (within TTL) ───► MT5 queue
+              ├─ Ignore ────────────────► discarded
+              └─ Timeout ───────────────► Expired (no queue)
+                       │
+                       ▼
+              EA poll (~1s) / claim (sent)
+                       │
+                       ▼
+              OrderSend (ENTRY + SL; TP managed locally)
+                       │
+                       ▼
+         EA trade manager (identical for Pro & Premium)
+           • Validate Expected vs Broker → sync | execute
+           • TP1 / TP2 / TP3 hits + partials (retry on reject; re-validate first)
+           • Break-even / trailing (flags after broker confirm or validate)
+           • Reconciler: OnInit / reconnect / token / 60s
+           • Persist managed + durable event queue (Common Files)
+           • Report → bridge/report (eventUuid + ack; remove only on 200+ack)
+```
+
+---
 
 ## Pairing (sole auth method)
 
@@ -40,32 +112,185 @@ Requires **KachingTradeCopier.mq5 v1.14+** compiled and attached in MT5.
 
 Legacy `POST /api/mt5/link-token` has been **removed**.
 
-## Bridge payload fields (set by backend)
+---
+
+## Bridge payload (ENTRY only)
+
+Backend queues: Signal ID, Symbol, Direction, Entry, SL, TP1, TP2, TP3, Risk, lot, magic (EA input), plus legacy trail/BE hint flags for older EAs.
 
 | Field | Meaning |
 |-------|---------|
-| `trailingStop` | Pro+: enable trail after fill |
-| `trailDistancePips` | Distance from price to SL (default = initial SL distance in pips) |
-| `trailStepPips` | Min improvement before SL moves again (default = 20% of trail distance) |
-| `breakEven` | Pro+: enable break-even |
-| `breakEvenTriggerR` | Move SL when price is N× initial R (default `1`) |
-| `breakEvenOffsetPips` | Lock SL at entry ± this many pips (default `2`, covers spread) |
+| `signalId` | Stable signal id (duplicate protection) |
+| `mt5Symbol` / `symbol` | Mapped symbol (EA also auto-maps broker variants) |
+| `direction` | `buy` / `sell` |
+| `entry`, `stopLoss`, `takeProfit1..3` | Levels — EA stores TPs locally |
+| `lotSize`, `riskPercent` | Sizing from dashboard/tier |
+| `trailingStop`, `breakEven`, … | Legacy Pro+ hints (v1.20 EA prefers its own inputs) |
 
-## Runtime
+---
 
-1. EA polls `/api/mt5/bridge/pending`, places the deal with entry SL/TP1.
-2. If trail and/or BE flags are true, the position is registered for management.
-3. On every tick (and timer), the EA:
-   - **Break-even**: when favorable move ≥ `triggerR × |entry−SL|`, sets SL to entry ± offset.
-   - **Trailing**: keeps SL `trailDistance` behind price; only tightens when gain ≥ `trailStep`.
+## EA trade management (v1.22)
 
-## Symbol mapping
+### Idempotent validation (broker = source of truth)
 
-Backend `toMt5Symbol()` maps known catalog names (e.g. `XAU/USD` → `XAUUSD`) and **pass-through** any other TradingView symbol (stocks, indices, crypto) after stripping slashes. Append your broker suffix in the dashboard (`symbolSuffix`, e.g. `.m`, `.i`, `m`).
+Before every Partial / BE / Trail broker call:
 
-If the EA logs `Symbol not found in Market Watch`, enable that exact name in MT5 Market Watch or adjust the suffix — the queue is not refused for “unknown forex pair”.
+1. **Validate** Expected vs Broker (live volume, SL, deal history when available)  
+2. **Already complete?** → **sync** local flags, persist (on change), report if needed — **no** OrderSend/Modify  
+3. **Else** → **execute** broker op → flags → persist → report → chart  
+
+Safe retries always re-validate first (reject race / restart / duplicate path).
+
+### Transaction order (execute path)
+
+For every broker op that still needs a send:
+
+1. **Attempt** broker call  
+2. **Broker success** (`TRADE_RETCODE_DONE` / partial / placed)  
+3. **Flags** (TP1/2/3, BE, trail)  
+4. **Persist** managed file (only on state change)  
+5. **Report** (durable queue → POST)  
+6. **Chart** panel update  
+
+Never mark TP/BE/trail complete before broker confirms (or validate proves broker already matches).
+
+### Partials + retry
+
+- `EnablePartialClose` + presets: Conservative **25/25/50**, Balanced **40/30/30** (default), Aggressive **50/30/20**, or Custom (must sum **100%**).
+- On partial reject: do **not** mark TP complete; retry while price still beyond TP with backoff **2s → 5s → 10s → 20s → 60s**.
+- Panel shows `RETRY(tp1#N)` (etc.) while retrying.
+- If partials disabled → full close at TP3 only.
+
+### Break-even
+
+Modes: Disabled · at TP1 · after X pips · after X ATR · after X% of target.  
+Offset: Entry / +1 / +2 / +5 pips.  
+`breakEvenDone` only after successful SL modify (or SL already better). Failed modify → same backoff retry.
+
+### Trailing
+
+Modes: Fixed pips · ATR · Swing H/L · Market Structure · Step.  
+Start: Immediately · After TP1 · After TP2.  
+Trail reported only after successful SL modify.
+
+### Recovery + reconciler
+
+- Managed state: Common Files `KachingAI_managed_trades.txt`
+- Event queue: Common Files `KachingAI_event_queue.dat` (persist **before** POST; keep on failure)
+- **Never file-only:** restore only when live position exists; repair from **file + live volume/SL + history OUT deals**
+- Reconciler runs: **OnInit**, heartbeat reconnect, token refresh, every **60s** (does not change poll rate)
+- Detects TP1/2/BE/trail already done on broker; clears stale pending retries; persists only on change
+
+### Duplicate protection
+
+Signal ID, Magic, Comment (`Kaching#{executionId}`), existing position/ticket — hedging + netting aware.
+
+### Broker compatibility
+
+Detects broker/server/account/type/digits/point/contract/min/max/step/spread.  
+Filling mode auto: **IOC → FOK → RETURN** (never hard-coded FOK-only). Retry alternate filling on reject.
+
+### Auto symbol mapping
+
+Enumerates symbols; maps EURUSD variants, XAUUSD/GOLD, US30/DJ30, etc. Optional `SymbolSuffixOverride` / dashboard suffix. Failure → **Unsupported Symbol** report.
+
+### Chart panel
+
+Connection color tags, broker/server/account/balance/equity/version/poll/heartbeat, managed trade progress (TP/BE/TR/RETRY).
+
+### Reporting (`POST /api/mt5/bridge/report`)
+
+Backward compatible `{ executionId, status, ticket, fillPrice, … }`.  
+Additive: `event`, `eventUuid`.  
+Response: `{ ok, acknowledged, eventUuid, duplicate, execution }`.  
+EA removes queued event only on **HTTP 200 + acknowledged=true**. Backend dedupes by `eventUuid`.  
+Events: `opened` · `tp1_hit` · `tp2_hit` · `tp3_hit` · `break_even` · `trailing` · `partial_close` · `sl_hit` · `closed`.
+
+### Claim safety (heartbeat-aware)
+
+Pending → `sent` on poll (first-claimer) with `claimedByDeviceId`.  
+Stuck `sent` **without ticket** after **120s**:
+- If claimer **heartbeat alive** → **wait** (healthy slow EA)
+- If claimer heartbeat **missing/offline** → reclaim to `pending`  
+Ticketed/filled never reclaimed.
+
+### Structured TX logs
+
+Experts log lines: `TX ts=… sig=… ticket=… broker=… op=… result=… error=… retry=… recovery=…` for OrderSend, Modify SL, Partial, Trail, BE, Report.  
+Idempotent decisions use `result=sync` (skipped — broker already matched) or `result=execute` / `ok`, with `recovery=idempotent` / `reconcile`.
+
+---
+
+## Symbol mapping (backend + EA)
+
+Backend `toMt5Symbol()` maps catalog names and aliases (GOLD→XAUUSD, DJ30→US30, …) then optional dashboard `symbolSuffix`.  
+EA `ResolveBrokerSymbol()` further matches Market Watch variants. Prefer auto-map; suffix is optional override.
+
+---
 
 ## Auto lot sizing
 
 - **Premium** (`autoLotSizing`): lot = risk% × synced MT5 balance (via SyncAccount). Queue fails until balance syncs.
 - **Pro**: fixed lot from dashboard (`fixedLotSize`, default `0.01`).
+
+---
+
+## Safety / failure modes
+
+| Failure | Behavior |
+|---------|----------|
+| MT5 / Windows restart | Reload managed + event queue; reconcile flags; resume |
+| Internet blip | Event queue kept; POST retry; tokens refresh |
+| Partial / BE reject | No flag; backoff retry while condition holds; next attempt **validates first** (sync if broker already done) |
+| Restart mid-TP | Reconcile file+live+history; no duplicate partial/BE/trail |
+| Claim without fill | Reclaim after 120s **only if** claimer heartbeat dead |
+| Confirm timeout (Pro) | Expired — no queue |
+| Unsupported symbol | Report failed; no deal |
+| Filling reject | Retry alternate mode |
+| Duplicate signal | Skip second fill |
+| Duplicate eventUuid | Acked; managementState not re-applied |
+
+---
+
+## Manual testing checklist
+
+### Pro Manual Confirmation
+
+- [ ] Entry → Telegram shows Execute Trade + Ignore Trade + TTL copy
+- [ ] Execute within window → TradeExecution pending/sent → EA fills → management reports TP/BE/trail
+- [ ] Ignore → ignored; no TradeExecution queue
+- [ ] Wait past TTL → Expired; Execute tap refused; no queue
+- [ ] After Execute, no further Telegram required for TPs
+
+### Premium Automatic
+
+- [ ] Entry → immediate queue (no Execute buttons on Telegram)
+- [ ] Telegram (if linked) informational only
+- [ ] Same EA management path as Pro after fill
+
+### Shared EA
+
+- [ ] Partials 40/30/30; BE at TP1; trail after TP1
+- [ ] Rejected partial does **not** mark TP; panel shows RETRY; succeeds on backoff
+- [ ] BE flag only after SL modify success
+- [ ] Kill network mid-report → event stays in `KachingAI_event_queue.dat`; retries after reconnect
+- [ ] Restart MT5 mid-trade → managed + queue restored; flags reconciled from broker (not file-only)
+- [ ] Partial already done on broker → EA syncs TP flag, **no** second OrderSend (`result=sync`)
+- [ ] BE/trail SL already better → skip modify, sync local
+- [ ] Slow OrderSend (>120s) with live heartbeat → claim **not** reclaimed
+- [ ] Dead EA (no heartbeat) + stuck claim → reclaimed for other/same device
+- [ ] Broker IOC/FOK/RETURN works
+- [ ] GOLD / US30 symbol variants resolve
+- [ ] Poll ~1s; heartbeat ~30s; reconcile ~60s; PairCode multi-device intact
+
+---
+
+## Production deployment checklist
+
+- [ ] Deploy backend with TradeExecution `managementState.ackedEventUuids`, `claimedByDeviceId`, report `{acknowledged,eventUuid}`
+- [ ] Set `MT5_MANUAL_CONFIRM_SECONDS` (optional, 120–300)
+- [ ] Redis required for PairCode in production
+- [ ] Compile & distribute **EA v1.22+**; users re-attach
+- [ ] WebRequest allowlist includes API host
+- [ ] Verify Pro confirm expiry job starts with server
+- [ ] Smoke: Pro expire path + Premium auto queue + TP reject retry + event ack + reclaim+heartbeat
