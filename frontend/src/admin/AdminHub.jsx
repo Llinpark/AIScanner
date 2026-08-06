@@ -14,14 +14,13 @@ import AdminAuditLog from './AdminAuditLog';
 export default function AdminHub({ initialTab = 'dashboard' }) {
   const { user } = useAuth();
   const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
+  const superAdminTabs = new Set(['pipeline', 'scanner', 'activations']);
   const resolvedInitial =
-    (initialTab === 'scanner' || initialTab === 'activations') && !canManageScanner
-      ? 'dashboard'
-      : initialTab;
+    superAdminTabs.has(initialTab) && !canManageScanner ? 'dashboard' : initialTab;
   const [activeTab, setActiveTab] = useState(resolvedInitial);
 
   useEffect(() => {
-    if ((activeTab === 'scanner' || activeTab === 'activations') && !canManageScanner) {
+    if (superAdminTabs.has(activeTab) && !canManageScanner) {
       setActiveTab('dashboard');
     }
   }, [activeTab, canManageScanner]);
@@ -29,7 +28,7 @@ export default function AdminHub({ initialTab = 'dashboard' }) {
   return (
     <AdminLayout activeTab={activeTab} onTabChange={setActiveTab}>
       {activeTab === 'dashboard' && <AdminDashboard />}
-      {activeTab === 'pipeline' && <AdminPipeline />}
+      {activeTab === 'pipeline' && canManageScanner && <AdminPipeline />}
       {activeTab === 'users' && <AdminUsers />}
       {activeTab === 'signals' && <AdminSignals />}
       {activeTab === 'scanner' && canManageScanner && <AdminScanner />}

@@ -2,7 +2,7 @@ import { useAuth } from '../context/AuthContext';
 
 const ALL_TABS = [
   { id: 'dashboard', label: 'Overview' },
-  { id: 'pipeline', label: 'Pipeline' },
+  { id: 'pipeline', label: 'Pipeline', superAdminOnly: true },
   { id: 'users', label: 'Users' },
   { id: 'signals', label: 'Signals' },
   { id: 'scanner', label: 'Scanner', superAdminOnly: true },

@@ -28,14 +28,18 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Promise.all([adminApi.getStats(), adminApi.getPipelineStatus().catch(() => null)])
+    const requests = [adminApi.getStats()];
+    if (canManageScanner) {
+      requests.push(adminApi.getPipelineStatus().catch(() => null));
+    }
+    Promise.all(requests)
       .then(([statsRes, pipelineRes]) => {
         setStats(statsRes.data);
         if (pipelineRes?.data) setPipeline(pipelineRes.data);
       })
       .catch(err => setError(err.response?.data?.message || 'Unable to load admin stats.'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [canManageScanner]);
 
   if (loading) {
     return <div className="loading-state">Loading admin overview…</div>;
@@ -57,35 +61,43 @@ export default function AdminDashboard() {
       <div className="admin-stat-grid">
         <StatCard label="Total users" value={stats?.users?.total ?? 0} tone="accent" />
         <StatCard label="Active subscriptions" value={stats?.users?.activeSubscriptions ?? 0} tone="success" />
-        <StatCard label="Signals today" value={delivery.signalsToday ?? stats?.signals?.today ?? 0} />
-        <StatCard label="Signals week" value={delivery.signalsWeek ?? '—'} />
-        <StatCard label="Signals month" value={delivery.signalsMonth ?? '—'} />
+        <StatCard label="Signals today" value={canManageScanner ? (delivery.signalsToday ?? stats?.signals?.today ?? 0) : (stats?.signals?.today ?? 0)} />
+        {canManageScanner && (
+          <>
+            <StatCard label="Signals week" value={delivery.signalsWeek ?? '—'} />
+            <StatCard label="Signals month" value={delivery.signalsMonth ?? '—'} />
+          </>
+        )}
         <StatCard
           label="Open entry signals"
           value={stats?.signals?.openEntries ?? 0}
           tone="warning"
         />
-        <StatCard label="Delivered" value={delivery.delivered ?? 0} tone="success" />
-        <StatCard label="Failed deliveries" value={delivery.failed ?? 0} tone="danger" />
-        <StatCard
-          label="Telegram success"
-          value={delivery.telegramSuccessPct != null ? `${delivery.telegramSuccessPct}%` : '—'}
-        />
-        <StatCard
-          label="MT5 success"
-          value={delivery.mt5SuccessPct != null ? `${delivery.mt5SuccessPct}%` : '—'}
-        />
-        <StatCard
-          label="Avg pipeline latency"
-          value={formatMs(delivery.avgPipelineLatencyMs ?? pipeline?.averagePipelineLatency)}
-          hint={`WH→Mongo ${formatMs(delivery.avgWebhookToMongoMs)} · Mongo→TG ${formatMs(delivery.avgMongoToTelegramMs)}`}
-        />
-        <StatCard
-          label="Waiting for first webhook"
-          value={pipeline?.waitingSubscribers ?? 0}
-          tone="warning"
-          hint={`${pipeline?.activeSubscribers ?? 0} active subscribers`}
-        />
+        {canManageScanner && (
+          <>
+            <StatCard label="Delivered" value={delivery.delivered ?? 0} tone="success" />
+            <StatCard label="Failed deliveries" value={delivery.failed ?? 0} tone="danger" />
+            <StatCard
+              label="Telegram success"
+              value={delivery.telegramSuccessPct != null ? `${delivery.telegramSuccessPct}%` : '—'}
+            />
+            <StatCard
+              label="MT5 success"
+              value={delivery.mt5SuccessPct != null ? `${delivery.mt5SuccessPct}%` : '—'}
+            />
+            <StatCard
+              label="Avg pipeline latency"
+              value={formatMs(delivery.avgPipelineLatencyMs ?? pipeline?.averagePipelineLatency)}
+              hint={`WH→Mongo ${formatMs(delivery.avgWebhookToMongoMs)} · Mongo→TG ${formatMs(delivery.avgMongoToTelegramMs)}`}
+            />
+            <StatCard
+              label="Waiting for first webhook"
+              value={pipeline?.waitingSubscribers ?? 0}
+              tone="warning"
+              hint={`${pipeline?.activeSubscribers ?? 0} active subscribers`}
+            />
+          </>
+        )}
         <StatCard label="Total signals" value={signalTotal} />
         <StatCard label="Completed payments" value={stats?.payments?.completed ?? 0} tone="success" />
         <StatCard label="Failed payments" value={stats?.payments?.failed ?? 0} tone="danger" />
@@ -98,7 +110,7 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      {(signalTotal === 0 || pipeline?.waitingSubscribers > 0) && (
+      {canManageScanner && (signalTotal === 0 || pipeline?.waitingSubscribers > 0) && (
         <div className="admin-panel">
           <div className="admin-panel-header">
             <h3>Signal source</h3>

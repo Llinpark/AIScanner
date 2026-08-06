@@ -38,7 +38,7 @@ function createAdminRouter({ io } = {}) {
 
   router.use(requireAuth, requireAdmin);
 
-  router.get('/pipeline-status', async (req, res) => {
+  router.get('/pipeline-status', requireSuperAdmin, async (req, res) => {
     try {
       const PipelineStatusService = require('../services/PipelineStatusService');
       const PipelineAlertStatusService = require('../services/PipelineAlertStatusService');
@@ -62,7 +62,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/live-pipeline', async (req, res) => {
+  router.get('/live-pipeline', requireSuperAdmin, async (req, res) => {
     try {
       const PipelineStatusService = require('../services/PipelineStatusService');
       const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 100));
@@ -74,7 +74,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/pipeline-subscribers', async (req, res) => {
+  router.get('/pipeline-subscribers', requireSuperAdmin, async (req, res) => {
     try {
       const PipelineAlertStatusService = require('../services/PipelineAlertStatusService');
       const result = await PipelineAlertStatusService.listActiveSubscriberAlertStatus();
@@ -85,7 +85,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/delivery-stats', async (req, res) => {
+  router.get('/delivery-stats', requireSuperAdmin, async (req, res) => {
     try {
       const PipelineDeliveryStatsService = require('../services/PipelineDeliveryStatsService');
       const stats = await PipelineDeliveryStatsService.computeDeliveryStatistics();
