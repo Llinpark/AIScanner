@@ -429,7 +429,7 @@ function pickDaytradingAdminPatch(patch = {}) {
     if (patch.confidence.threshold !== undefined) {
       out.confidence.threshold = Math.min(
         100,
-        Math.max(0, Number(patch.confidence.threshold) || 70)
+        Math.max(0, Number(patch.confidence.threshold) || 80)
       );
     }
     if (patch.confidence.weights && typeof patch.confidence.weights === 'object') {
@@ -813,20 +813,67 @@ async function loadPersistedStrategyConfig() {
   return getStrategyAdminConfig();
 }
 
+/** @type {{ onConnected: Function, onReconnected: Function } | null} */
+let mongoSyncHandlers = null;
+
+function reloadStrategyConfigFromMongo(reason) {
+  return loadPersistedStrategyConfig()
+    .then(() => {
+      console.log(`[StrategyRuntime] Reloaded overrides after Mongo ${reason}.`);
+    })
+    .catch(err => {
+      console.error(
+        `[StrategyRuntime] Reload after Mongo ${reason} failed (memory kept):`,
+        err.message
+      );
+    });
+}
+
+/**
+ * Register one-shot connected + ongoing reconnected handlers so a boot-time
+ * load that raced ahead of Mongo still picks up persisted Admin overrides.
+ */
+function registerStrategyConfigMongoSync() {
+  if (mongoSyncHandlers) return;
+  const onConnected = () => {
+    reloadStrategyConfigFromMongo('connected');
+  };
+  const onReconnected = () => {
+    reloadStrategyConfigFromMongo('reconnected');
+  };
+  mongoose.connection.once('connected', onConnected);
+  mongoose.connection.on('reconnected', onReconnected);
+  mongoSyncHandlers = { onConnected, onReconnected };
+}
+
 /** Test helper — reset in-memory overrides without touching Mongo. */
 function resetStrategyRuntimeConfigForTests() {
   scalpingOverrides = {};
   daytradingOverrides = {};
   profileOverrides = {};
   activeStrategy = DEFAULT_ACTIVE_STRATEGY;
+  if (mongoSyncHandlers) {
+    mongoose.connection.off('connected', mongoSyncHandlers.onConnected);
+    mongoose.connection.off('reconnected', mongoSyncHandlers.onReconnected);
+    mongoSyncHandlers = null;
+  }
 }
 
 async function initStrategyRuntimeConfig() {
+  // Always register reload hooks first so a boot race (listen before Mongo ready)
+  // still syncs Admin overrides once the connection comes up.
+  registerStrategyConfigMongoSync();
   try {
     await loadPersistedStrategyConfig();
-    console.log(
-      '[StrategyRuntime] Loaded strategy, market regime, and core scanner overrides; rebuilt registry.'
-    );
+    if (mongoose.connection.readyState === 1) {
+      console.log(
+        '[StrategyRuntime] Loaded strategy, market regime, and core scanner overrides; rebuilt registry.'
+      );
+    } else {
+      console.warn(
+        '[StrategyRuntime] Mongo not ready at boot — keeping env defaults until connected/reconnected.'
+      );
+    }
   } catch (err) {
     console.error('[StrategyRuntime] Boot init error (env defaults kept):', err.message);
     rebuildDefaultRegistry();
@@ -883,6 +930,7 @@ module.exports = {
   persistStrategyConfig,
   loadPersistedStrategyConfig,
   initStrategyRuntimeConfig,
+  registerStrategyConfigMongoSync,
   rebuildDefaultRegistry,
   resetStrategyRuntimeConfigForTests,
   getTpProfile

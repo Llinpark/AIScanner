@@ -22,7 +22,8 @@ const { SUBSCRIPTION_PERIOD_DAYS } = require('../services/SubscriptionService');
 const ReferralService = require('../services/ReferralService');
 const { getScannerConfig, applyScannerConfig } = require('../utils/scannerRuntimeConfig');
 const {
-  persistStrategyConfig
+  persistStrategyConfig,
+  loadPersistedStrategyConfig
 } = require('../utils/strategyRuntimeConfig');
 const WeightLearningService = require('../services/WeightLearningService');
 const { canManageScannerConfig } = require('../utils/adminAccess');
@@ -595,11 +596,19 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  router.get('/scanner/config', requireSuperAdmin, (req, res) => {
-    res.json({
-      config: getScannerConfig(),
-      status: MarketScannerService.getScannerStatus()
-    });
+  router.get('/scanner/config', requireSuperAdmin, async (req, res) => {
+    try {
+      // Sync memory from Mongo so Admin never serves stale boot defaults
+      // when overrides were persisted but not yet loaded after a race/restart.
+      await loadPersistedStrategyConfig();
+      res.json({
+        config: getScannerConfig(),
+        status: MarketScannerService.getScannerStatus()
+      });
+    } catch (error) {
+      console.error('Admin scanner config load error:', error);
+      res.status(500).json({ message: 'Unable to load scanner config', error: error.message });
+    }
   });
 
   router.patch('/scanner/config', requireSuperAdmin, async (req, res) => {

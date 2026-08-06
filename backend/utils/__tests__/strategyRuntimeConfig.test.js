@@ -1,5 +1,6 @@
-const { describe, it, beforeEach } = require('node:test');
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const mongoose = require('mongoose');
 const {
   applyStrategyConfig,
   getStrategyAdminConfig,
@@ -9,6 +10,8 @@ const {
   resetStrategyRuntimeConfigForTests,
   normalizeActiveStrategy,
   resolveLoadedActiveStrategy,
+  loadPersistedStrategyConfig,
+  initStrategyRuntimeConfig,
   DEFAULT_ACTIVE_STRATEGY
 } = require('../strategyRuntimeConfig');
 const {
@@ -19,6 +22,7 @@ const {
   resetScannerRuntimeConfigForTests,
   DEFAULT_AUTO_SCAN_INTERVAL_MS
 } = require('../scannerRuntimeConfig');
+const StrategyRuntimeConfig = require('../../models/StrategyRuntimeConfig');
 
 describe('strategyRuntimeConfig persistence', () => {
   beforeEach(() => {
@@ -146,6 +150,95 @@ describe('strategyRuntimeConfig persistence', () => {
     assert.equal(day.takeProfit.maxTpDistancePips, 90);
     assert.equal(scalp.takeProfit.profileId, 'scalping');
     assert.equal(day.takeProfit.profileId, 'daytrading');
+  });
+
+  it('uses 70 scalp / 80 daytrading confidence threshold pick fallbacks', () => {
+    applyStrategyConfig({
+      scalping: { confidence: { threshold: 'not-a-number' } },
+      daytrading: { confidence: { threshold: 'not-a-number' } }
+    });
+    assert.equal(getResolvedScalpingConfig().confidence.threshold, 70);
+    assert.equal(getResolvedDaytradingConfig().confidence.threshold, 80);
+  });
+
+  it('skips Mongo load when disconnected and keeps in-memory overrides', async () => {
+    assert.notEqual(mongoose.connection.readyState, 1);
+    applyStrategyConfig({
+      scalping: { confidence: { threshold: 55 }, entry: { maxWaitBars: 7 } },
+      daytrading: { confidence: { threshold: 90 }, entry: { maxWaitBars: 12 } }
+    });
+    await loadPersistedStrategyConfig();
+    assert.equal(getResolvedScalpingConfig().confidence.threshold, 55);
+    assert.equal(getResolvedScalpingConfig().entry.maxWaitBars, 7);
+    assert.equal(getResolvedDaytradingConfig().confidence.threshold, 90);
+    assert.equal(getResolvedDaytradingConfig().entry.maxWaitBars, 12);
+  });
+});
+
+describe('strategyRuntimeConfig boot Mongo sync', () => {
+  let originalFindOne;
+  let readyStateDesc;
+
+  beforeEach(() => {
+    resetStrategyRuntimeConfigForTests();
+    resetScannerRuntimeConfigForTests();
+    originalFindOne = StrategyRuntimeConfig.findOne;
+    readyStateDesc = Object.getOwnPropertyDescriptor(mongoose.connection, 'readyState');
+  });
+
+  afterEach(() => {
+    StrategyRuntimeConfig.findOne = originalFindOne;
+    if (readyStateDesc) {
+      Object.defineProperty(mongoose.connection, 'readyState', readyStateDesc);
+    } else {
+      delete mongoose.connection.readyState;
+    }
+    resetStrategyRuntimeConfigForTests();
+    resetScannerRuntimeConfigForTests();
+  });
+
+  it('registers reload-on-connect after boot skip and applies Mongo overrides', async () => {
+    assert.notEqual(mongoose.connection.readyState, 1);
+
+    await initStrategyRuntimeConfig();
+    assert.equal(getResolvedScalpingConfig().confidence.threshold, 70);
+    assert.equal(getResolvedDaytradingConfig().confidence.threshold, 80);
+    assert.ok(
+      mongoose.connection.listenerCount('connected') >= 1,
+      'expected connected listener after boot skip'
+    );
+
+    StrategyRuntimeConfig.findOne = () => ({
+      lean: async () => ({
+        key: 'strategies',
+        scalping: {
+          confidence: { threshold: 62 },
+          entry: { maxWaitBars: 8 }
+        },
+        daytrading: {
+          confidence: { threshold: 88 },
+          entry: { maxWaitBars: 11 }
+        },
+        activeStrategy: 'scalping',
+        activeStrategyExplicit: true
+      })
+    });
+
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      configurable: true,
+      enumerable: true,
+      get: () => 1
+    });
+
+    mongoose.connection.emit('connected');
+    // Allow the async reload handler to settle
+    await new Promise(resolve => setImmediate(resolve));
+    await new Promise(resolve => setImmediate(resolve));
+
+    assert.equal(getResolvedScalpingConfig().confidence.threshold, 62);
+    assert.equal(getResolvedScalpingConfig().entry.maxWaitBars, 8);
+    assert.equal(getResolvedDaytradingConfig().confidence.threshold, 88);
+    assert.equal(getResolvedDaytradingConfig().entry.maxWaitBars, 11);
   });
 });
 
