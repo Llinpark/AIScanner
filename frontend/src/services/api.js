@@ -165,5 +165,9 @@ export const adminApi = {
   getScannerConfig: () => api.get('/api/admin/scanner/config'),
   updateScannerConfig: payload => api.patch('/api/admin/scanner/config', payload),
   getReferrals: (params = {}) => api.get('/api/admin/referrals', { params }),
-  markReferralPaid: (id, payload) => api.patch(`/api/admin/referrals/${id}/pay`, payload)
+  markReferralPaid: (id, payload) => api.patch(`/api/admin/referrals/${id}/pay`, payload),
+  getPipelineStatus: () => api.get('/api/admin/pipeline-status'),
+  getLivePipeline: (params = {}) => api.get('/api/admin/live-pipeline', { params }),
+  getPipelineSubscribers: () => api.get('/api/admin/pipeline-subscribers'),
+  getDeliveryStats: () => api.get('/api/admin/delivery-stats')
 };

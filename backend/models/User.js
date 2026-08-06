@@ -146,6 +146,26 @@ const UserConfigSchema = new mongoose.Schema({
   emailVerificationExpiresAt: { type: Date, default: null },
   passwordResetToken: { type: String, default: null },
   passwordResetExpiresAt: { type: Date, default: null },
+  /**
+   * Additive observability timestamps (admin diagnostics only).
+   * Updated from webhook / pine-gen / delivery hooks — never drives trading logic.
+   */
+  pipelineStats: {
+    lastWebhookAt: { type: Date, default: null },
+    lastPublishedSignalAt: { type: Date, default: null },
+    lastMongoSaveAt: { type: Date, default: null },
+    lastTelegramAt: { type: Date, default: null },
+    lastSocketAt: { type: Date, default: null },
+    lastMT5At: { type: Date, default: null },
+    lastPineGeneratedAt: { type: Date, default: null },
+    lastPineStrategy: { type: String, default: null },
+    lastPineScriptId: { type: String, default: null },
+    lastSymbol: { type: String, default: null },
+    lastTimeframe: { type: String, default: null },
+    lastSignalUuid: { type: String, default: null },
+    webhookCount: { type: Number, default: 0 },
+    updatedAt: { type: Date, default: null }
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

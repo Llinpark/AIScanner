@@ -172,7 +172,11 @@ for (const [label, g] of [
   assert(g.script.includes('licenseOk and entryTfOk'), `${label}: missing license+entryTf fire gate`);
   assert(g.script.includes('DEBUG_MODE'), `${label}: missing DEBUG_MODE input`);
   assert(g.script.includes('pineAlertBlockReason'), `${label}: missing pineAlertBlockReason diagnostics`);
-  assert(g.script.includes('fireLong to alert()'), `${label}: missing fireLong to alert() debug log`);
+  assert(g.script.includes('[PIPELINE] ALERT FIRING'), `${label}: missing ALERT FIRING debug log`);
+  assert(g.script.includes('[PIPELINE] ALERT NOT FIRED'), `${label}: missing ALERT NOT FIRED debug log`);
+  assert(g.script.includes('[PIPELINE] DEBUG STATE'), `${label}: missing DEBUG STATE log`);
+  assert(g.script.includes('fireLong='), `${label}: missing fireLong state dump`);
+  assert(g.script.includes('entryTfOk='), `${label}: missing entryTfOk state dump`);
   assert(g.script.includes('TIMEFRAME VALIDATION'), `${label}: missing dedicated TIMEFRAME VALIDATION block`);
   assert(g.script.includes('entryChartOk'), `${label}: missing entryChartOk gate`);
   assert(g.script.includes('htfTfOk'), `${label}: missing htfTfOk gate`);

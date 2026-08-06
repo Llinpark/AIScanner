@@ -329,7 +329,7 @@ function generateForUser(user, options = {}) {
       'Alert message field: leave TradingView default {{strategy.order.alert_message}} / {{alert_message}} so the JSON from alert() is sent unchanged. Do not wrap or edit the JSON.',
       'Alert frequency: Once Per Bar Close (script already uses alert.freq_all on confirmed bars). Expiration: Open-ended / no expire — do not let the alert expire or webhooks stop.',
       'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',
-      'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
+      'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs ([PIPELINE] DEBUG STATE / ALERT NOT FIRED / ALERT FIRING) for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
       'After regenerating Pine, remove the old indicator from the chart, paste the new script, and recreate the ONE alert so drawings, license binding, and webhook URL take effect.',
       'Switch strategies with ?strategy=daytrading | scalping.',

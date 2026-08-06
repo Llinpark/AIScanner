@@ -17,7 +17,7 @@ LICENSED_TV_USERNAME = "{{TV_USERNAME}}"
 CONFIRM_TV_USERNAME = input.string("{{TV_USERNAME}}", "Confirm your TradingView username", group="KachingFx License", tooltip="Prefilled with the username this script was licensed for. Leave as-is to unlock, or override if needed. Signals and alerts stay locked until it matches.")
 SHOW_TRADE_LINES = true
 SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
-DEBUG_MODE = input.bool(false, "DEBUG_MODE — show block reasons", group="KachingFx", tooltip="When ON, draws labels explaining why alert() did not fire (license, wrong entry TF, HTF, confidence, trade active, retrace, FVG). Turn OFF for live trading.")
+DEBUG_MODE = input.bool(false, "DEBUG_MODE — show block reasons", group="KachingFx", tooltip="When ON: on-chart labels + Pine Logs show skip reasons and full gate state (chart/entry/HTF TF, confidence, licenseOk, entryTfOk, htfTfOk, tradeActive, confirmed, fireLong/Short). Does NOT change when alert() fires. Turn OFF for live trading.")
 levelExtendBars = input.int(22, "Initial trade level length (bars)", minval=8, maxval=60, group="KachingFx Display", tooltip="Starting length of Entry/SL/TP lines. While a trade is active, lines keep extending with each new candle until TP3/SL/expiry/cancel.")
 enableTradeExpiry = input.bool(true, "Enable trade candle expiry", group="KachingFx Display", tooltip="When ON, active trades auto-close after expiryBars if TP3/SL not hit. When OFF, trades stay until TP3/SL/cancel only. Never clears because a later scan finds no setup.")
 expiryBars = input.int(80, "Active trade expiry (candles)", minval=5, maxval=500, group="KachingFx Display", tooltip="Close and remove the active trade after this many candles if TP3/SL not hit (only when Enable trade candle expiry is ON). Default 80 for day trading so trades are not wiped after a few moments.")
@@ -331,16 +331,24 @@ pineAlertBlockReason(bool tradeActiveNow) =>
 fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
 fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
 
-if DEBUG_MODE and barstate.islast and not fireLong and not fireShort
-    dbgReason = pineAlertBlockReason(tradeIsActive())
-    dbgText = "DEBUG block: " + dbgReason + " | conf=" + str.tostring(confScore(), "#.#") + "/" + str.tostring(confThreshold, "#.#")
-    if na(debugBlockLabel)
-        debugBlockLabel := label.new(bar_index, high, dbgText, style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
-    else
-        label.set_xy(debugBlockLabel, bar_index, high)
-        label.set_text(debugBlockLabel, dbgText)
-    log.info("[PIPELINE] AlertSkip | " + syminfo.ticker + " | " + timeframe.period + " | FAIL | " + dbgReason)
-else if not na(debugBlockLabel) and (not DEBUG_MODE or fireLong or fireShort)
+// DEBUG_MODE diagnostics only — never changes fireLong / fireShort / alert() gates.
+if DEBUG_MODE and barstate.islast
+    dbgTradeActive = tradeIsActive()
+    dbgReason = pineAlertBlockReason(dbgTradeActive)
+    dbgState = "chartTF=" + timeframe.period + " entryTF={{ARCH_ENTRY_LABEL}} htf=" + htfTf + " conf=" + str.tostring(confScore(), "#.#") + "/" + str.tostring(confThreshold, "#.#") + " licenseOk=" + str.tostring(licenseOk) + " entryTfOk=" + str.tostring(entryTfOk) + " htfTfOk=" + str.tostring(htfTfOk) + " tradeActive=" + str.tostring(dbgTradeActive) + " confirmed=" + str.tostring(barstate.isconfirmed) + " fireLong=" + str.tostring(fireLong) + " fireShort=" + str.tostring(fireShort)
+    log.info("[PIPELINE] DEBUG STATE | " + syminfo.ticker + " | " + dbgState)
+    if not fireLong and not fireShort
+        dbgText = "DEBUG: " + dbgReason + " | " + dbgState
+        if na(debugBlockLabel)
+            debugBlockLabel := label.new(bar_index, high, dbgText, style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
+        else
+            label.set_xy(debugBlockLabel, bar_index, high)
+            label.set_text(debugBlockLabel, dbgText)
+        log.info("[PIPELINE] ALERT NOT FIRED | " + syminfo.ticker + " | " + timeframe.period + " | reason=" + dbgReason + " | " + dbgState)
+    else if not na(debugBlockLabel)
+        label.delete(debugBlockLabel)
+        debugBlockLabel := na
+else if not na(debugBlockLabel) and not DEBUG_MODE
     label.delete(debugBlockLabel)
     debugBlockLabel := na
 
@@ -352,7 +360,7 @@ if fireLong
     sigId = makeSignalId()
     msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
     if DEBUG_MODE
-        log.info("[PIPELINE] Alert | " + syminfo.ticker + " | " + timeframe.period + " | " + sigId + " | PASS | fireLong to alert()")
+        log.info("[PIPELINE] ALERT FIRING | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
     alert(msg, alert.freq_all)
     // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0
@@ -411,7 +419,7 @@ if fireShort
     sigId = makeSignalId()
     msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
     if DEBUG_MODE
-        log.info("[PIPELINE] Alert | " + syminfo.ticker + " | " + timeframe.period + " | " + sigId + " | PASS | fireShort to alert()")
+        log.info("[PIPELINE] ALERT FIRING | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
     alert(msg, alert.freq_all)
     // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0

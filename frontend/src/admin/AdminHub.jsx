@@ -5,6 +5,7 @@ import AdminDashboard from './AdminDashboard';
 import AdminUsers from './AdminUsers';
 import AdminScanner from './AdminScanner';
 import AdminSignals from './AdminSignals';
+import AdminPipeline from './AdminPipeline';
 import AdminPayments from './AdminPayments';
 import AdminActivations from './AdminActivations';
 import AdminReferrals from './AdminReferrals';
@@ -28,6 +29,7 @@ export default function AdminHub({ initialTab = 'dashboard' }) {
   return (
     <AdminLayout activeTab={activeTab} onTabChange={setActiveTab}>
       {activeTab === 'dashboard' && <AdminDashboard />}
+      {activeTab === 'pipeline' && <AdminPipeline />}
       {activeTab === 'users' && <AdminUsers />}
       {activeTab === 'signals' && <AdminSignals />}
       {activeTab === 'scanner' && canManageScanner && <AdminScanner />}

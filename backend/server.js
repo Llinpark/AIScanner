@@ -177,8 +177,11 @@ async function assertTradingViewWebhook(req, res) {
         })()
       : req.body || {};
   const meta = extractPipelineMeta(probeBody);
+  // Diagnostics only — does not change auth decisions.
+  console.log(`[TV WEBHOOK AUTH START] symbol=${meta.symbol || 'n/a'} signalUuid=${meta.signalUuid || 'n/a'}`);
 
   if (!tradingViewAuthFailureTracker.check(req, res)) {
+    console.warn(`[TV WEBHOOK AUTH FAILED] reason=auth_rate_limited symbol=${meta.symbol || 'n/a'}`);
     logPipeline('Auth', 'FAIL', {
       ...meta,
       reason: 'auth_rate_limited'
@@ -192,7 +195,7 @@ async function assertTradingViewWebhook(req, res) {
     const reason = auth.reason || 'unauthorized';
     const bodyMeta = extractPipelineMeta(auth.body || probeBody);
     console.warn(
-      `[TV Webhook] Auth rejected (${reason}) symbol=${bodyMeta.symbol || 'n/a'}`
+      `[TV WEBHOOK AUTH FAILED] reason=${reason} symbol=${bodyMeta.symbol || 'n/a'}`
     );
     logPipeline('Auth', 'FAIL', { ...bodyMeta, reason });
     res.status(401).json({
@@ -201,10 +204,24 @@ async function assertTradingViewWebhook(req, res) {
     });
     return null;
   }
+  console.log(
+    `[TV WEBHOOK AUTH PASSED] mode=${auth.mode || 'ok'} symbol=${extractPipelineMeta(auth.body || probeBody).symbol || 'n/a'}`
+  );
   logPipeline('Auth', 'PASS', {
     ...extractPipelineMeta(auth.body || probeBody),
-    reason: `mode=${auth.mode || 'ok'}`
+    userId: auth.userId || null,
+    reason: `AUTH_PASSED; mode=${auth.mode || 'ok'}`
   });
+  if (auth.userId) {
+    try {
+      const PipelineSubscriberStatsService = require('./services/PipelineSubscriberStatsService');
+      void PipelineSubscriberStatsService.recordWebhook(auth.userId, {
+        ...extractPipelineMeta(auth.body || probeBody)
+      });
+    } catch {
+      // diagnostics only
+    }
+  }
   req.webhookAuth = auth;
   return auth;
 }
@@ -362,14 +379,16 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
   const earlyMeta = extractPipelineMeta(earlyBody);
   const size = payloadSize(req);
   const ip = clientIp(req);
+  const hasLicenseToken = Boolean(earlyBody.licenseToken || earlyBody.license_token);
   console.log(
     `[TV WEBHOOK RECEIVED] timestamp=${new Date().toISOString()} ip=${ip} ` +
       `symbol=${earlyMeta.symbol || 'n/a'} timeframe=${earlyMeta.timeframe || 'n/a'} ` +
-      `signalUuid=${earlyMeta.signalUuid || 'n/a'} payloadBytes=${size}`
+      `signalUuid=${earlyMeta.signalUuid || 'n/a'} licenseToken=${hasLicenseToken ? 'present' : 'absent'} ` +
+      `payloadBytes=${size}`
   );
   logPipeline('WebhookReceived', 'PASS', {
     ...earlyMeta,
-    reason: `ip=${ip}; bytes=${size}`
+    reason: `ip=${ip}; bytes=${size}; licenseToken=${hasLicenseToken ? 'present' : 'absent'}`
   });
 
   try {
@@ -447,6 +466,10 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       ...earlyMeta,
       reason: rejectedFields || error.message || 'webhook_processing_failed'
     });
+    console.error(
+      `[TV WEBHOOK VALIDATION FAILED] reason=${rejectedFields || error.message || 'webhook_processing_failed'} ` +
+        `symbol=${earlyMeta.symbol || 'n/a'}`
+    );
     console.error('TradingView webhook error:', error);
     return res.status(500).json({
       message: 'TradingView webhook processing failed',
@@ -1640,6 +1663,20 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
       publicBackendUrl: PUBLIC_BACKEND_URL,
       strategy: req.query.strategy || req.query.strategyId
     });
+
+    // Diagnostics only — record pine gen timestamp for admin alert-engine reminders.
+    try {
+      const userId = req.user?._id?.toString?.() || req.user?.id;
+      if (userId) {
+        const PipelineSubscriberStatsService = require('./services/PipelineSubscriberStatsService');
+        void PipelineSubscriberStatsService.recordPineGenerated(userId, {
+          strategy: generated.strategy || req.query.strategy || null,
+          scriptId: generated.scriptId || null
+        });
+      }
+    } catch {
+      // never break pine download
+    }
 
     res.json({
       script: generated.script,

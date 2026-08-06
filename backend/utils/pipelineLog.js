@@ -35,6 +35,15 @@ function logPipeline(stage, status, meta = {}) {
   } else {
     console.log(line);
   }
+
+  // Mirror into admin diagnostics store (never throw).
+  try {
+    const PipelineStatusService = require('../services/PipelineStatusService');
+    PipelineStatusService.record(stage, status, meta);
+  } catch {
+    // diagnostics must not break webhook path
+  }
+
   return line;
 }
 

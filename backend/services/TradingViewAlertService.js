@@ -184,6 +184,10 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
 async function saveSignal(signalData, inMemorySignals) {
   const meta = extractPipelineMeta(signalData);
+  // Diagnostics only — START does not mark MongoSave PASS in PipelineStatus.
+  console.log(
+    `[TV WEBHOOK Saving Signal] symbol=${meta.symbol || 'n/a'} signalUuid=${meta.signalUuid || 'n/a'}`
+  );
 
   if (!isDbConnected()) {
     const saved = {
@@ -194,10 +198,19 @@ async function saveSignal(signalData, inMemorySignals) {
     if (Array.isArray(inMemorySignals)) {
       inMemorySignals.unshift(saved);
     }
+    console.log(`[TV WEBHOOK Mongo Success] mode=in_memory id=${saved._id}`);
     logPipeline('MongoSave', 'PASS', {
       ...meta,
-      reason: `in_memory_fallback; id=${saved._id}`
+      reason: `Success; in_memory_fallback; id=${saved._id}`
     });
+    if (signalData.userId) {
+      try {
+        const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
+        void PipelineSubscriberStatsService.recordMongoSave(signalData.userId, meta);
+      } catch {
+        /* diagnostics */
+      }
+    }
     return saved;
   }
 
@@ -208,11 +221,25 @@ async function saveSignal(signalData, inMemorySignals) {
     if (Array.isArray(inMemorySignals)) {
       inMemorySignals.unshift(saved.toObject ? saved.toObject() : saved);
     }
+    console.log(
+      `[TV WEBHOOK Mongo Success] id=${saved._id} signalUuid=${saved.signalUuid || saved.signalId || meta.signalUuid || 'n/a'}`
+    );
     logPipeline('MongoSave', 'PASS', {
       ...meta,
       signalUuid: saved.signalUuid || saved.signalId || meta.signalUuid,
-      reason: `id=${saved._id}`
+      reason: `Success; id=${saved._id}`
     });
+    if (signalData.userId || saved.userId) {
+      try {
+        const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
+        void PipelineSubscriberStatsService.recordMongoSave(signalData.userId || saved.userId, {
+          ...meta,
+          signalUuid: saved.signalUuid || saved.signalId || meta.signalUuid
+        });
+      } catch {
+        /* diagnostics */
+      }
+    }
     return saved;
   } catch (error) {
     const details =
@@ -221,6 +248,7 @@ async function saveSignal(signalData, inMemorySignals) {
             .map(([k, v]) => `${k}:${v?.message || v}`)
             .join(', ')
         : error.message;
+    console.error(`[TV WEBHOOK Mongo Failed] ${details}`);
     console.error('[Alerts] saveSignal failed:', details);
     logPipeline('MongoSave', 'FAIL', {
       ...meta,
@@ -426,7 +454,7 @@ function buildSignalData(body) {
             : error.message || 'entry_validation_failed'
       });
       console.warn(
-        `[TV Webhook] Validation rejected fields=${rejected.join(',') || 'n/a'} ` +
+        `[TV WEBHOOK VALIDATION FAILED] fields=${rejected.join(',') || 'n/a'} ` +
           `symbol=${signalData.symbol} msg=${error.message}`
       );
       throw error;

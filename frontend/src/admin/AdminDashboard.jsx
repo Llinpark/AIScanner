@@ -12,17 +12,27 @@ function StatCard({ label, value, hint, tone = 'default' }) {
   );
 }
 
+function formatMs(value) {
+  if (value == null || Number.isNaN(Number(value))) return '—';
+  const n = Number(value);
+  if (n < 1000) return `${Math.round(n)} ms`;
+  return `${(n / 1000).toFixed(1)} s`;
+}
+
 export default function AdminDashboard() {
   const { user } = useAuth();
   const canManageScanner = Boolean(user?.isSuperAdmin || user?.canManageScannerConfig);
   const [stats, setStats] = useState(null);
+  const [pipeline, setPipeline] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    adminApi
-      .getStats()
-      .then(res => setStats(res.data))
+    Promise.all([adminApi.getStats(), adminApi.getPipelineStatus().catch(() => null)])
+      .then(([statsRes, pipelineRes]) => {
+        setStats(statsRes.data);
+        if (pipelineRes?.data) setPipeline(pipelineRes.data);
+      })
       .catch(err => setError(err.response?.data?.message || 'Unable to load admin stats.'))
       .finally(() => setLoading(false));
   }, []);
@@ -40,17 +50,41 @@ export default function AdminDashboard() {
   const showConfig = canManageScanner && Boolean(config.autoScanEnabled != null);
 
   const signalTotal = stats?.signals?.total ?? 0;
+  const delivery = pipeline?.deliveryStats || {};
 
   return (
     <div className="admin-dashboard">
       <div className="admin-stat-grid">
         <StatCard label="Total users" value={stats?.users?.total ?? 0} tone="accent" />
         <StatCard label="Active subscriptions" value={stats?.users?.activeSubscriptions ?? 0} tone="success" />
-        <StatCard label="Signals today" value={stats?.signals?.today ?? 0} />
+        <StatCard label="Signals today" value={delivery.signalsToday ?? stats?.signals?.today ?? 0} />
+        <StatCard label="Signals week" value={delivery.signalsWeek ?? '—'} />
+        <StatCard label="Signals month" value={delivery.signalsMonth ?? '—'} />
         <StatCard
           label="Open entry signals"
           value={stats?.signals?.openEntries ?? 0}
           tone="warning"
+        />
+        <StatCard label="Delivered" value={delivery.delivered ?? 0} tone="success" />
+        <StatCard label="Failed deliveries" value={delivery.failed ?? 0} tone="danger" />
+        <StatCard
+          label="Telegram success"
+          value={delivery.telegramSuccessPct != null ? `${delivery.telegramSuccessPct}%` : '—'}
+        />
+        <StatCard
+          label="MT5 success"
+          value={delivery.mt5SuccessPct != null ? `${delivery.mt5SuccessPct}%` : '—'}
+        />
+        <StatCard
+          label="Avg pipeline latency"
+          value={formatMs(delivery.avgPipelineLatencyMs ?? pipeline?.averagePipelineLatency)}
+          hint={`WH→Mongo ${formatMs(delivery.avgWebhookToMongoMs)} · Mongo→TG ${formatMs(delivery.avgMongoToTelegramMs)}`}
+        />
+        <StatCard
+          label="Waiting for first webhook"
+          value={pipeline?.waitingSubscribers ?? 0}
+          tone="warning"
+          hint={`${pipeline?.activeSubscribers ?? 0} active subscribers`}
         />
         <StatCard label="Total signals" value={signalTotal} />
         <StatCard label="Completed payments" value={stats?.payments?.completed ?? 0} tone="success" />
@@ -64,7 +98,7 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      {signalTotal === 0 && (
+      {(signalTotal === 0 || pipeline?.waitingSubscribers > 0) && (
         <div className="admin-panel">
           <div className="admin-panel-header">
             <h3>Signal source</h3>
@@ -72,9 +106,13 @@ export default function AdminDashboard() {
           </div>
           <p className="admin-table-meta">
             Counters read the Mongo <code>Signal</code> collection. Production trades are ingested only from
-            TradingView Pine webhooks — auto-scan does not create listable signals. After a successful alert,
-            totals update here; historical zeros stay until the next webhook persists.
+            TradingView Pine webhooks — auto-scan does not create listable signals. If subscribers show
+            &quot;Waiting for first TradingView webhook&quot;, the Alert Engine likely never POSTed — open the
+            Pipeline tab to diagnose Pine generation vs webhook age.
           </p>
+          {pipeline?.webhookAge?.warning && (
+            <p className="pipeline-warn">{pipeline.webhookAge.message}</p>
+          )}
         </div>
       )}
 
@@ -100,6 +138,10 @@ export default function AdminDashboard() {
                   .map(s => `${s.name}${s.enabled === false ? ' (off)' : ''}`)
                   .join(', ') || 'Day Trading, Scalping'}
               </dd>
+            </div>
+            <div className="admin-meta-item">
+              <dt>Pipeline health</dt>
+              <dd>{pipeline?.pipelineHealthy ? 'Healthy' : 'Check Pipeline tab'}</dd>
             </div>
           </dl>
         </div>

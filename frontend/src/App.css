@@ -7189,6 +7189,88 @@ h1, h2, h3, h4, h5, h6,
   color: #92680d;
 }
 
+.pipeline-timeline {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pipeline-timeline-item {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 10px;
+  align-items: start;
+}
+
+.pipeline-tone {
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.18);
+}
+
+.pipeline-tone-green {
+  background: var(--success-color);
+  box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.18);
+}
+
+.pipeline-tone-red {
+  background: var(--error-color);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.16);
+}
+
+.pipeline-tone-yellow {
+  background: #f59e0b;
+}
+
+.pipeline-timeline-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.pipeline-timeline-note,
+.pipeline-warn {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.pipeline-warn {
+  color: #92680d;
+  font-weight: 600;
+}
+
+.pipeline-subscriber-detail {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+.admin-table tr.is-selected td {
+  background: var(--accent-soft);
+}
+
+.admin-secondary-btn {
+  border: 1px solid var(--border-color);
+  background: var(--surface-muted);
+  color: var(--heading-color);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.admin-secondary-btn:hover {
+  border-color: var(--accent-color);
+}
+
 .admin-scanner-form {
   display: flex;
   flex-direction: column;

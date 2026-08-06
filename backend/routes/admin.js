@@ -38,6 +38,64 @@ function createAdminRouter({ io } = {}) {
 
   router.use(requireAuth, requireAdmin);
 
+  router.get('/pipeline-status', async (req, res) => {
+    try {
+      const PipelineStatusService = require('../services/PipelineStatusService');
+      const PipelineAlertStatusService = require('../services/PipelineAlertStatusService');
+      const PipelineDeliveryStatsService = require('../services/PipelineDeliveryStatsService');
+      const alertStatus = await PipelineAlertStatusService.listActiveSubscriberAlertStatus();
+      const deliveryStats = await PipelineDeliveryStatsService.computeDeliveryStatistics();
+      const status = await PipelineStatusService.getStatus({
+        activeSubscribers: alertStatus.activeSubscribers,
+        waitingSubscribers: alertStatus.waitingSubscribers,
+        activeStrategy: getScannerConfig()?.activeStrategy || process.env.PINE_DEFAULT_STRATEGY
+      });
+      res.json({
+        ok: true,
+        ...status,
+        deliveryStats,
+        subscribersPreview: alertStatus.subscribers.slice(0, 25)
+      });
+    } catch (error) {
+      console.error('Admin pipeline-status error:', error);
+      res.status(500).json({ message: 'Unable to load pipeline status', error: error.message });
+    }
+  });
+
+  router.get('/live-pipeline', async (req, res) => {
+    try {
+      const PipelineStatusService = require('../services/PipelineStatusService');
+      const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 100));
+      const live = await PipelineStatusService.getLivePipeline(limit);
+      res.json(live);
+    } catch (error) {
+      console.error('Admin live-pipeline error:', error);
+      res.status(500).json({ message: 'Unable to load live pipeline', error: error.message });
+    }
+  });
+
+  router.get('/pipeline-subscribers', async (req, res) => {
+    try {
+      const PipelineAlertStatusService = require('../services/PipelineAlertStatusService');
+      const result = await PipelineAlertStatusService.listActiveSubscriberAlertStatus();
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      console.error('Admin pipeline-subscribers error:', error);
+      res.status(500).json({ message: 'Unable to load pipeline subscribers', error: error.message });
+    }
+  });
+
+  router.get('/delivery-stats', async (req, res) => {
+    try {
+      const PipelineDeliveryStatsService = require('../services/PipelineDeliveryStatsService');
+      const stats = await PipelineDeliveryStatsService.computeDeliveryStatistics();
+      res.json({ ok: true, ...stats });
+    } catch (error) {
+      console.error('Admin delivery-stats error:', error);
+      res.status(500).json({ message: 'Unable to load delivery stats', error: error.message });
+    }
+  });
+
   router.get('/stats', async (req, res) => {
     try {
       const dbConnected = mongoose.connection.readyState === 1;

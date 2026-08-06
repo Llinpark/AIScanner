@@ -209,6 +209,8 @@ if tradeIsActive() and barstate.isconfirmed
     if closeNow
         if str.length(tradeSignalId()) > 0
             closeMsg = buildPayload(closeAlertType, tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), closeReason)
+            if DEBUG_MODE
+                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=" + closeAlertType + " | reason=" + closeReason)
             alert(closeMsg, alert.freq_all)
         // clearPreviousTrade (inlined) — delete every drawing object then reset state.
         if array.size(tradeLevelLines) > 0
@@ -250,6 +252,8 @@ if tradeIsActive() and barstate.isconfirmed
         // Partial TP alerts only — NEVER rewrite Buy/Sell badge text with TP markers.
         if hitTp1 and not tradeTp1Alerted()
             msgTp1 = buildPayload("take_profit_1", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp1")
+            if DEBUG_MODE
+                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_1")
             alert(msgTp1, alert.freq_all)
             array.set(tradeFlags, 2, 1)
             // Soft-highlight TP1 label only (object remains "TP1").
@@ -257,6 +261,8 @@ if tradeIsActive() and barstate.isconfirmed
                 label.set_color(array.get(tradeLevelLabels, 2), color.new(colTpNear, 0))
         if hitTp2 and not tradeTp2Alerted()
             msgTp2 = buildPayload("take_profit_2", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp2")
+            if DEBUG_MODE
+                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_2")
             alert(msgTp2, alert.freq_all)
             array.set(tradeFlags, 3, 1)
             if array.size(tradeLevelLabels) > 3

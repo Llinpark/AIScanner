@@ -328,19 +328,28 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   }
 
   if (subscriber) {
+    console.log(`[DELIVERY Email START] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
     const emailOk = await deliverEmail(subscriber, signal);
     if (emailOk) emailSent = true;
     const emailSelfTest =
       signal?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true';
+    if (emailOk || emailSelfTest) {
+      console.log(
+        `[DELIVERY Email SUCCESS] sub=${subLabel}${emailSelfTest && !emailOk ? ' (self_test_skip)' : ''}`
+      );
+    } else {
+      console.warn(`[DELIVERY Email FAILED] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
+    }
     logPipeline('DeliveryEmail', emailOk || emailSelfTest ? 'PASS' : 'FAIL', {
       ...meta,
       reason: emailOk
-        ? `to=${subscriber.email}`
+        ? `SUCCESS; to=${subscriber.email}`
         : emailSelfTest
           ? `self_test_skip; sub=${subLabel}`
-          : `skipped_or_failed; sub=${subLabel}`
+          : `FAILED; skipped_or_failed; sub=${subLabel}`
     });
 
+    console.log(`[DELIVERY Telegram START] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
     const tgOk = await deliverTelegram(subscriber, signal, {
       includeExecuteButton,
       alertOnly: alertsOnly,
@@ -359,16 +368,33 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
         executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
       }
     }
+    if (tgOk || emailSelfTest) {
+      console.log(
+        `[DELIVERY Telegram SUCCESS] sub=${subLabel}${emailSelfTest && !tgOk ? ' (self_test_skip)' : ''}`
+      );
+    } else {
+      console.warn(`[DELIVERY Telegram FAILED] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
+    }
     logPipeline('DeliveryTelegram', tgOk || emailSelfTest ? 'PASS' : 'FAIL', {
       ...meta,
+      userId: subscriber?.id || null,
       reason: tgOk
-        ? `sub=${subLabel}; mode=${executionMode}; telegramMode=${telegramMode}${alertsOnly ? '; telegram_alert_sent' : ''}`
+        ? `SUCCESS; sub=${subLabel}; mode=${executionMode}; telegramMode=${telegramMode}${alertsOnly ? '; telegram_alert_sent' : ''}`
         : emailSelfTest
           ? `self_test_skip; sub=${subLabel}`
-          : `skipped_or_failed; sub=${subLabel}`
+          : `FAILED; skipped_or_failed; sub=${subLabel}`
     });
+    if (tgOk && subscriber?.id) {
+      try {
+        const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
+        void PipelineSubscriberStatsService.recordDelivery(subscriber.id, 'telegram', meta);
+      } catch {
+        /* diagnostics */
+      }
+    }
 
     // Premium Automatic only — Pro Manual (including Alerts Only preference) never auto-queues.
+    console.log(`[DELIVERY MT5 START] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
     const mt5Result = await deliverMt5Auto(subscriber, signal);
     mt5Reason = mt5Result?.reason || (mt5Result?.ok ? 'queued' : 'skipped');
     if (mt5Result?.ok) {
@@ -388,10 +414,24 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
       executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
     }
     const mt5Ok = Boolean(mt5Result?.ok) || mt5Reason === 'self_test_skip';
+    if (mt5Ok) {
+      console.log(`[DELIVERY MT5 SUCCESS] reason=${mt5Reason}; sub=${subLabel}`);
+    } else {
+      console.warn(`[DELIVERY MT5 FAILED] reason=${mt5Reason}; sub=${subLabel}`);
+    }
     logPipeline('DeliveryMT5', mt5Ok ? 'PASS' : 'FAIL', {
       ...meta,
-      reason: `${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; sub=${subLabel}`
+      userId: subscriber?.id || null,
+      reason: `${mt5Ok ? 'SUCCESS' : 'FAILED'}; ${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; sub=${subLabel}`
     });
+    if (mt5Ok && subscriber?.id) {
+      try {
+        const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
+        void PipelineSubscriberStatsService.recordDelivery(subscriber.id, 'mt5', meta);
+      } catch {
+        /* diagnostics */
+      }
+    }
   }
 
   const enrichedDoc = {
@@ -425,12 +465,34 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     deliveryStatus: 'delivered'
   });
 
-  const payload = await deliverInApp(io, enrichedDoc, subscriber);
-  logPipeline('DeliverySocket', 'PASS', {
-    ...meta,
-    reason: `tv:live-alert; sub=${subLabel}; email=${emailSent}; tg=${telegramSent}; mt5=${mt5Sent}`
-  });
-  return payload;
+  console.log(`[DELIVERY Socket START] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
+  try {
+    const payload = await deliverInApp(io, enrichedDoc, subscriber);
+    console.log(`[DELIVERY Socket SUCCESS] sub=${subLabel}`);
+    logPipeline('DeliverySocket', 'PASS', {
+      ...meta,
+      userId: subscriber?.id || null,
+      reason: `SUCCESS; tv:live-alert; sub=${subLabel}; email=${emailSent}; tg=${telegramSent}; mt5=${mt5Sent}`
+    });
+    if (subscriber?.id) {
+      try {
+        const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
+        void PipelineSubscriberStatsService.recordDelivery(subscriber.id, 'socket', meta);
+        void PipelineSubscriberStatsService.recordPublished(subscriber.id, meta);
+      } catch {
+        /* diagnostics */
+      }
+    }
+    return payload;
+  } catch (err) {
+    console.warn(`[DELIVERY Socket FAILED] sub=${subLabel} err=${err.message}`);
+    logPipeline('DeliverySocket', 'FAIL', {
+      ...meta,
+      userId: subscriber?.id || null,
+      reason: `FAILED; ${err.message}; sub=${subLabel}`
+    });
+    throw err;
+  }
 }
 
 /**
