@@ -173,9 +173,12 @@ for (const [label, g] of [
   assert(g.script.includes('DEBUG_MODE'), `${label}: missing DEBUG_MODE input`);
   assert(g.script.includes('pineAlertBlockReason'), `${label}: missing pineAlertBlockReason diagnostics`);
   assert(g.script.includes('[PIPELINE] ALERT FIRING'), `${label}: missing ALERT FIRING debug log`);
+  assert(g.script.includes('[PIPELINE] DRAWING CREATED'), `${label}: missing DRAWING CREATED debug log`);
   assert(g.script.includes('[PIPELINE] ALERT NOT FIRED'), `${label}: missing ALERT NOT FIRED debug log`);
   assert(g.script.includes('[PIPELINE] DEBUG STATE'), `${label}: missing DEBUG STATE log`);
   assert(g.script.includes('fireLong='), `${label}: missing fireLong state dump`);
+  assert(g.script.includes('confirmedSignal'), `${label}: missing confirmedSignal = fireLong or fireShort`);
+  assert(g.script.includes('confirmedSignal = fireLong or fireShort'), `${label}: confirmedSignal must equal fireLong or fireShort`);
   assert(g.script.includes('entryTfOk='), `${label}: missing entryTfOk state dump`);
   assert(g.script.includes('TIMEFRAME VALIDATION'), `${label}: missing dedicated TIMEFRAME VALIDATION block`);
   assert(g.script.includes('entryChartOk'), `${label}: missing entryChartOk gate`);
@@ -183,6 +186,37 @@ for (const [label, g] of [
   assert(g.script.includes('chartIsHtf'), `${label}: missing chartIsHtf guard`);
   assert(g.script.includes('barmerge.lookahead_off'), `${label}: request.security must use lookahead_off`);
   assert(g.script.includes('barstate.isconfirmed'), `${label}: missing barstate.isconfirmed for hist/rt parity`);
+  assert(g.script.includes('barstate.isrealtime'), `${label}: missing barstate.isrealtime (no historical orphan drawings)`);
+  assert(
+    /fireLong\s*=\s*licenseOk and entryTfOk and not tradeIsActive\(\) and retraceLong and barstate\.isconfirmed and barstate\.isrealtime/.test(
+      g.script
+    ),
+    `${label}: fireLong must gate on isconfirmed + isrealtime`
+  );
+  assert(
+    /fireShort\s*=\s*licenseOk and entryTfOk and not tradeIsActive\(\) and retraceShort and barstate\.isconfirmed and barstate\.isrealtime/.test(
+      g.script
+    ),
+    `${label}: fireShort must gate on isconfirmed + isrealtime`
+  );
+  // DRAWING CREATED must be followed by ALERT FIRING (entry arming); lifecycle alerts may appear earlier in the snippet.
+  {
+    const drawIdx = g.script.indexOf('[PIPELINE] DRAWING CREATED');
+    assert(drawIdx >= 0, `${label}: missing DRAWING CREATED`);
+    const alertAfterDraw = g.script.indexOf('[PIPELINE] ALERT FIRING', drawIdx);
+    assert(alertAfterDraw > drawIdx, `${label}: DRAWING CREATED must be followed by ALERT FIRING`);
+    const between = g.script.slice(drawIdx, alertAfterDraw);
+    assert(!between.includes('alert('), `${label}: must not call alert() between DRAWING CREATED and ALERT FIRING logs`);
+  }
+  // Entry drawings only inside fireLong/fireShort — not on raw retrace setup flags.
+  assert(
+    !/if\s+retraceLong\s*\n[\s\S]{0,200}buildTradeDrawings/.test(g.script),
+    `${label}: must not draw on retraceLong alone`
+  );
+  assert(
+    !/if\s+retraceShort\s*\n[\s\S]{0,200}buildTradeDrawings/.test(g.script),
+    `${label}: must not draw on retraceShort alone`
+  );
   assert(!/timeframe\.period\s*==/.test(g.script), `${label}: must not use rigid timeframe.period equality gates`);
   assert(g.script.includes('max_labels_count=500'), `${label}: max_labels_count should be 500`);
   assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);

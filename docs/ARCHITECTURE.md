@@ -85,6 +85,8 @@ HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.loo
 ### No Repainting guarantees
 
 - Confirmed-bar gating (`barstate.isconfirmed`) for hist/rt parity.
+- Realtime-only arming (`barstate.isrealtime` inside `fireLong` / `fireShort`): TradingView does not deliver `alert()` webhooks on historical bars, so Entry/SL/TP drawings must not arm there either.
+- Single confirmation event: `confirmedSignal = fireLong or fireShort` drives drawings, UUID, `alert()`, and lifecycle together. DEBUG logs `DRAWING CREATED` immediately before `ALERT FIRING`.
 - `request.security` uses `lookahead_off`.
 - TF validation (`entryChartOk` / `htfTfOk` / `chartIsHtf`) blocks signals on wrong charts and surfaces diagnostic labels instead of silent suppression:
   - Wrong Entry Timeframe
@@ -99,7 +101,7 @@ HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.loo
 2. Generate personal Pine (HTF default baked from Strategy Configuration). Lock labels include the strategy name (e.g. `Wrong Entry Timeframe (Scalping)`).
 3. Attach script to an allowed **Entry Timeframe** chart.
 4. Create alert → webhook → Kaching distribution (dashboard / Telegram / MT5).
-5. After admin TF/config changes or deploy: regenerate Pine and recreate the alert.
+5. After admin TF/config changes or deploy: **all subscribers must regenerate Pine**, remove the old indicator, paste the new script, and recreate the alert (drawings stay synced with `alert()` only after re-paste).
 
 Strategy math (liquidity sweep, FVG, BOS/CHOCH, entry models, confidence, risk/TP/SL) is unchanged by this architecture layer. Future strategies (Swing, Position, Crypto, Gold) register architecture slots without modifying Pine strategy math.
 

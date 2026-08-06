@@ -329,9 +329,10 @@ function generateForUser(user, options = {}) {
       'Alert message field: leave TradingView default {{strategy.order.alert_message}} / {{alert_message}} so the JSON from alert() is sent unchanged. Do not wrap or edit the JSON.',
       'Alert frequency: Once Per Bar Close (script already uses alert.freq_all on confirmed bars). Expiration: Open-ended / no expire — do not let the alert expire or webhooks stop.',
       'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',
-      'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs ([PIPELINE] DEBUG STATE / ALERT NOT FIRED / ALERT FIRING) for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
+      'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs ([PIPELINE] DEBUG STATE / ALERT NOT FIRED / DRAWING CREATED / ALERT FIRING) for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, bar unconfirmed, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
+      'Entry/SL/TP drawings appear ONLY with a confirmed realtime signal that also calls alert() — never on unconfirmed or historical bars. DRAWING CREATED always precedes ALERT FIRING in Pine Logs.',
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
-      'After regenerating Pine, remove the old indicator from the chart, paste the new script, and recreate the ONE alert so drawings, license binding, and webhook URL take effect.',
+      'REQUIRED after this deploy: regenerate Pine in the app, remove the old indicator from the chart, paste the new script, and recreate the ONE alert so drawings stay synced with webhook alerts.',
       'Switch strategies with ?strategy=daytrading | scalping.',
       'After updating your TradingView username in the app, re-save, re-copy this script, and re-add it to the chart so the license token and prefilled Confirm match.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan) · TV: ${tvUsername}.`

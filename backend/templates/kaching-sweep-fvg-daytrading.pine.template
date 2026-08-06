@@ -316,6 +316,7 @@ pineAlertBlockReason(bool tradeActiveNow) =>
      not htfTfOk ? "wrong_htf" :
      chartIsHtf ? "chart_is_htf" :
      tradeActiveNow ? "trade_active" :
+     not barstate.isrealtime ? "not_realtime" :
      not barstate.isconfirmed ? "bar_unconfirmed" :
      confScore() < confThreshold ? "confidence" :
      not fvgActive ? "fvg_invalid" :
@@ -328,16 +329,20 @@ pineAlertBlockReason(bool tradeActiveNow) =>
 
 // One active trade per chart: never fire/replace while a trade is still open.
 // Alerts fire only on valid entry TF bars (entryTfOk); HTF is confirmation-only.
-fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
-fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
+// barstate.isrealtime: TradingView ignores alert() on historical bars — without this gate,
+// Entry/SL/TP drawings armed on history with no webhook (orphan visuals vs ALERT NOT FIRED).
+fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and barstate.isrealtime and confScore() >= confThreshold
+fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and barstate.isrealtime and confScore() >= confThreshold
+// Single confirmation event: drawings, UUID, alert(), and lifecycle arm ONLY when this is true.
+confirmedSignal = fireLong or fireShort
 
 // DEBUG_MODE diagnostics only — never changes fireLong / fireShort / alert() gates.
 if DEBUG_MODE and barstate.islast
     dbgTradeActive = tradeIsActive()
     dbgReason = pineAlertBlockReason(dbgTradeActive)
-    dbgState = "chartTF=" + timeframe.period + " entryTF={{ARCH_ENTRY_LABEL}} htf=" + htfTf + " conf=" + str.tostring(confScore(), "#.#") + "/" + str.tostring(confThreshold, "#.#") + " licenseOk=" + str.tostring(licenseOk) + " entryTfOk=" + str.tostring(entryTfOk) + " htfTfOk=" + str.tostring(htfTfOk) + " tradeActive=" + str.tostring(dbgTradeActive) + " confirmed=" + str.tostring(barstate.isconfirmed) + " fireLong=" + str.tostring(fireLong) + " fireShort=" + str.tostring(fireShort)
+    dbgState = "chartTF=" + timeframe.period + " entryTF={{ARCH_ENTRY_LABEL}} htf=" + htfTf + " conf=" + str.tostring(confScore(), "#.#") + "/" + str.tostring(confThreshold, "#.#") + " licenseOk=" + str.tostring(licenseOk) + " entryTfOk=" + str.tostring(entryTfOk) + " htfTfOk=" + str.tostring(htfTfOk) + " tradeActive=" + str.tostring(dbgTradeActive) + " realtime=" + str.tostring(barstate.isrealtime) + " confirmed=" + str.tostring(barstate.isconfirmed) + " fireLong=" + str.tostring(fireLong) + " fireShort=" + str.tostring(fireShort) + " confirmedSignal=" + str.tostring(confirmedSignal)
     log.info("[PIPELINE] DEBUG STATE | " + syminfo.ticker + " | " + dbgState)
-    if not fireLong and not fireShort
+    if not confirmedSignal
         dbgText = "DEBUG: " + dbgReason + " | " + dbgState
         if na(debugBlockLabel)
             debugBlockLabel := label.new(bar_index, high, dbgText, style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
@@ -352,6 +357,7 @@ else if not na(debugBlockLabel) and not DEBUG_MODE
     label.delete(debugBlockLabel)
     debugBlockLabel := na
 
+// Arm trade ONLY on confirmedSignal (fireLong). Same event: drawings → DRAWING CREATED → ALERT FIRING → alert().
 if fireLong
     e = resolveEntry("long")
     sl = resolveStop("long", e)
@@ -359,9 +365,6 @@ if fireLong
     conf = confScore() / 100.0
     sigId = makeSignalId()
     msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
-    if DEBUG_MODE
-        log.info("[PIPELINE] ALERT FIRING | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
-    alert(msg, alert.freq_all)
     // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0
         for i = 0 to array.size(tradeLevelLines) - 1
@@ -408,9 +411,14 @@ if fireLong
     array.set(tradeFlags, 0, 1)
     array.set(tradeFlags, 2, 0)
     array.set(tradeFlags, 3, 0)
+    if DEBUG_MODE
+        log.info("[PIPELINE] DRAWING CREATED | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | price=" + formatPrice(ee) + " | timestamp=" + str.tostring(timenow))
+        log.info("[PIPELINE] ALERT FIRING | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
+    alert(msg, alert.freq_all)
     fvgBar := na
     dispBar := na
 
+// Arm trade ONLY on confirmedSignal (fireShort). Same event: drawings → DRAWING CREATED → ALERT FIRING → alert().
 if fireShort
     e = resolveEntry("short")
     sl = resolveStop("short", e)
@@ -418,9 +426,6 @@ if fireShort
     conf = confScore() / 100.0
     sigId = makeSignalId()
     msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
-    if DEBUG_MODE
-        log.info("[PIPELINE] ALERT FIRING | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
-    alert(msg, alert.freq_all)
     // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
     if array.size(tradeLevelLines) > 0
         for i = 0 to array.size(tradeLevelLines) - 1
@@ -467,5 +472,9 @@ if fireShort
     array.set(tradeFlags, 0, 1)
     array.set(tradeFlags, 2, 0)
     array.set(tradeFlags, 3, 0)
+    if DEBUG_MODE
+        log.info("[PIPELINE] DRAWING CREATED | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | price=" + formatPrice(ee) + " | timestamp=" + str.tostring(timenow))
+        log.info("[PIPELINE] ALERT FIRING | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
+    alert(msg, alert.freq_all)
     fvgBar := na
     dispBar := na

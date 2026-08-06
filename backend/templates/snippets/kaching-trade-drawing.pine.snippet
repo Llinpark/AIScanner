@@ -3,6 +3,11 @@
 // TP3, SL, configurable candle expiry, or explicit cancel — NEVER because a
 // later setup scan fails or lines run out of fixed bar length.
 //
+// Confirmation contract (templates): Entry/SL/TP drawings, UUID, alert(), and
+// lifecycle arm ONLY inside `if fireLong` / `if fireShort` (= confirmedSignal).
+// This snippet NEVER arms a new trade from retrace/setup flags — only extends
+// or closes an already-active trade. Do not call buildTradeDrawings outside fire*.
+//
 // Label contract: ONE semantic object per label.
 //   Badge = "Kaching Buy" | "Kaching Sell" (never appends TP/SL text)
 //   Levels = "Buy"|"Sell", "SL", "TP1", "TP2", "TP3" (+ price only)
