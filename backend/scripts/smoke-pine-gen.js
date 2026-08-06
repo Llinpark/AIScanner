@@ -186,19 +186,23 @@ for (const [label, g] of [
   assert(g.script.includes('chartIsHtf'), `${label}: missing chartIsHtf guard`);
   assert(g.script.includes('barmerge.lookahead_off'), `${label}: request.security must use lookahead_off`);
   assert(g.script.includes('barstate.isconfirmed'), `${label}: missing barstate.isconfirmed for hist/rt parity`);
-  assert(g.script.includes('barstate.isrealtime'), `${label}: missing barstate.isrealtime (no historical orphan drawings)`);
+  assert(g.script.includes('barstate.isrealtime'), `${label}: DEBUG STATE should still dump isrealtime`);
   assert(
-    /fireLong\s*=\s*licenseOk and entryTfOk and not tradeIsActive\(\) and retraceLong and barstate\.isconfirmed and barstate\.isrealtime/.test(
+    /fireLong\s*=\s*licenseOk and entryTfOk and not tradeIsActive\(\) and retraceLong and barstate\.isconfirmed and confScore\(\) >= confThreshold/.test(
       g.script
     ),
-    `${label}: fireLong must gate on isconfirmed + isrealtime`
+    `${label}: fireLong must gate on isconfirmed only (not isrealtime — TV already ignores historical alert())`
   );
   assert(
-    /fireShort\s*=\s*licenseOk and entryTfOk and not tradeIsActive\(\) and retraceShort and barstate\.isconfirmed and barstate\.isrealtime/.test(
+    /fireShort\s*=\s*licenseOk and entryTfOk and not tradeIsActive\(\) and retraceShort and barstate\.isconfirmed and confScore\(\) >= confThreshold/.test(
       g.script
     ),
-    `${label}: fireShort must gate on isconfirmed + isrealtime`
+    `${label}: fireShort must gate on isconfirmed only (not isrealtime)`
   );
+  assert(!/fireLong\s*=.*barstate\.isrealtime/.test(g.script), `${label}: fireLong must not require isrealtime`);
+  assert(!/fireShort\s*=.*barstate\.isrealtime/.test(g.script), `${label}: fireShort must not require isrealtime`);
+  assert(!/if fireLong and barstate\.isrealtime/.test(g.script), `${label}: arming must not require isrealtime`);
+  assert(!/if fireShort and barstate\.isrealtime/.test(g.script), `${label}: arming must not require isrealtime`);
   // DRAWING CREATED must be followed by ALERT FIRING (entry arming); lifecycle alerts may appear earlier in the snippet.
   {
     const drawIdx = g.script.indexOf('[PIPELINE] DRAWING CREATED');
@@ -260,15 +264,16 @@ assert(
   'daytrading: entry charts must be 5m or 15m'
 );
 assert(
-  scalp.script.includes('timeframe.multiplier == 3 or timeframe.multiplier == 5'),
-  'scalping: entry charts must be 3m or 5m'
+  scalp.script.includes(
+    'timeframe.multiplier == 1 or timeframe.multiplier == 3 or timeframe.multiplier == 5'
+  ),
+  'scalping: entry charts must be 1m, 3m, or 5m'
 );
-assert(!/timeframe\.multiplier == 1 or timeframe\.multiplier == 3/.test(scalp.script), 'scalping: must not allow 1m entry');
 assert(day.script.includes('htfSec == 3600 or htfSec == 14400'), 'daytrading: HTF must be 1H or 4H');
 assert(scalp.script.includes('htfSec == 900'), 'scalping: HTF must be 15m');
 assert(day.instructions[0].includes('5m or 15m'), 'daytrading instructions must mention 5m/15m entry');
 assert(day.instructions[0].includes('Day Trading'), 'daytrading instructions must name Day Trading');
-assert(scalp.instructions[0].includes('3m or 5m'), 'scalping instructions must mention 3m/5m entry');
+assert(scalp.instructions[0].includes('1m, 3m, or 5m'), 'scalping instructions must mention 1m/3m/5m entry');
 assert(scalp.instructions[0].includes('15m'), 'scalping instructions must mention 15m HTF');
 assert(scalp.instructions[0].includes('Day Trading'), 'scalping instructions must tip Day Trading for 15m entries');
 assert(scalp.script.includes('Wrong Entry Timeframe (Scalping)'), 'scalping: lock label must name Scalping');
@@ -300,9 +305,9 @@ const scalpVars = buildPineTfVariables('scalping');
 assert(scalp.script.includes(scalpVars.ENTRY_CHART_OK), 'scalping: ENTRY_CHART_OK from config must appear in script');
 assert(scalp.script.includes(`input.timeframe("${scalpVars.HTF_TF}"`), 'scalping: HTF input default must match config');
 
-// No obsolete 1m scalping references in generated scripts / architecture
-assert(!STRATEGY_ARCHITECTURE.scalping.entryTimeframes.includes('1m'), 'architecture must not list 1m scalping');
-assert(!/multiplier == 1\b/.test(scalp.script), 'scalping generated Pine must not allow 1m multiplier');
+// Scalping entry allowlist includes pre-Aug-3 1m charts (regression restore).
+assert(STRATEGY_ARCHITECTURE.scalping.entryTimeframes.includes('1m'), 'architecture must list 1m scalping');
+assert(/multiplier == 1\b/.test(scalp.script), 'scalping generated Pine must allow 1m multiplier');
 
 console.log(
   JSON.stringify(

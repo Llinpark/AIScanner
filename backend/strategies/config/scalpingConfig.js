@@ -21,7 +21,7 @@ const DEFAULT_SCALPING_CONFIG = Object.freeze({
   name: STRATEGY_NAME,
   enabled: process.env.SCALPING_STRATEGY_ENABLED !== 'false',
 
-  // Timeframes — HTF is context only; entries never on HTF (canonical: 3m/5m entry, 15m HTF)
+  // Timeframes — HTF is context only; entries never on HTF (canonical: 1m/3m/5m entry, 15m HTF)
   htfTimeframe: _archTf.htfTimeframe,
   htfTimeframes: Object.freeze([..._archTf.htfTimeframes]),
   entryTimeframes: Object.freeze([..._archTf.entryTimeframes]),

@@ -26,7 +26,7 @@ const TIERS = {
       'Entry, SL & TP1–3 overlays on your TradingView chart',
       '5 chart-catalog markets (EUR/USD, GBP/USD, XAU/USD, BTC/USD, USD/JPY)',
       'TradingView alerts on any chart symbol your script is attached to',
-      '4 timeframes (1h, 15m, 3m, 1m)',
+      '5 timeframes (1h, 15m, 5m, 3m, 1m)',
       '7-day signal history'
     ]
   },
@@ -42,7 +42,7 @@ const TIERS = {
       'Everything in Basic',
       'Most major chart-catalog markets (9 symbols incl. gold & indices)',
       'TradingView alerts on any instrument (forex, metals, indices, crypto, stocks)',
-      '6 timeframes (4h, 1h, 30m, 15m, 5m, 1m)',
+      '7 timeframes (4h, 1h, 30m, 15m, 5m, 3m, 1m)',
       'Confidence score',
       'News filter',
       'Performance dashboard',
@@ -89,7 +89,7 @@ const TIER_FEATURES = {
     // Preferred in-app chart markets (TV Pine/webhooks accept any instrument).
     currencyPairs: ['EUR/USD', 'GBP/USD', 'XAU/USD', 'USD/JPY', 'AUD/USD'],
     anyTradingViewInstrument: true,
-    timeframes: ['1h', '15m', '3m', '1m'],
+    timeframes: ['1h', '15m', '5m', '3m', '1m'],
     showConfidence: false,
     newsFilter: false,
     performanceDashboard: false,
@@ -125,7 +125,7 @@ const TIER_FEATURES = {
       'US100'
     ],
     anyTradingViewInstrument: true,
-    timeframes: ['4h', '1h', '30m', '15m', '5m', '1m'],
+    timeframes: ['4h', '1h', '30m', '15m', '5m', '3m', '1m'],
     showConfidence: true,
     newsFilter: true,
     performanceDashboard: true,

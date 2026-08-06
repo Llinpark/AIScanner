@@ -84,8 +84,7 @@ HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.loo
 
 ### No Repainting guarantees
 
-- Confirmed-bar gating (`barstate.isconfirmed`) for hist/rt parity.
-- Realtime-only arming (`barstate.isrealtime` inside `fireLong` / `fireShort`): TradingView does not deliver `alert()` webhooks on historical bars, so Entry/SL/TP drawings must not arm there either.
+- Confirmed-bar gating (`barstate.isconfirmed`) for hist/rt parity. `fireLong` / `fireShort` do **not** require `barstate.isrealtime` (TradingView already ignores `alert()` on historical bars; isrealtime-in-fire* was reverted after it risked suppressing live closes).
 - Single confirmation event: `confirmedSignal = fireLong or fireShort` drives drawings, UUID, `alert()`, and lifecycle together. DEBUG logs `DRAWING CREATED` immediately before `ALERT FIRING`.
 - `request.security` uses `lookahead_off`.
 - TF validation (`entryChartOk` / `htfTfOk` / `chartIsHtf`) blocks signals on wrong charts and surfaces diagnostic labels instead of silent suppression:
@@ -97,7 +96,7 @@ HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.loo
 
 ### TradingView workflow
 
-1. Choose strategy (Scalping or Day Trading) in the app. Setup defaults to **Day Trading** (5m/15m entries). Scalping is 3m/5m only — a 15m chart correctly locks Scalping because 15m is HTF Confirmation, not entry.
+1. Choose strategy (Scalping or Day Trading) in the app. Setup defaults to **Day Trading** (5m/15m entries). Scalping entries are **1m, 3m, or 5m** — a 15m chart correctly locks Scalping because 15m is HTF Confirmation, not entry.
 2. Generate personal Pine (HTF default baked from Strategy Configuration). Lock labels include the strategy name (e.g. `Wrong Entry Timeframe (Scalping)`).
 3. Attach script to an allowed **Entry Timeframe** chart.
 4. Create alert → webhook → Kaching distribution (dashboard / Telegram / MT5).

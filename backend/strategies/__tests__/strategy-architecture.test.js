@@ -33,13 +33,13 @@ const DEMO_USER = {
 };
 
 describe('Strategy Architecture canonical layout', () => {
-  it('defines Scalping: entry 3m/5m, HTF 15m — no 1m', () => {
+  it('defines Scalping: entry 1m/3m/5m, HTF 15m', () => {
     const a = STRATEGY_ARCHITECTURE.scalping;
-    assert.deepEqual([...a.entryTimeframes], ['3m', '5m']);
+    assert.deepEqual([...a.entryTimeframes], ['1m', '3m', '5m']);
     assert.deepEqual([...a.htfTimeframes], ['15m']);
     assert.equal(a.defaultEntryTimeframe, '3m');
     assert.equal(a.defaultHtfTimeframe, '15m');
-    assert.ok(!a.entryTimeframes.includes('1m'));
+    assert.ok(a.entryTimeframes.includes('1m'));
   });
 
   it('defines Day Trading: entry 5m/15m, HTF 1h/4h', () => {
@@ -66,13 +66,13 @@ describe('Strategy Architecture canonical layout', () => {
     assert.doesNotThrow(() => assertStrategyArchitecturesValid());
   });
 
-  it('rejects 1m as scalping entry and entry >= HTF', () => {
+  it('accepts 1m as scalping entry and rejects entry >= HTF', () => {
     const filtered = parseAllowedTimeframes(
       ['3m', '1m', '5m'],
       STRATEGY_ARCHITECTURE.scalping.entryTimeframes,
       [...STRATEGY_ARCHITECTURE.scalping.entryTimeframes]
     );
-    assert.deepEqual(filtered, ['3m', '5m']);
+    assert.deepEqual(filtered, ['1m', '3m', '5m']);
 
     const bad = validateAllStrategyArchitectures({
       scalping: { entryTimeframes: ['15m'], htfTimeframe: '15m' }
@@ -108,7 +108,7 @@ describe('Backend configs consume Strategy Architecture', () => {
     const arch = resolveArchitectureTimeframes('scalping');
     assert.deepEqual([...DEFAULT_SCALPING_CONFIG.entryTimeframes], arch.entryTimeframes);
     assert.equal(DEFAULT_SCALPING_CONFIG.htfTimeframe, arch.htfTimeframe);
-    assert.ok(!DEFAULT_SCALPING_CONFIG.entryTimeframes.includes('1m'));
+    assert.ok(DEFAULT_SCALPING_CONFIG.entryTimeframes.includes('1m'));
   });
 
   it('dayTradingConfig matches architecture', () => {
@@ -129,9 +129,9 @@ describe('Pine generator injects Strategy Configuration', () => {
   it('buildPineTfVariables injects entry/HTF expressions and diagnostics', () => {
     const scalp = buildPineTfVariables('scalping');
     assert.equal(scalp.HTF_TF, '15');
+    assert.match(scalp.ENTRY_CHART_OK, /multiplier == 1/);
     assert.match(scalp.ENTRY_CHART_OK, /multiplier == 3/);
     assert.match(scalp.ENTRY_CHART_OK, /multiplier == 5/);
-    assert.doesNotMatch(scalp.ENTRY_CHART_OK, /multiplier == 1\b/);
     assert.equal(scalp.HTF_TF_OK, 'htfSec == 900');
     assert.match(scalp.DIAG_WRONG_ENTRY, /Wrong Entry Timeframe \(Scalping\)/);
     assert.match(scalp.DIAG_WRONG_HTF, /Wrong HTF Configuration \(Scalping\)/);
@@ -151,7 +151,7 @@ describe('Pine generator injects Strategy Configuration', () => {
     const scalp = Pine.generateForUser(DEMO_USER, { strategy: 'scalping' });
     const day = Pine.generateForUser(DEMO_USER, { strategy: 'daytrading' });
 
-    assert.deepEqual(scalp.strategyArchitecture.entryTimeframes, ['3m', '5m']);
+    assert.deepEqual(scalp.strategyArchitecture.entryTimeframes, ['1m', '3m', '5m']);
     assert.deepEqual(scalp.strategyArchitecture.htfTimeframes, ['15m']);
     assert.equal(scalp.strategyArchitecture.bakedHtfPine, '15');
     assert.match(scalp.script, /input\.timeframe\("15"/);
@@ -160,9 +160,10 @@ describe('Pine generator injects Strategy Configuration', () => {
     assert.match(scalp.script, /Chart opened on HTF \(Scalping\)/);
     assert.match(scalp.script, /Unsupported Strategy Configuration/);
     assert.match(scalp.script, /Missing HTF Confirmation \(Scalping\)/);
-    assert.match(scalp.script, /timeframe\.multiplier == 3 or timeframe\.multiplier == 5/);
-    assert.doesNotMatch(scalp.script, /timeframe\.multiplier == 1 or/);
-    assert.ok(!/SCALPING_ENTRY_TFS.*1m|entries on 3m \/ 1m/.test(scalp.script));
+    assert.match(
+      scalp.script,
+      /timeframe\.multiplier == 1 or timeframe\.multiplier == 3 or timeframe\.multiplier == 5/
+    );
 
     assert.deepEqual(day.strategyArchitecture.entryTimeframes, ['5m', '15m']);
     assert.deepEqual(day.strategyArchitecture.htfTimeframes, ['1h', '4h']);
@@ -173,7 +174,7 @@ describe('Pine generator injects Strategy Configuration', () => {
     assert.match(day.instructions[0], /Day Trading/);
     assert.match(day.instructions[0], /5m or 15m/);
     assert.match(scalp.instructions[0], /Scalping/);
-    assert.match(scalp.instructions[0], /3m or 5m/);
+    assert.match(scalp.instructions[0], /1m, 3m, or 5m/);
     assert.match(scalp.instructions[0], /Day Trading/);
   });
 

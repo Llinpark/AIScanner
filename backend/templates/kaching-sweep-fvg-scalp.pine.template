@@ -316,7 +316,6 @@ pineAlertBlockReason(bool tradeActiveNow) =>
      not htfTfOk ? "wrong_htf" :
      chartIsHtf ? "chart_is_htf" :
      tradeActiveNow ? "trade_active" :
-     not barstate.isrealtime ? "not_realtime" :
      not barstate.isconfirmed ? "bar_unconfirmed" :
      confScore() < confThreshold ? "confidence" :
      not fvgActive ? "fvg_invalid" :
@@ -329,11 +328,11 @@ pineAlertBlockReason(bool tradeActiveNow) =>
 
 // One active trade per chart: never fire/replace while a trade is still open.
 // Alerts fire only on valid entry TF bars (entryTfOk); HTF is confirmation-only.
-// barstate.isrealtime: TradingView ignores alert() on historical bars — without this gate,
-// Entry/SL/TP drawings armed on history with no webhook (orphan visuals vs ALERT NOT FIRED).
-fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and barstate.isrealtime and confScore() >= confThreshold
-fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and barstate.isrealtime and confScore() >= confThreshold
-// Single confirmation event: drawings, UUID, alert(), and lifecycle arm ONLY when this is true.
+// Regression fix (Aug 2026): do NOT require barstate.isrealtime inside fire* / arming.
+// TV already ignores alert() on historical bars; isrealtime gating (9331992) risked
+// suppressing live closes. Drawings stay tied to the same fireLong/fireShort event.
+fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
+fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
 confirmedSignal = fireLong or fireShort
 
 // DEBUG_MODE diagnostics only — never changes fireLong / fireShort / alert() gates.

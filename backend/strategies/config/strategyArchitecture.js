@@ -122,8 +122,8 @@ const STRATEGY_ARCHITECTURE = Object.freeze({
     shortLabel: 'Scalping',
     pineShortTitle: 'Kaching Scalp',
     pineTitle: 'KachingFx Sweep+FVG Scalp',
-    /** Allowed entry chart timeframes (TradingView chart TF). */
-    entryTimeframes: Object.freeze(['3m', '5m']),
+    /** Allowed entry chart timeframes (TradingView chart TF). Includes 1m — pre-Aug-3 production charts. */
+    entryTimeframes: Object.freeze(['1m', '3m', '5m']),
     defaultEntryTimeframe: '3m',
     /** Allowed HTF confirmation timeframes (via request.security only). */
     htfTimeframes: Object.freeze(['15m']),
@@ -328,10 +328,6 @@ function validateStrategyTimeframes(arch, resolved) {
       errors.push(
         `${arch.key}: entry timeframe "${tf}" is not in architecture allowlist [${arch.entryTimeframes.join(', ')}]`
       );
-    }
-    // Hard rule: 1m is never a supported scalping (or any live) entry TF
-    if (tf === '1m') {
-      errors.push(`${arch.key}: entry timeframe "1m" is not supported`);
     }
   }
 

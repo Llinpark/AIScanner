@@ -23,9 +23,9 @@ describe('frontend scalpingDefaults', () => {
     assert.equal(pack.core.autoScanIntervalMs, 60_000);
     assert.equal(pack.core.scanBatchSize, 5);
     assert.equal(pack.core.autoScanEnabled, true);
-    assert.deepEqual([...pack.strategy.entryTimeframes], ['3m', '5m']);
+    assert.deepEqual([...pack.strategy.entryTimeframes], ['1m', '3m', '5m']);
     assert.deepEqual([...pack.strategy.htfTimeframes], ['15m']);
-    assert.ok(!pack.strategy.entryTimeframes.includes('1m'));
+    assert.ok(pack.strategy.entryTimeframes.includes('1m'));
     assert.deepEqual([...pack.strategy.takeProfit.atrCaps], [0.8, 1.4, 2.0]);
     assert.equal(pack.strategy.takeProfit.minScore, 60);
     assert.equal(pack.marketRegime.avoidHighImpactNews, true);

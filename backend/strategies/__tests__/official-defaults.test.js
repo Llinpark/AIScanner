@@ -30,10 +30,10 @@ describe('Official Scalping defaults', () => {
 
   it('strategy core fields match restore pack', () => {
     assert.equal(DEFAULT_SCALPING_CONFIG.htfTimeframe, '15m');
-    assert.deepEqual([...DEFAULT_SCALPING_CONFIG.entryTimeframes], ['3m', '5m']);
+    assert.deepEqual([...DEFAULT_SCALPING_CONFIG.entryTimeframes], ['1m', '3m', '5m']);
     assert.deepEqual([...DEFAULT_SCALPING_CONFIG.htfTimeframes], ['15m']);
     assert.equal(DEFAULT_SCALPING_CONFIG.defaultEntryTimeframe, '3m');
-    assert.ok(!DEFAULT_SCALPING_CONFIG.entryTimeframes.includes('1m'));
+    assert.ok(DEFAULT_SCALPING_CONFIG.entryTimeframes.includes('1m'));
     assert.equal(DEFAULT_SCALPING_CONFIG.confidence.threshold, 70);
     assert.equal(DEFAULT_SCALPING_CONFIG.entry.model, 'ce');
     assert.equal(DEFAULT_SCALPING_CONFIG.entry.maxWaitBars, 10);

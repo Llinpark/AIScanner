@@ -166,9 +166,14 @@ function isTimeframeAllowed(interval, subscription) {
   );
 }
 
-/** Timeframe check for TV webhook distribution. */
-function isTradingViewTimeframeAllowed(interval, subscription) {
-  return isTimeframeAllowed(interval, subscription);
+/**
+ * TradingView webhook distribution: accept any timeframe from Pine.
+ * Tier timeframe lists gate in-app charts only — chart TF is source of truth for webhooks
+ * (same policy as isTradingViewSymbolAllowed). Filtering here silently dropped Pro
+ * subscribers when Scalping defaulted to 3m after Aug 3 architecture (Pro list lacked 3m).
+ */
+function isTradingViewTimeframeAllowed(_interval, _subscription) {
+  return true;
 }
 
 function historyCutoffDate(subscription) {

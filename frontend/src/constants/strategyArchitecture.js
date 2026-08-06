@@ -12,15 +12,15 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     id: 'liquidity_sweep_fvg_scalp',
     name: 'Liquidity Sweep + Fair Value Gap (Scalping)',
     shortLabel: 'Scalping',
-    entryTimeframes: Object.freeze(['3m', '5m']),
+    entryTimeframes: Object.freeze(['1m', '3m', '5m']),
     defaultEntryTimeframe: '3m',
     htfTimeframes: Object.freeze(['15m']),
     defaultHtfTimeframe: '15m',
     /** UX copy for TradingView / admin */
-    entrySummary: '3m or 5m',
+    entrySummary: '1m, 3m, or 5m',
     htfSummary: '15m',
     chartHint:
-      'Scalping: attach to a 3m or 5m chart only. 15m is HTF Confirmation via request.security — not an entry chart. Want 15m entries? Switch strategy to Day Trading.'
+      'Scalping: attach to a 1m, 3m, or 5m chart. 15m is HTF Confirmation via request.security — not an entry chart. Want 15m entries? Switch strategy to Day Trading.'
   }),
   daytrading: Object.freeze({
     key: 'daytrading',
