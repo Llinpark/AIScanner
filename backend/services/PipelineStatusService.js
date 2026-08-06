@@ -203,6 +203,9 @@ function record(stage, status, meta = {}) {
     memory.lastWebhookReceived = entry;
     if (ok) memory.lastAlertFired = entry;
     else memory.webhookFailures += 1;
+  } else if (/^WebhookRateLimited$/i.test(s) || /^WebhookParseError$/i.test(s)) {
+    // Pre-route rejects (429 / bad JSON) — never reach [TV WEBHOOK RECEIVED].
+    memory.webhookFailures += 1;
   } else if (/^Auth$/i.test(s)) {
     if (ok) memory.lastAuthPassed = entry;
     else {

@@ -152,6 +152,22 @@ describe('PipelineStatusService ring buffer + extended status', () => {
     assert.ok(status.webhookFailures >= 1);
     assert.equal(status.lastFailureStage, 'Auth');
   });
+
+  it('records pre-route WebhookRateLimited and WebhookParseError into ring + failures', async () => {
+    logPipeline('WebhookRateLimited', 'FAIL', {
+      reason: 'limiter=webhookLimiter; path=/api/webhook/tradingview; ip=1.2.3.4; status=429'
+    });
+    logPipeline('WebhookParseError', 'FAIL', {
+      reason: 'ip=1.2.3.4; type=entity.parse.failed; Unexpected token'
+    });
+    const status = await PipelineStatusService.getStatus();
+    assert.ok(status.webhookFailures >= 2);
+    assert.equal(status.lastFailureStage, 'WebhookParseError');
+    const live = await PipelineStatusService.getLivePipeline(10);
+    const types = live.events.map(e => e.type);
+    assert.ok(types.includes('WebhookParseError'));
+    assert.ok(types.includes('WebhookRateLimited'));
+  });
 });
 
 describe('PipelineSubscriberStatsService', () => {

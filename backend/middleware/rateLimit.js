@@ -8,11 +8,45 @@ function clientKey(req) {
   );
 }
 
+/** True for the TradingView webhook route (pre-handler 429s must be observable). */
+function isTradingViewWebhookPath(req) {
+  const raw = String(req.originalUrl || req.url || req.path || '');
+  const pathOnly = raw.split('?')[0].replace(/\/+$/, '') || '/';
+  return pathOnly === '/api/webhook/tradingview' || pathOnly.endsWith('/api/webhook/tradingview');
+}
+
+/**
+ * Log + PipelineStatus when a limiter rejects the TV webhook before the route handler
+ * (where `[TV WEBHOOK RECEIVED]` would otherwise never appear).
+ */
+function observeTradingViewWebhookRateLimit(req, limiterName) {
+  if (!isTradingViewWebhookPath(req)) return;
+  try {
+    const { logPipeline, clientIp } = require('../utils/pipelineLog');
+    const ip = clientIp(req);
+    const path = String(req.originalUrl || req.url || req.path || '').split('?')[0];
+    console.warn(
+      `[TV WEBHOOK RATE LIMITED] limiter=${limiterName} path=${path} ip=${ip} status=429`
+    );
+    logPipeline('WebhookRateLimited', 'FAIL', {
+      reason: `limiter=${limiterName}; path=${path}; ip=${ip}; status=429`
+    });
+  } catch {
+    // Observability must never break rate limiting.
+  }
+}
+
 /**
  * In-memory sliding-window limiter with periodic stale-bucket cleanup.
  * Fine for single-machine Fly VMs; Redis-backed limits are a follow-up for multi-node.
  */
-function createRateLimiter({ windowMs = 60_000, max = 60, keyGenerator = clientKey, message } = {}) {
+function createRateLimiter({
+  windowMs = 60_000,
+  max = 60,
+  keyGenerator = clientKey,
+  message,
+  name = 'rateLimiter'
+} = {}) {
   const hits = new Map();
   const CLEANUP_EVERY = Math.max(windowMs, 60_000);
 
@@ -39,6 +73,7 @@ function createRateLimiter({ windowMs = 60_000, max = 60, keyGenerator = clientK
     bucket.count += 1;
 
     if (bucket.count > max) {
+      observeTradingViewWebhookRateLimit(req, name);
       res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
       return res.status(429).json({
         message: message || 'Too many requests. Please try again later.'
@@ -92,12 +127,17 @@ function createAuthFailureTracker({
   };
 }
 
-const globalApiLimiter = createRateLimiter({ windowMs: 60_000, max: 300 });
+const globalApiLimiter = createRateLimiter({
+  windowMs: 60_000,
+  max: 300,
+  name: 'globalApiLimiter'
+});
 
 /** Login / register credential attempts (IP-scoped). */
 const authAttemptLimiter = createRateLimiter({
   windowMs: 15 * 60_000,
   max: 30,
+  name: 'authAttemptLimiter',
   message: 'Too many authentication attempts. Please wait and try again.'
 });
 
@@ -105,6 +145,7 @@ const authAttemptLimiter = createRateLimiter({
 const authEmailLimiter = createRateLimiter({
   windowMs: 15 * 60_000,
   max: 10,
+  name: 'authEmailLimiter',
   message: 'Too many email requests. Please wait and try again.'
 });
 
@@ -115,6 +156,7 @@ const authEmailLimiter = createRateLimiter({
 const authTokenLimiter = createRateLimiter({
   windowMs: 15 * 60_000,
   max: 20,
+  name: 'authTokenLimiter',
   message: 'Too many verification attempts. Please wait and try again.'
 });
 
@@ -124,11 +166,13 @@ const authLimiter = authAttemptLimiter;
 const webhookLimiter = createRateLimiter({
   windowMs: 60_000,
   max: 120,
+  name: 'webhookLimiter',
   message: 'Webhook rate limit exceeded.'
 });
 const scannerLimiter = createRateLimiter({
   windowMs: 60_000,
   max: 40,
+  name: 'scannerLimiter',
   message: 'Scanner rate limit exceeded.'
 });
 const tradingViewAuthFailureTracker = createAuthFailureTracker({
@@ -141,6 +185,8 @@ module.exports = {
   createRateLimiter,
   createAuthFailureTracker,
   clientKey,
+  isTradingViewWebhookPath,
+  observeTradingViewWebhookRateLimit,
   globalApiLimiter,
   authLimiter,
   authAttemptLimiter,

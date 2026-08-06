@@ -2197,6 +2197,36 @@ io.on('connection', socket => {
 });
 
 app.use((err, req, res, next) => {
+  // JSON body parse failures hit here BEFORE the route → no [TV WEBHOOK RECEIVED].
+  // Surface them in Fly logs + Admin Live Pipeline so silent TV drops are diagnosable.
+  const isTvWebhook =
+    typeof req.path === 'string' &&
+    (req.path === '/api/webhook/tradingview' ||
+      String(req.originalUrl || '').split('?')[0] === '/api/webhook/tradingview');
+  const isJsonParseError =
+    err?.type === 'entity.parse.failed' ||
+    (err instanceof SyntaxError &&
+      (err.status === 400 || err.statusCode === 400 || err.type === 'entity.parse.failed'));
+
+  if (isTvWebhook && isJsonParseError) {
+    const ip = clientIp(req);
+    const detail = err?.message || 'entity.parse.failed';
+    console.warn(
+      `[TV WEBHOOK PARSE ERROR] path=/api/webhook/tradingview ip=${ip} ` +
+        `type=${err?.type || 'SyntaxError'} detail=${detail}`
+    );
+    logPipeline('WebhookParseError', 'FAIL', {
+      reason: `ip=${ip}; type=${err?.type || 'SyntaxError'}; ${detail}`
+    });
+    if (res.headersSent) {
+      return next(err);
+    }
+    return res.status(400).json({
+      message: 'Invalid JSON body for TradingView webhook',
+      reason: 'entity.parse.failed'
+    });
+  }
+
   console.error('Unhandled route error:', err);
   if (res.headersSent) {
     return next(err);
