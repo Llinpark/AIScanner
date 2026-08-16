@@ -65,8 +65,9 @@ describe('Issues 5/8/11 — lifecycle, UUID sync, one-active registry', () => {
       alertType: 'entry',
       signalUuid: 'gold-2'
     });
-    assert.equal(gate.allowed, false);
-    assert.equal(gate.reason, 'active_trade_exists');
+    assert.equal(gate.allowed, true);
+    assert.equal(gate.reason, 'replaced_active_trade');
+    assert.equal(gate.replaced, true);
   });
 
   it('treats duplicate webhook replay of same UUID as non-overwrite reject', async () => {

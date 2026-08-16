@@ -27,6 +27,19 @@ const linkCodeIndex = new Map();
 let pollingActive = false;
 let pollingOffset = 0;
 
+/** Trade-alert delivery visibility (never log secrets / raw bot token). */
+const TELEGRAM_STATUS = Object.freeze({
+  NOT_ATTEMPTED: 'TELEGRAM_NOT_ATTEMPTED',
+  SKIPPED_TIER: 'TELEGRAM_SKIPPED_TIER',
+  SKIPPED_NO_CHAT_ID: 'TELEGRAM_SKIPPED_NO_CHAT_ID',
+  SKIPPED_DISABLED: 'TELEGRAM_SKIPPED_DISABLED',
+  SKIPPED_NOT_CONFIGURED: 'TELEGRAM_SKIPPED_NOT_CONFIGURED',
+  SKIPPED_SELF_TEST: 'TELEGRAM_SKIPPED_SELF_TEST',
+  SEND_STARTED: 'TELEGRAM_SEND_STARTED',
+  SEND_SUCCESS: 'TELEGRAM_SEND_SUCCESS',
+  SEND_FAILED: 'TELEGRAM_SEND_FAILED'
+});
+
 function getConfig() {
   return {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',
@@ -39,6 +52,30 @@ function getConfig() {
 
 function isConfigured() {
   return Boolean(getConfig().botToken);
+}
+
+function maskChatId(chatId) {
+  const s = String(chatId || '');
+  if (!s) return null;
+  if (s.length <= 4) return '****';
+  return `${'*'.repeat(Math.max(0, s.length - 4))}${s.slice(-4)}`;
+}
+
+function extractSignalDiag(signalDoc) {
+  const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc || {};
+  return {
+    requestId: signal.pipelineRequestId || null,
+    signalUuid: signal.signalUuid || signal.signalId || signal._id || signal.id || null,
+    symbol: signal.symbol || null,
+    timeframe: signal.timeframe || null
+  };
+}
+
+function logTelegramDiag(tag, fields = {}) {
+  const parts = Object.entries(fields)
+    .filter(([, v]) => v !== undefined)
+    .map(([k, v]) => `${k}=${v == null || v === '' ? 'n/a' : String(v).replace(/\s+/g, ' ')}`);
+  console.log(`[${tag}] ${parts.join(' ')}`);
 }
 
 function isDbConnected() {
@@ -169,7 +206,9 @@ async function createLinkCode(userId) {
 
 async function getTelegramState(userId) {
   const user = await findUserById(userId);
-  return user?.telegram || {};
+  const raw = user?.telegram;
+  if (!raw) return {};
+  return raw.toObject?.() || { ...raw };
 }
 
 function getBotDeepLink(startPayload = '') {
@@ -180,28 +219,106 @@ function getBotDeepLink(startPayload = '') {
     : `https://t.me/${username}`;
 }
 
+function attachTelegramError(err, extras = {}) {
+  const error = err instanceof Error ? err : new Error(String(err || 'Telegram error'));
+  if (extras.httpStatus != null) error.httpStatus = extras.httpStatus;
+  if (extras.telegramErrorCode != null) error.telegramErrorCode = extras.telegramErrorCode;
+  if (extras.description != null) error.description = extras.description;
+  if (extras.telegramMethod != null) error.telegramMethod = extras.telegramMethod;
+  return error;
+}
+
+function telegramFailureFromError(error) {
+  return {
+    ok: false,
+    status: TELEGRAM_STATUS.SEND_FAILED,
+    httpStatus: error?.httpStatus || null,
+    telegramErrorCode: error?.telegramErrorCode || null,
+    description: error?.description || error?.message || 'telegram_send_failed',
+    reason: error?.description || error?.message || 'telegram_send_failed'
+  };
+}
+
 async function apiRequest(method, payload = {}) {
   const { botToken } = getConfig();
   if (!botToken) {
-    throw new Error('Telegram bot token is not configured');
+    throw attachTelegramError(new Error('Telegram bot token is not configured'), {
+      httpStatus: null,
+      telegramErrorCode: null,
+      description: 'Telegram bot token is not configured',
+      telegramMethod: method
+    });
   }
 
-  const response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await fetch(`https://api.telegram.org/bot${botToken}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (networkErr) {
+    throw attachTelegramError(networkErr, {
+      httpStatus: null,
+      telegramErrorCode: null,
+      description: networkErr?.message || 'telegram_network_error',
+      telegramMethod: method
+    });
+  }
 
-  const data = await response.json();
+  let data = {};
+  try {
+    data = await response.json();
+  } catch {
+    data = {};
+  }
+
   if (!data.ok) {
-    throw new Error(data.description || `Telegram API error (${method})`);
+    const description =
+      data.description || `Telegram API error (${method}) http=${response.status}`;
+    throw attachTelegramError(new Error(description), {
+      httpStatus: response.status,
+      telegramErrorCode: data.error_code != null ? data.error_code : response.status,
+      description,
+      telegramMethod: method
+    });
   }
 
   return data.result;
 }
 
+/**
+ * Send a Telegram message.
+ * Default return (link/commands): Telegram result object or null (backward compatible).
+ * options.withStatus=true (trade alerts): { ok, status, result?, ...errorFields }.
+ */
 async function sendMessage(chatId, text, options = {}) {
-  if (!chatId || !isConfigured()) return null;
+  const withStatus = Boolean(options.withStatus);
+  const diag = options.diag || {};
+
+  if (!chatId || !isConfigured()) {
+    if (withStatus) {
+      return {
+        ok: false,
+        status: !chatId ? TELEGRAM_STATUS.SKIPPED_NO_CHAT_ID : TELEGRAM_STATUS.SKIPPED_NOT_CONFIGURED,
+        reason: !chatId ? 'missing_chat_id' : 'bot_not_configured',
+        httpStatus: null,
+        telegramErrorCode: null,
+        description: null
+      };
+    }
+    return null;
+  }
+
+  logTelegramDiag('TELEGRAM SEND START', {
+    requestId: diag.requestId,
+    signalUuid: diag.signalUuid,
+    symbol: diag.symbol,
+    timeframe: diag.timeframe,
+    subscriber: diag.subscriber,
+    chatIdPresent: true,
+    chatIdMasked: maskChatId(chatId)
+  });
 
   try {
     const payload = {
@@ -215,9 +332,39 @@ async function sendMessage(chatId, text, options = {}) {
       payload.reply_markup = options.replyMarkup;
     }
 
-    return await apiRequest('sendMessage', payload);
+    const result = await apiRequest('sendMessage', payload);
+    logTelegramDiag('TELEGRAM SEND SUCCESS', {
+      requestId: diag.requestId,
+      signalUuid: diag.signalUuid,
+      symbol: diag.symbol,
+      subscriber: diag.subscriber,
+      telegramMessageId: result?.message_id || null
+    });
+    if (withStatus) {
+      return {
+        ok: true,
+        status: TELEGRAM_STATUS.SEND_SUCCESS,
+        result,
+        telegramMessageId: result?.message_id || null
+      };
+    }
+    return result;
   } catch (error) {
-    console.warn('[Telegram] sendMessage failed:', error.message);
+    const failure = telegramFailureFromError(error);
+    logTelegramDiag('TELEGRAM SEND FAILED', {
+      requestId: diag.requestId,
+      signalUuid: diag.signalUuid,
+      symbol: diag.symbol,
+      subscriber: diag.subscriber,
+      httpStatus: failure.httpStatus,
+      telegramErrorCode: failure.telegramErrorCode,
+      description: failure.description
+    });
+    console.warn(
+      `[Telegram] sendMessage failed: httpStatus=${failure.httpStatus || 'n/a'} ` +
+        `code=${failure.telegramErrorCode || 'n/a'} description=${failure.description}`
+    );
+    if (withStatus) return failure;
     return null;
   }
 }
@@ -309,9 +456,10 @@ function formatSignalMessage(signal, subscriber = null, options = {}) {
   if (includeExecuteButton && isEntryAlert(alertType)) {
     const secs = Number(options.confirmSeconds) || 180;
     const windowLabel = secs % 60 === 0 ? `${secs / 60} min` : `${secs}s`;
+    // Telegram HTML does not allow nested tags — keep bold/italic as siblings only.
     lines.push(
-      `\n<i>Pro Manual Confirmation — tap <b>Execute Trade</b> within ${windowLabel} to queue MT5. ` +
-        `After expiry this signal is marked Expired and will not execute. Tap <b>Ignore Trade</b> to discard. ` +
+      `\n<i>Pro Manual Confirmation — tap</i> <b>Execute Trade</b> <i>within ${windowLabel} to queue MT5. ` +
+        `After expiry this signal is marked Expired and will not execute. Tap</i> <b>Ignore Trade</b> <i>to discard. ` +
         `Once queued, the EA manages SL/TP/BE/trail/partials — no further Telegram steps.</i>`
     );
   }
@@ -421,16 +569,116 @@ function buildSignalReplyMarkup(signal, subscriber, options = {}) {
 /**
  * Notification-only channel. Execute button is opt-in via options (Manual mode).
  * MT5 auto-queue is owned by TradeDeliveryService — not Telegram.
+ * Returns structured delivery result (ok + status + Telegram API error fields when present).
  */
 async function notifySubscriber(subscriber, signalDoc, options = {}) {
+  const signalDiag = extractSignalDiag(signalDoc);
+  const subLabel = subscriber?.email || subscriber?.id || 'unknown';
+  const subscription = getEffectiveSubscription(subscriber);
+  const tier = subscription?.tier || 'basic';
+  const telegram = subscriber?.telegram || {};
+  const chatIdPresent = Boolean(telegram.chatId);
+  const telegramEnabled = telegram.enabled !== false;
+
+  // Telegram alerts do NOT require MT5 — Pro Alerts Only and Premium notification-only both use this path.
   if (!subscriber || !userHasTierFeature(subscriber, 'telegramAlerts')) {
-    return false;
+    const result = {
+      ok: false,
+      status: TELEGRAM_STATUS.SKIPPED_TIER,
+      reason: 'insufficient_tier',
+      tier,
+      telegramEnabled,
+      chatIdPresent
+    };
+    logTelegramDiag('TELEGRAM ELIGIBILITY', {
+      ...signalDiag,
+      subscriber: subLabel,
+      tier,
+      telegramEnabled,
+      chatIdPresent,
+      eligible: false,
+      skipReason: result.reason
+    });
+    return result;
   }
 
-  const telegram = subscriber.telegram || {};
-  if (!telegram.chatId || telegram.enabled === false) {
-    return false;
+  if (!telegram.chatId) {
+    const result = {
+      ok: false,
+      status: TELEGRAM_STATUS.SKIPPED_NO_CHAT_ID,
+      reason: 'missing_chat_id',
+      tier,
+      telegramEnabled,
+      chatIdPresent: false
+    };
+    logTelegramDiag('TELEGRAM ELIGIBILITY', {
+      ...signalDiag,
+      subscriber: subLabel,
+      tier,
+      telegramEnabled,
+      chatIdPresent: false,
+      eligible: false,
+      skipReason: result.reason
+    });
+    return result;
   }
+
+  if (telegram.enabled === false) {
+    const result = {
+      ok: false,
+      status: TELEGRAM_STATUS.SKIPPED_DISABLED,
+      reason: 'telegram_disabled',
+      tier,
+      telegramEnabled: false,
+      chatIdPresent: true
+    };
+    logTelegramDiag('TELEGRAM ELIGIBILITY', {
+      ...signalDiag,
+      subscriber: subLabel,
+      tier,
+      telegramEnabled: false,
+      chatIdPresent: true,
+      eligible: false,
+      skipReason: result.reason
+    });
+    return result;
+  }
+
+  if (!isConfigured()) {
+    console.warn('[Telegram] notify skipped: TELEGRAM_BOT_TOKEN not configured');
+    const result = {
+      ok: false,
+      status: TELEGRAM_STATUS.SKIPPED_NOT_CONFIGURED,
+      reason: 'bot_not_configured',
+      tier,
+      telegramEnabled,
+      chatIdPresent: true
+    };
+    logTelegramDiag('TELEGRAM ELIGIBILITY', {
+      ...signalDiag,
+      subscriber: subLabel,
+      tier,
+      telegramEnabled,
+      chatIdPresent: true,
+      eligible: false,
+      skipReason: result.reason
+    });
+    return result;
+  }
+
+  logTelegramDiag('TELEGRAM ELIGIBILITY', {
+    ...signalDiag,
+    subscriber: subLabel,
+    tier,
+    telegramEnabled: true,
+    chatIdPresent: true,
+    eligible: true
+  });
+  logTelegramDiag('TELEGRAM NOTIFY START', {
+    ...signalDiag,
+    subscriber: subLabel,
+    tier
+  });
 
   const includeExecuteButton = Boolean(options.includeExecuteButton);
   const alertOnly = resolveAlertOnlyOption(subscriber, options);
@@ -440,12 +688,25 @@ async function notifySubscriber(subscriber, signalDoc, options = {}) {
     includeExecuteButton: includeExecuteButton && !alertOnly,
     alertOnly
   });
-  const result = await sendMessage(telegram.chatId, text, { replyMarkup });
-  return Boolean(result);
+  const sendResult = await sendMessage(telegram.chatId, text, {
+    replyMarkup,
+    withStatus: true,
+    diag: { ...signalDiag, subscriber: subLabel }
+  });
+
+  return {
+    ...sendResult,
+    tier,
+    telegramEnabled: true,
+    chatIdPresent: true
+  };
 }
 
 async function linkChatToUser(userId, chatId, username) {
+  // Preserve telegramMode / other prefs — linking must not reset Pro Alerts Only.
+  const current = await getTelegramState(userId);
   const telegram = {
+    ...current,
     chatId: String(chatId),
     username: username || '',
     linkedAt: new Date(),
@@ -947,6 +1208,7 @@ async function ensureDeliveryMode() {
 }
 
 module.exports = {
+  TELEGRAM_STATUS,
   isConfigured,
   getConfig,
   createLinkCode,
@@ -964,6 +1226,7 @@ module.exports = {
   stopPolling,
   ensureDeliveryMode,
   getBotDeepLink,
+  maskChatId,
   // Test helpers
   _resolveLinkCode: resolveLinkCode,
   _clearLinkCodeIndex: () => linkCodeIndex.clear()

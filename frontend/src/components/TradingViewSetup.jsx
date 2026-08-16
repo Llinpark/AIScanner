@@ -30,7 +30,11 @@ export default function TradingViewSetup() {
         <li className="setup-step">
           <strong>Create an alert</strong>
           <p>
-            Create one alert for that script, turn on webhook notifications, and paste your Kaching webhook URL. One
+            Create ONE alert on the indicator. Condition: Any alert() function call. Enable Webhook URL and paste your
+            Kaching webhook URL from the dashboard. Message: leave BLANK (strongly recommended). If TradingView
+            requires a placeholder, use ONLY {'{{alert_message}}'}. Never use{' '}
+            {'{{strategy.order.alert_message}}'} — that is for strategy() order fills only and will not expand on this
+            indicator. Never type custom JSON. After regenerating Pine, delete the old alert and create a new one. One
             alert covers Entry, stop loss, and take-profit levels.
           </p>
         </li>

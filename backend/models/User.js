@@ -166,6 +166,22 @@ const UserConfigSchema = new mongoose.Schema({
     webhookCount: { type: Number, default: 0 },
     updatedAt: { type: Date, default: null }
   },
+  /**
+   * Additive Pine client version registry (observability only).
+   * Never gates auth, delivery, scoring, or filters.
+   */
+  pineClientRegistry: {
+    pineClientVersion: { type: String, default: null },
+    scriptGenerationId: { type: String, default: null },
+    scriptId: { type: String, default: null },
+    strategy: { type: String, default: null },
+    generatedAt: { type: Date, default: null },
+    capabilities: { type: [String], default: undefined },
+    lastWebhookVersion: { type: String, default: null },
+    lastWebhookAt: { type: Date, default: null },
+    lastWebhookCapabilities: { type: [String], default: undefined },
+    updatedAt: { type: Date, default: null }
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

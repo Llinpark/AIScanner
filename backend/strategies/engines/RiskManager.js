@@ -1,10 +1,12 @@
 /**
- * RiskManager — stop loss placement.
+ * RiskManager — stop loss placement with max-ATR validation + FVG fallback.
  * Bullish: below sweep low OR below FVG (configurable).
  * Bearish: above sweep high OR above FVG.
+ * Never clamps a structural stop arbitrarily closer to entry.
  */
 
 const { atr, getPipSize } = require('../utils/candleMath');
+const { resolveValidStop, isSyntheticSymbol } = require('../../utils/kachingSlRisk');
 
 class RiskManager {
   /**
@@ -22,46 +24,51 @@ class RiskManager {
    * @param {import('../types').FairValueGap} params.fvg
    * @param {import('../types').Candle[]} params.candles
    * @param {string} [params.symbol]
-   * @returns {{ stop_loss: number, model: string, risk: number }|null}
+   * @returns {{ stop_loss: number, model: string, risk: number, rejectReason?: string }|null}
    */
   computeStop({ direction, entry, sweep, fvg, candles, symbol = '' }) {
     if (!Number.isFinite(entry) || !sweep || !fvg) return null;
 
-    const model = (this.config.stop?.model || 'sweep').toLowerCase();
-    const atrVal = atr(candles, this.config.displacement?.atrPeriod || 14);
-    const buffer = (this.config.stop?.bufferAtrRatio || 0.05) * (atrVal || getPipSize(symbol) * 2);
+    const atrVal = atr(candles, this.config.displacement?.atrPeriod || 14) || getPipSize(symbol) * 2;
+    const bufferAtrRatio = this.config.stop?.bufferAtrRatio ?? 0.05;
+    const maxStopAtrMult =
+      this.config.stop?.maxStopAtrMult ??
+      (isSyntheticSymbol(symbol) ? 1.5 : 2.5);
+    const stopModel = (this.config.stop?.model || 'sweep').toLowerCase();
 
-    let stop;
-    let used = model;
+    const resolved = resolveValidStop({
+      direction,
+      entry,
+      sweepExtreme: sweep.sweepPrice,
+      fvgTop: fvg.gapTop,
+      fvgBot: fvg.gapBottom,
+      atr: atrVal,
+      bufferAtrRatio,
+      maxStopAtrMult,
+      stopModel,
+      symbol
+    });
 
-    const sweepStop = direction === 'long' ? sweep.sweepPrice - buffer : sweep.sweepPrice + buffer;
-    const fvgStop =
-      direction === 'long' ? fvg.gapBottom - buffer : fvg.gapTop + buffer;
-
-    if (model === 'fvg') {
-      stop = fvgStop;
-      used = 'fvg';
-    } else if (model === 'sweep_or_fvg') {
-      // More protective: farther from entry
-      if (direction === 'long') {
-        stop = Math.min(sweepStop, fvgStop);
-      } else {
-        stop = Math.max(sweepStop, fvgStop);
-      }
-      used = 'sweep_or_fvg';
-    } else {
-      stop = sweepStop;
-      used = 'sweep';
+    if (!resolved.ok) {
+      return {
+        stop_loss: null,
+        model: resolved.kind || stopModel,
+        risk: resolved.distance || 0,
+        rejectReason: resolved.reason || 'SIGNAL_REJECTED_SL_TOO_FAR',
+        atr: atrVal,
+        maxStopAtrMult,
+        maxDistance: resolved.maxDistance
+      };
     }
 
-    const risk = Math.abs(entry - stop);
-    if (!(risk > 0)) return null;
-
-    // Sanity: long stop must be below entry
-    if (direction === 'long' && stop >= entry) return null;
-    if (direction === 'short' && stop <= entry) return null;
-
-    return { stop_loss: stop, model: used, risk };
+    return {
+      stop_loss: resolved.sl,
+      model: resolved.kind,
+      risk: resolved.distance,
+      atr: atrVal,
+      maxStopAtrMult,
+      maxDistance: resolved.maxDistance
+    };
   }
 }
 

@@ -89,6 +89,26 @@ describe('TradeDelivery routing with telegramMode', () => {
     assert.equal(mt5Live.reason, 'manual_mode');
   });
 
+  it('Pro alerts_only without MT5 devices remains telegram-eligible (gates only)', async () => {
+    const { userHasTierFeature } = require('../../utils/subscriptionAccess');
+    const subscriber = proUser({
+      mt5: { executionMode: 'manual', enabled: false, devices: [] },
+      telegram: { telegramMode: 'alerts_only', chatId: '999001', enabled: true }
+    });
+    assert.equal(isAlertsOnlyTelegram(subscriber), true);
+    assert.equal(userHasTierFeature(subscriber, 'telegramAlerts'), true);
+    assert.equal(Mt5TradeCopierService.isMt5Linked(subscriber.mt5), false);
+    // deliverTelegram must not require MT5 — only chatId + tier (self-test skip is separate).
+    const skipped = await TradeDeliveryService.deliverTelegram(
+      subscriber,
+      { alertType: 'entry', symbol: 'EURUSD', selfTest: true },
+      { alertOnly: true }
+    );
+    assert.equal(skipped.ok, false); // self-test skip, not an MT5 gate
+    assert.equal(skipped.reason, 'self_test_skip');
+    assert.match(String(skipped.status), /SELF_TEST|SKIPPED/i);
+  });
+
   it('Scenario 1 helpers: manual_confirmation keeps Execute path eligibility', () => {
     const user = proUser({
       mt5: {

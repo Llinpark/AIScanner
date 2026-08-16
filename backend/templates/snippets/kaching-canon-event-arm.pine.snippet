@@ -1,0 +1,312 @@
+// ===== OPTION A — CHRONOLOGICAL ARM + CANONICAL LIFECYCLE =====
+// For each canonical bar in this display bar (event-safe order):
+//   1) arm any canonical events with that signalTime
+//   2) evaluate TP/SL/expiry on canonical OHLC for the active trade
+// Levels/UUID frozen from canonical engine. Display TF never re-detects setups.
+// Alerts allowed on every allowed display TF; backend UUID dedupes Telegram/MT5 entries.
+// Prefer ONE TradingView alert on the canonical TF to reduce webhook noise.
+
+pineAlertBlockReason(bool tradeActiveNow) =>
+    not licenseOk ? "license" :
+     not isAllowedDisplayTf ? "wrong_display_tf" :
+     not barstate.isconfirmed ? "bar_unconfirmed" :
+     bridgeEventCount <= 0 ? "no_canon_setup" :
+     tradeActiveNow ? "will_replace_active" :
+     "no_setup"
+
+setupLong = licenseOk and isAllowedDisplayTf and newCanonLong and barstate.isconfirmed
+setupShort = licenseOk and isAllowedDisplayTf and newCanonShort and barstate.isconfirmed
+fireLong = setupLong
+fireShort = setupShort
+confirmedSignal = bridgeEventCount > 0 and licenseOk and isAllowedDisplayTf and barstate.isconfirmed
+
+if DEBUG_MODE and barstate.islast
+    dbgTradeActive = tradeIsActive()
+    dbgReason = pineAlertBlockReason(dbgTradeActive)
+    dbgState = "chartTf=" + timeframe.period + " canonicalSignalTf=" + CANONICAL_SIGNAL_TF + " bridge=" + (useLowerTfBridge ? "lower_tf" : useDirectCanon ? "direct" : useSecurityMirror ? "security_mirror" : "none") + " bridgeEvents=" + str.tostring(bridgeEventCount) + " isCanonicalChart=" + str.tostring(isCanonicalChart) + " isAllowedDisplayTf=" + str.tostring(isAllowedDisplayTf) + " tradingStyle=" + tradingStyle + " entryTF={{ARCH_ENTRY_LABEL}} htf=" + htfTf + " conf=" + str.tostring(nz(cConf, 0) * 100.0, "#.#") + "/" + str.tostring(confThreshold, "#.#") + " licenseOk=" + str.tostring(licenseOk) + " entryTfOk=" + str.tostring(entryTfOk) + " tradeActive=" + str.tostring(dbgTradeActive) + " realtime=" + str.tostring(barstate.isrealtime) + " confirmed=" + str.tostring(barstate.isconfirmed) + " cReadyLong=" + str.tostring(cReadyLong) + " cReadyShort=" + str.tostring(cReadyShort) + " fireLong=" + str.tostring(fireLong) + " fireShort=" + str.tostring(fireShort) + " confirmedSignal=" + str.tostring(confirmedSignal)
+    log.info("[PIPELINE] DEBUG STATE | " + syminfo.ticker + " | " + dbgState)
+    if not confirmedSignal
+        dbgText = "DEBUG: " + dbgReason + " | " + dbgState
+        if na(debugBlockLabel)
+            debugBlockLabel := label.new(bar_index, high, dbgText, style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
+        else
+            label.set_xy(debugBlockLabel, bar_index, high)
+            label.set_text(debugBlockLabel, dbgText)
+        log.info("[PIPELINE] ALERT NOT FIRED | " + syminfo.ticker + " | " + timeframe.period + " | reason=" + dbgReason + " | " + dbgState)
+    else if not na(debugBlockLabel)
+        label.delete(debugBlockLabel)
+        debugBlockLabel := na
+else if not na(debugBlockLabel) and not DEBUG_MODE
+    label.delete(debugBlockLabel)
+    debugBlockLabel := na
+
+// Which bridge events have been armed this bar (parallel bool array via int 0/1).
+var array<int> evArmedFlags = array.new_int()
+
+if barstate.isconfirmed
+    array.clear(evArmedFlags)
+    if array.size(evSignalTime) > 0
+        for _zi = 0 to array.size(evSignalTime) - 1
+            array.push(evArmedFlags, 0)
+
+    nLifeBars = array.size(canonLifeTime)
+    if nLifeBars > 0
+        for li = 0 to nLifeBars - 1
+            if array.size(canonLifeHigh) <= li or array.size(canonLifeLow) <= li or array.size(canonLifeClose) <= li
+                continue
+            lifeT = array.get(canonLifeTime, li)
+            lifeH = array.get(canonLifeHigh, li)
+            lifeL = array.get(canonLifeLow, li)
+            lifeC = array.get(canonLifeClose, li)
+
+            // --- Arm events whose canonical signalTime matches this life bar ---
+            if licenseOk and isAllowedDisplayTf and array.size(evSignalTime) > 0
+                for ei = 0 to array.size(evSignalTime) - 1
+                    // Skip incomplete / misaligned event rows (never array.get on missing companion fields).
+                    if array.size(evArmedFlags) <= ei or array.size(evDir) <= ei or array.size(evEntry) <= ei or array.size(evSl) <= ei or array.size(evTp1) <= ei or array.size(evTp2) <= ei or array.size(evTp3) <= ei or array.size(evFvgTop) <= ei or array.size(evFvgBot) <= ei or array.size(evConf) <= ei or array.size(evSlKind) <= ei
+                        continue
+                    if array.get(evArmedFlags, ei) == 1
+                        continue
+                    stEv = array.get(evSignalTime, ei)
+                    if na(stEv) or na(lifeT) or stEv != lifeT
+                        continue
+                    isLongEv = array.get(evDir, ei) == 1
+                    ee = array.get(evEntry, ei)
+                    ssl = array.get(evSl, ei)
+                    t1 = array.get(evTp1, ei)
+                    t2 = array.get(evTp2, ei)
+                    t3 = array.get(evTp3, ei)
+                    fvgTop = array.get(evFvgTop, ei)
+                    fvgBot = array.get(evFvgBot, ei)
+                    conf = array.get(evConf, ei)
+                    slKind = array.get(evSlKind, ei)
+                    dirStr = isLongEv ? "long" : "short"
+                    sigId = makeCanonicalSignalId(stEv, dirStr)
+                    if tradeIsActive() and str.length(tradeSignalId()) > 0
+                        replMsg = buildPayload("cancelled", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "new_confirmed_setup")
+                        if DEBUG_MODE
+                            log.info("[PIPELINE] ALERT FIRING | alertType=cancelled | reason=new_confirmed_setup | oldUuid=" + tradeSignalId() + " | newUuid=" + sigId + " | symbol=" + syminfo.ticker + " | chartTf=" + timeframe.period)
+                        alert(replMsg, alert.freq_all)
+                    if array.size(tradeLevelLines) > 0
+                        for i = 0 to array.size(tradeLevelLines) - 1
+                            line.delete(array.get(tradeLevelLines, i))
+                    if array.size(tradeLeaderLines) > 0
+                        for i = 0 to array.size(tradeLeaderLines) - 1
+                            line.delete(array.get(tradeLeaderLines, i))
+                    if array.size(tradeLevelLabels) > 0
+                        for i = 0 to array.size(tradeLevelLabels) - 1
+                            label.delete(array.get(tradeLevelLabels, i))
+                    array.clear(tradeLevelLines)
+                    array.clear(tradeLeaderLines)
+                    array.clear(tradeLevelLabels)
+                    if array.size(tradeBadgeHold) > 0
+                        label.delete(array.get(tradeBadgeHold, 0))
+                        array.clear(tradeBadgeHold)
+                    if array.size(tradeFvgHold) > 0
+                        box.delete(array.get(tradeFvgHold, 0))
+                        array.clear(tradeFvgHold)
+                    msg = buildPayload("entry", dirStr, ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
+                    if isLongEv
+                        buyBadge = label.new(bar_index, ee, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small)
+                        array.push(tradeBadgeHold, buyBadge)
+                        if SHOW_FVG_ZONE
+                            buyZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, border_width=1, bgcolor=colLongZoneBg)
+                            array.push(tradeFvgHold, buyZone)
+                    else
+                        sellBadge = label.new(bar_index, ee, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.small)
+                        array.push(tradeBadgeHold, sellBadge)
+                        if SHOW_FVG_ZONE
+                            sellZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, border_width=1, bgcolor=colShortZoneBg)
+                            array.push(tradeFvgHold, sellZone)
+                    if SHOW_TRADE_LINES
+                        [newLines, newLeaders, newLabels, layoutY, layoutSide, layoutStep] = buildTradeDrawings(ee, ssl, t1, t2, t3, isLongEv)
+                        for i = 0 to array.size(newLines) - 1
+                            array.push(tradeLevelLines, array.get(newLines, i))
+                            array.push(tradeLeaderLines, array.get(newLeaders, i))
+                            array.push(tradeLevelLabels, array.get(newLabels, i))
+                            array.set(tradeLabelYs, i, array.get(layoutY, i))
+                            array.set(tradeLayoutSide, i, array.get(layoutSide, i))
+                            array.set(tradeLayoutStep, i, array.get(layoutStep, i))
+                    array.set(tradeStrings, 1, sigId)
+                    array.set(tradeStrings, 0, dirStr)
+                    array.set(tradeFloats, 0, ee)
+                    array.set(tradeFloats, 1, ssl)
+                    array.set(tradeFloats, 2, t1)
+                    array.set(tradeFloats, 3, t2)
+                    array.set(tradeFloats, 4, t3)
+                    array.set(tradeFloats, 5, fvgTop)
+                    array.set(tradeFloats, 6, fvgBot)
+                    array.set(tradeFlags, 1, bar_index)
+                    array.set(tradeFlags, 0, 1)
+                    array.set(tradeFlags, 2, 0)
+                    array.set(tradeFlags, 3, 0)
+                    array.set(tradeCanonMeta, 0, stEv)
+                    array.set(tradeCanonMeta, 1, 0)
+                    array.set(tradeCanonMeta, 2, 0)
+                    lastArmedSignalTime := stEv
+                    lastArmedDir := isLongEv ? 1 : -1
+                    array.set(evArmedFlags, ei, 1)
+                    if DEBUG_MODE
+                        log.info("[PIPELINE] DRAWING CREATED | direction=" + dirStr + " | slKind=" + str.tostring(slKind) + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + sigId + " | price=" + formatPrice(ee) + " | timestamp=" + str.tostring(timenow) + " | bridgeEventIndex=" + str.tostring(ei))
+                        log.info("[PIPELINE] ALERT FIRING | direction=" + dirStr + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
+                    alert(msg, alert.freq_all)
+
+            // --- Canonical lifecycle tick for this OHLC bar ---
+            if tradeIsActive()
+                longTrade = tradeDirection() == "long"
+                entrySt = tradeEntrySignalTime()
+                lastLife = tradeLastLifeTime()
+                if not na(lifeT) and (na(entrySt) or entrySt == 0 or lifeT >= entrySt) and (lastLife == 0 or lifeT > lastLife)
+                    array.set(tradeCanonMeta, 2, lifeT)
+                    array.set(tradeCanonMeta, 1, tradeCanonBarsAlive() + 1)
+                    hitSlWick = longTrade ? lifeL <= tradeSl() : lifeH >= tradeSl()
+                    hitTp3Wick = longTrade ? lifeH >= tradeTp3() : lifeL <= tradeTp3()
+                    hitTp2 = longTrade ? lifeH >= tradeTp2() : lifeL <= tradeTp2()
+                    hitTp1 = longTrade ? lifeH >= tradeTp1() : lifeL <= tradeTp1()
+                    hitSl = hitSlWick and hitTp3Wick ? (longTrade ? lifeC <= tradeSl() : lifeC >= tradeSl()) : hitSlWick
+                    hitTp3 = hitSlWick and hitTp3Wick ? (longTrade ? lifeC >= tradeTp3() : lifeC <= tradeTp3()) : hitTp3Wick
+                    barsAlive = tradeCanonBarsAlive()
+                    expired = enableTradeExpiry and barsAlive >= expiryBars
+                    closeNow = hitSl or hitTp3 or expired
+                    closeAlertType = hitSl ? "stop_loss" : hitTp3 ? "take_profit_3" : "expired"
+                    closeReason = hitSl ? "sl" : hitTp3 ? "tp3" : "candle_expiry"
+                    if closeNow
+                        if str.length(tradeSignalId()) > 0
+                            closeMsg = buildPayload(closeAlertType, tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), closeReason)
+                            if DEBUG_MODE
+                                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=" + closeAlertType + " | reason=" + closeReason)
+                            alert(closeMsg, alert.freq_all)
+                        if array.size(tradeLevelLines) > 0
+                            for i = 0 to array.size(tradeLevelLines) - 1
+                                line.delete(array.get(tradeLevelLines, i))
+                        if array.size(tradeLeaderLines) > 0
+                            for i = 0 to array.size(tradeLeaderLines) - 1
+                                line.delete(array.get(tradeLeaderLines, i))
+                        if array.size(tradeLevelLabels) > 0
+                            for i = 0 to array.size(tradeLevelLabels) - 1
+                                label.delete(array.get(tradeLevelLabels, i))
+                        array.clear(tradeLevelLines)
+                        array.clear(tradeLeaderLines)
+                        array.clear(tradeLevelLabels)
+                        if array.size(tradeBadgeHold) > 0
+                            label.delete(array.get(tradeBadgeHold, 0))
+                            array.clear(tradeBadgeHold)
+                        if array.size(tradeFvgHold) > 0
+                            box.delete(array.get(tradeFvgHold, 0))
+                            array.clear(tradeFvgHold)
+                        array.set(tradeFloats, 0, na)
+                        array.set(tradeFloats, 1, na)
+                        array.set(tradeFloats, 2, na)
+                        array.set(tradeFloats, 3, na)
+                        array.set(tradeFloats, 4, na)
+                        array.set(tradeFloats, 5, na)
+                        array.set(tradeFloats, 6, na)
+                        for i = 0 to 4
+                            array.set(tradeLabelYs, i, na)
+                            array.set(tradeLayoutSide, i, 1)
+                            array.set(tradeLayoutStep, i, 0)
+                        array.set(tradeStrings, 0, "")
+                        array.set(tradeStrings, 1, "")
+                        array.set(tradeFlags, 0, 0)
+                        array.set(tradeFlags, 1, 0)
+                        array.set(tradeFlags, 2, 0)
+                        array.set(tradeFlags, 3, 0)
+                        array.set(tradeCanonMeta, 0, 0)
+                        array.set(tradeCanonMeta, 1, 0)
+                        array.set(tradeCanonMeta, 2, 0)
+                    else
+                        if hitTp1 and not tradeTp1Alerted()
+                            msgTp1 = buildPayload("take_profit_1", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp1")
+                            if DEBUG_MODE
+                                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_1")
+                            alert(msgTp1, alert.freq_all)
+                            array.set(tradeFlags, 2, 1)
+                            if array.size(tradeLevelLabels) > 2
+                                label.set_color(array.get(tradeLevelLabels, 2), color.new(colTpNear, 0))
+                        if hitTp2 and not tradeTp2Alerted()
+                            msgTp2 = buildPayload("take_profit_2", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp2")
+                            if DEBUG_MODE
+                                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_2")
+                            alert(msgTp2, alert.freq_all)
+                            array.set(tradeFlags, 3, 1)
+                            if array.size(tradeLevelLabels) > 3
+                                label.set_color(array.get(tradeLevelLabels, 3), color.new(colTpNear, 0))
+
+    // Safety: arm any events that did not match a life bar timestamp (should be rare).
+    if licenseOk and isAllowedDisplayTf and array.size(evSignalTime) > 0
+        for ei2 = 0 to array.size(evSignalTime) - 1
+            if array.size(evArmedFlags) <= ei2 or array.size(evDir) <= ei2 or array.size(evEntry) <= ei2 or array.size(evSl) <= ei2 or array.size(evTp1) <= ei2 or array.size(evTp2) <= ei2 or array.size(evTp3) <= ei2 or array.size(evFvgTop) <= ei2 or array.size(evFvgBot) <= ei2 or array.size(evConf) <= ei2 or array.size(evSlKind) <= ei2
+                continue
+            if array.get(evArmedFlags, ei2) == 1
+                continue
+            isLongEv2 = array.get(evDir, ei2) == 1
+            ee2 = array.get(evEntry, ei2)
+            ssl2 = array.get(evSl, ei2)
+            t12 = array.get(evTp1, ei2)
+            t22 = array.get(evTp2, ei2)
+            t32 = array.get(evTp3, ei2)
+            fvgTop2 = array.get(evFvgTop, ei2)
+            fvgBot2 = array.get(evFvgBot, ei2)
+            conf2 = array.get(evConf, ei2)
+            slKind2 = array.get(evSlKind, ei2)
+            stEv2 = array.get(evSignalTime, ei2)
+            dirStr2 = isLongEv2 ? "long" : "short"
+            sigId2 = makeCanonicalSignalId(stEv2, dirStr2)
+            if tradeIsActive() and str.length(tradeSignalId()) > 0
+                replMsg2 = buildPayload("cancelled", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "new_confirmed_setup")
+                alert(replMsg2, alert.freq_all)
+            if array.size(tradeLevelLines) > 0
+                for i = 0 to array.size(tradeLevelLines) - 1
+                    line.delete(array.get(tradeLevelLines, i))
+            if array.size(tradeLeaderLines) > 0
+                for i = 0 to array.size(tradeLeaderLines) - 1
+                    line.delete(array.get(tradeLeaderLines, i))
+            if array.size(tradeLevelLabels) > 0
+                for i = 0 to array.size(tradeLevelLabels) - 1
+                    label.delete(array.get(tradeLevelLabels, i))
+            array.clear(tradeLevelLines)
+            array.clear(tradeLeaderLines)
+            array.clear(tradeLevelLabels)
+            if array.size(tradeBadgeHold) > 0
+                label.delete(array.get(tradeBadgeHold, 0))
+                array.clear(tradeBadgeHold)
+            if array.size(tradeFvgHold) > 0
+                box.delete(array.get(tradeFvgHold, 0))
+                array.clear(tradeFvgHold)
+            msg2 = buildPayload("entry", dirStr2, ee2, ssl2, t12, t22, t32, fvgTop2, fvgBot2, conf2, sigId2, "")
+            if isLongEv2
+                buyBadge2 = label.new(bar_index, ee2, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small)
+                array.push(tradeBadgeHold, buyBadge2)
+            else
+                sellBadge2 = label.new(bar_index, ee2, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.small)
+                array.push(tradeBadgeHold, sellBadge2)
+            if SHOW_TRADE_LINES
+                [newLines2, newLeaders2, newLabels2, layoutY2, layoutSide2, layoutStep2] = buildTradeDrawings(ee2, ssl2, t12, t22, t32, isLongEv2)
+                for i = 0 to array.size(newLines2) - 1
+                    array.push(tradeLevelLines, array.get(newLines2, i))
+                    array.push(tradeLeaderLines, array.get(newLeaders2, i))
+                    array.push(tradeLevelLabels, array.get(newLabels2, i))
+                    array.set(tradeLabelYs, i, array.get(layoutY2, i))
+                    array.set(tradeLayoutSide, i, array.get(layoutSide2, i))
+                    array.set(tradeLayoutStep, i, array.get(layoutStep2, i))
+            array.set(tradeStrings, 1, sigId2)
+            array.set(tradeStrings, 0, dirStr2)
+            array.set(tradeFloats, 0, ee2)
+            array.set(tradeFloats, 1, ssl2)
+            array.set(tradeFloats, 2, t12)
+            array.set(tradeFloats, 3, t22)
+            array.set(tradeFloats, 4, t32)
+            array.set(tradeFloats, 5, fvgTop2)
+            array.set(tradeFloats, 6, fvgBot2)
+            array.set(tradeFlags, 1, bar_index)
+            array.set(tradeFlags, 0, 1)
+            array.set(tradeFlags, 2, 0)
+            array.set(tradeFlags, 3, 0)
+            array.set(tradeCanonMeta, 0, stEv2)
+            array.set(tradeCanonMeta, 1, 0)
+            array.set(tradeCanonMeta, 2, 0)
+            lastArmedSignalTime := stEv2
+            lastArmedDir := isLongEv2 ? 1 : -1
+            if array.size(evArmedFlags) > ei2
+                array.set(evArmedFlags, ei2, 1)
+            alert(msg2, alert.freq_all)

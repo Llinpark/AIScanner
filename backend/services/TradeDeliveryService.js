@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const Signal = require('../models/Signal');
 const {
   sanitizeSignalForTier,
-  userHasTierFeature
+  userHasTierFeature,
+  getEffectiveSubscription
 } = require('../utils/subscriptionAccess');
 const { isEntryAlert } = require('../utils/signalOutcome');
 const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
@@ -24,6 +25,65 @@ const {
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
+}
+
+/** MT5 outcomes that are not delivery failures when Telegram-only is valid. */
+const MT5_EXPECTED_SKIP_REASONS = new Set([
+  'mt5_not_linked',
+  'mt5_disabled',
+  'manual_mode',
+  'subscription_required',
+  'not_entry_signal',
+  'self_test_skip',
+  'missing_ids'
+]);
+
+/** Telegram eligibility skips — not Bot API / network failures. */
+const TELEGRAM_EXPECTED_SKIP_REASONS = new Set([
+  'missing_chat_id',
+  'insufficient_tier',
+  'telegram_disabled',
+  'self_test_skip'
+]);
+
+function isExpectedMt5Skip(reason) {
+  return MT5_EXPECTED_SKIP_REASONS.has(String(reason || ''));
+}
+
+function isExpectedTelegramSkip(reason, status) {
+  if (TELEGRAM_EXPECTED_SKIP_REASONS.has(String(reason || ''))) return true;
+  const s = String(status || '');
+  return (
+    s === TelegramService.TELEGRAM_STATUS.SKIPPED_NO_CHAT_ID ||
+    s === TelegramService.TELEGRAM_STATUS.SKIPPED_TIER ||
+    s === TelegramService.TELEGRAM_STATUS.SKIPPED_DISABLED ||
+    s === TelegramService.TELEGRAM_STATUS.SKIPPED_SELF_TEST
+  );
+}
+
+/**
+ * Resolve Mongo deliveryStatus from independent channel outcomes.
+ * MT5 expected-skip must not force failed when Telegram succeeded.
+ * Telegram FAIL with MT5 SKIP (Telegram-only path) → failed.
+ * Telegram PASS with MT5 FAIL (auto attempted) → partial.
+ */
+function resolveDeliveryStatus({ telegramSent, mt5Sent, tgPipelineStatus, mt5PipelineStatus }) {
+  const tgFail = tgPipelineStatus === 'FAIL';
+  const mt5Fail = mt5PipelineStatus === 'FAIL';
+  const tgSkip = tgPipelineStatus === 'SKIP';
+  const mt5Skip = mt5PipelineStatus === 'SKIP';
+  const tgOk = tgPipelineStatus === 'PASS' || Boolean(telegramSent);
+  const mt5Ok = mt5PipelineStatus === 'PASS' || Boolean(mt5Sent);
+
+  if (tgFail && mt5Fail) return 'failed';
+  // Telegram-only path: TG failed and MT5 was never required → overall failed.
+  if (tgFail && mt5Skip) return 'failed';
+  // MT5-auto path with no Telegram attempt: MT5 failed → overall failed.
+  if (mt5Fail && tgSkip) return 'failed';
+  // Mixed: one channel succeeded, the other genuinely failed.
+  if ((tgFail && mt5Ok) || (mt5Fail && tgOk)) return 'partial';
+  if (tgOk || mt5Ok || (tgSkip && mt5Skip)) return 'delivered';
+  return 'delivered';
 }
 
 async function loadSignalById(signalId) {
@@ -171,9 +231,82 @@ function toLiveAlertPayload(signalDoc) {
 
 async function persistDeliveryFlags(signalId, flags) {
   if (!isDbConnected() || !signalId || String(signalId).startsWith('mem_')) return;
-  Signal.findByIdAndUpdate(signalId, flags).catch(err =>
+  const $set = { ...flags };
+  // Sticky success flags — concurrent fan-out must never overwrite true with false.
+  for (const key of [
+    'telegramSent',
+    'mt5Sent',
+    'emailSent',
+    'telegramAlertSent',
+    'telegramAlertDelivered'
+  ]) {
+    if ($set[key] === false) delete $set[key];
+  }
+  if (Object.keys($set).length === 0) return;
+  Signal.findByIdAndUpdate(signalId, { $set }).catch(err =>
     console.warn('[TradeDelivery] delivery status update failed:', err.message)
   );
+}
+
+/**
+ * Evaluate Telegram trade-alert eligibility (independent of MT5).
+ * Returns a structured status used by diagnostics and deliverTelegram.
+ */
+function evaluateTelegramEligibility(subscriber, signalDoc = {}) {
+  const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc || {};
+  const telegram = subscriber?.telegram || {};
+  const chatIdPresent = Boolean(telegram?.chatId);
+  const telegramEnabled = telegram?.enabled !== false;
+  const tier = getEffectiveSubscription(subscriber)?.tier || 'basic';
+
+  if (signal?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true') {
+    return {
+      eligible: false,
+      status: TelegramService.TELEGRAM_STATUS.SKIPPED_SELF_TEST,
+      reason: 'self_test_skip',
+      tier,
+      telegramEnabled,
+      chatIdPresent
+    };
+  }
+  if (!subscriber || !userHasTierFeature(subscriber, 'telegramAlerts')) {
+    return {
+      eligible: false,
+      status: TelegramService.TELEGRAM_STATUS.SKIPPED_TIER,
+      reason: 'insufficient_tier',
+      tier,
+      telegramEnabled,
+      chatIdPresent
+    };
+  }
+  if (!telegram.chatId) {
+    return {
+      eligible: false,
+      status: TelegramService.TELEGRAM_STATUS.SKIPPED_NO_CHAT_ID,
+      reason: 'missing_chat_id',
+      tier,
+      telegramEnabled,
+      chatIdPresent: false
+    };
+  }
+  if (telegram.enabled === false) {
+    return {
+      eligible: false,
+      status: TelegramService.TELEGRAM_STATUS.SKIPPED_DISABLED,
+      reason: 'telegram_disabled',
+      tier,
+      telegramEnabled: false,
+      chatIdPresent: true
+    };
+  }
+  return {
+    eligible: true,
+    status: TelegramService.TELEGRAM_STATUS.SEND_STARTED,
+    reason: null,
+    tier,
+    telegramEnabled: true,
+    chatIdPresent: true
+  };
 }
 
 async function deliverInApp(io, signalDoc, subscriber) {
@@ -221,21 +354,81 @@ async function deliverEmail(subscriber, signalDoc) {
 }
 
 async function deliverTelegram(subscriber, signalDoc, options = {}) {
-  if (!userHasTierFeature(subscriber, 'telegramAlerts')) {
-    return false;
+  // Not gated on MT5 — linked Telegram + telegramAlerts tier is enough (Alerts Only / notify-only).
+  const meta = extractPipelineMeta(signalDoc || {});
+  const subLabel = subscriber?.email || subscriber?.id || 'unknown';
+  const eligibility = evaluateTelegramEligibility(subscriber, signalDoc);
+
+  const signalPlain = signalDoc?.toObject ? signalDoc.toObject() : signalDoc || {};
+  const requestId = signalPlain.pipelineRequestId || options.pipelineRequestId || 'n/a';
+  console.log(
+    `[TELEGRAM ELIGIBILITY] requestId=${requestId} signalUuid=${meta.signalUuid || 'n/a'} ` +
+      `symbol=${meta.symbol || 'n/a'} timeframe=${meta.timeframe || 'n/a'} ` +
+      `subscriber=${subLabel} userId=${subscriber?.id || 'n/a'} tier=${eligibility.tier} ` +
+      `telegramEnabled=${eligibility.telegramEnabled} chatIdPresent=${eligibility.chatIdPresent} ` +
+      `eligible=${eligibility.eligible}` +
+      (eligibility.reason ? ` skipReason=${eligibility.reason}` : '')
+  );
+
+  if (!eligibility.eligible) {
+    if (eligibility.reason === 'self_test_skip') {
+      console.log('[TradeDelivery] telegram skipped (pipeline self-test)');
+    }
+    return {
+      ok: false,
+      status: eligibility.status,
+      reason: eligibility.reason,
+      tier: eligibility.tier,
+      telegramEnabled: eligibility.telegramEnabled,
+      chatIdPresent: eligibility.chatIdPresent
+    };
   }
 
-  const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
-  if (signal?.selfTest || process.env.PIPELINE_SELF_TEST_ACTIVE === 'true') {
-    console.log('[TradeDelivery] telegram skipped (pipeline self-test)');
-    return false;
-  }
+  console.log(
+    `[TELEGRAM DELIVERY START] requestId=${requestId} signalUuid=${meta.signalUuid || 'n/a'} ` +
+      `symbol=${meta.symbol || 'n/a'} subscriber=${subLabel} tier=${eligibility.tier}`
+  );
 
   try {
-    return await TelegramService.notifySubscriber(subscriber, signalDoc, options);
+    const result = await TelegramService.notifySubscriber(subscriber, signalDoc, options);
+    // Backward-compatible: notifySubscriber historically returned a boolean.
+    if (typeof result === 'boolean') {
+      return {
+        ok: result,
+        status: result
+          ? TelegramService.TELEGRAM_STATUS.SEND_SUCCESS
+          : TelegramService.TELEGRAM_STATUS.SEND_FAILED,
+        reason: result ? null : 'notify_returned_false',
+        tier: eligibility.tier,
+        telegramEnabled: eligibility.telegramEnabled,
+        chatIdPresent: eligibility.chatIdPresent
+      };
+    }
+    return {
+      ok: Boolean(result?.ok),
+      status: result?.status || TelegramService.TELEGRAM_STATUS.SEND_FAILED,
+      reason: result?.reason || result?.description || null,
+      httpStatus: result?.httpStatus ?? null,
+      telegramErrorCode: result?.telegramErrorCode ?? null,
+      description: result?.description || null,
+      telegramMessageId: result?.telegramMessageId || null,
+      tier: result?.tier || eligibility.tier,
+      telegramEnabled: result?.telegramEnabled ?? eligibility.telegramEnabled,
+      chatIdPresent: result?.chatIdPresent ?? eligibility.chatIdPresent
+    };
   } catch (err) {
     console.warn('[TradeDelivery] telegram failed:', err.message);
-    return false;
+    return {
+      ok: false,
+      status: TelegramService.TELEGRAM_STATUS.SEND_FAILED,
+      reason: err.message || 'telegram_exception',
+      httpStatus: err.httpStatus ?? null,
+      telegramErrorCode: err.telegramErrorCode ?? null,
+      description: err.description || err.message || 'telegram_exception',
+      tier: eligibility.tier,
+      telegramEnabled: eligibility.telegramEnabled,
+      chatIdPresent: eligibility.chatIdPresent
+    };
   }
 }
 
@@ -321,6 +514,8 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
   const confirmSeconds = subscriber ? resolveConfirmSeconds(subscriber) : 180;
   let mt5ConfirmStatus = signal.mt5ConfirmStatus || 'none';
   let mt5ConfirmExpiresAt = signal.mt5ConfirmExpiresAt || null;
+  let tgPipelineStatus = 'SKIP';
+  let mt5PipelineStatus = 'SKIP';
 
   if (includeExecuteButton) {
     mt5ConfirmStatus = 'pending';
@@ -350,12 +545,18 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     });
 
     console.log(`[DELIVERY Telegram START] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
-    const tgOk = await deliverTelegram(subscriber, signal, {
+    const tgResult = await deliverTelegram(subscriber, signal, {
       includeExecuteButton,
       alertOnly: alertsOnly,
       confirmExpiresAt: mt5ConfirmExpiresAt,
       confirmSeconds
     });
+    const tgOk = Boolean(tgResult?.ok);
+    const tgStatus = tgResult?.status || TelegramService.TELEGRAM_STATUS.NOT_ATTEMPTED;
+    const tgReason =
+      tgResult?.description ||
+      tgResult?.reason ||
+      (tgOk ? 'SUCCESS' : 'skipped_or_failed');
     if (tgOk) {
       telegramSent = true;
       if (alertsOnly && isEntry) {
@@ -368,21 +569,41 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
         executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
       }
     }
-    if (tgOk || emailSelfTest) {
+    const tgExpectedSkip = isExpectedTelegramSkip(tgResult?.reason, tgStatus);
+    tgPipelineStatus = tgOk || emailSelfTest ? 'PASS' : tgExpectedSkip ? 'SKIP' : 'FAIL';
+    if (tgPipelineStatus === 'PASS') {
       console.log(
-        `[DELIVERY Telegram SUCCESS] sub=${subLabel}${emailSelfTest && !tgOk ? ' (self_test_skip)' : ''}`
+        `[DELIVERY Telegram SUCCESS] sub=${subLabel} status=${tgStatus}` +
+          `${emailSelfTest && !tgOk ? ' (self_test_skip)' : ''}`
+      );
+    } else if (tgPipelineStatus === 'SKIP') {
+      console.log(
+        `[DELIVERY Telegram SKIP] sub=${subLabel} status=${tgStatus} reason=${tgReason}`
       );
     } else {
-      console.warn(`[DELIVERY Telegram FAILED] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
+      console.warn(
+        `[DELIVERY Telegram FAILED] sub=${subLabel} symbol=${meta.symbol || 'n/a'} ` +
+          `status=${tgStatus} reason=${tgReason}` +
+          `${tgResult?.httpStatus != null ? ` httpStatus=${tgResult.httpStatus}` : ''}` +
+          `${tgResult?.telegramErrorCode != null ? ` telegramErrorCode=${tgResult.telegramErrorCode}` : ''}`
+      );
+      console.warn(
+        `[WEBHOOK FAIL:DELIVERY] channel=telegram sub=${subLabel} status=${tgStatus} reason=${tgReason}`
+      );
     }
-    logPipeline('DeliveryTelegram', tgOk || emailSelfTest ? 'PASS' : 'FAIL', {
+    logPipeline('DeliveryTelegram', tgPipelineStatus, {
       ...meta,
       userId: subscriber?.id || null,
       reason: tgOk
-        ? `SUCCESS; sub=${subLabel}; mode=${executionMode}; telegramMode=${telegramMode}${alertsOnly ? '; telegram_alert_sent' : ''}`
+        ? `SUCCESS; status=${tgStatus}; sub=${subLabel}; mode=${executionMode}; telegramMode=${telegramMode}${alertsOnly ? '; telegram_alert_sent' : ''}`
         : emailSelfTest
-          ? `self_test_skip; sub=${subLabel}`
-          : `FAILED; skipped_or_failed; sub=${subLabel}`
+          ? `self_test_skip; status=${tgStatus}; sub=${subLabel}`
+          : tgExpectedSkip
+            ? `SKIP; status=${tgStatus}; reason=${tgReason}; sub=${subLabel}`
+            : `FAILED; status=${tgStatus}; reason=${tgReason}` +
+              `${tgResult?.httpStatus != null ? `; httpStatus=${tgResult.httpStatus}` : ''}` +
+              `${tgResult?.telegramErrorCode != null ? `; telegramErrorCode=${tgResult.telegramErrorCode}` : ''}` +
+              `; sub=${subLabel}`
     });
     if (tgOk && subscriber?.id) {
       try {
@@ -413,18 +634,31 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     ) {
       executionStatus = executionStatus === 'pending' ? 'skipped' : executionStatus;
     }
-    const mt5Ok = Boolean(mt5Result?.ok) || mt5Reason === 'self_test_skip';
-    if (mt5Ok) {
+    const mt5Ok = Boolean(mt5Result?.ok);
+    const mt5ExpectedSkip = isExpectedMt5Skip(mt5Reason);
+    mt5PipelineStatus =
+      mt5Ok || mt5Reason === 'self_test_skip' ? 'PASS' : mt5ExpectedSkip ? 'SKIP' : 'FAIL';
+    if (mt5PipelineStatus === 'PASS') {
       console.log(`[DELIVERY MT5 SUCCESS] reason=${mt5Reason}; sub=${subLabel}`);
+    } else if (mt5PipelineStatus === 'SKIP') {
+      console.log(
+        `[DELIVERY MT5 SKIP] reason=${mt5Reason}; mode=${executionMode}; linked=${mt5Linked}; sub=${subLabel}`
+      );
     } else {
       console.warn(`[DELIVERY MT5 FAILED] reason=${mt5Reason}; sub=${subLabel}`);
+      console.warn(`[WEBHOOK FAIL:DELIVERY] channel=mt5 reason=${mt5Reason}; sub=${subLabel}`);
     }
-    logPipeline('DeliveryMT5', mt5Ok ? 'PASS' : 'FAIL', {
+    logPipeline('DeliveryMT5', mt5PipelineStatus, {
       ...meta,
       userId: subscriber?.id || null,
-      reason: `${mt5Ok ? 'SUCCESS' : 'FAILED'}; ${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; sub=${subLabel}`
+      reason:
+        mt5PipelineStatus === 'PASS'
+          ? `SUCCESS; ${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; sub=${subLabel}`
+          : mt5PipelineStatus === 'SKIP'
+            ? `SKIP / NOT_LINKED_OR_N_A; ${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; linked=${mt5Linked}; sub=${subLabel}`
+            : `FAILED; ${mt5Reason}; mode=${executionMode}; telegramMode=${telegramMode}; sub=${subLabel}`
     });
-    if (mt5Ok && subscriber?.id) {
+    if (mt5PipelineStatus === 'PASS' && subscriber?.id) {
       try {
         const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
         void PipelineSubscriberStatsService.recordDelivery(subscriber.id, 'mt5', meta);
@@ -433,6 +667,13 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
       }
     }
   }
+
+  const deliveryStatus = resolveDeliveryStatus({
+    telegramSent,
+    mt5Sent,
+    tgPipelineStatus,
+    mt5PipelineStatus
+  });
 
   const enrichedDoc = {
     ...signal,
@@ -447,7 +688,7 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     telegramAlertDeliveredAt,
     mt5ConfirmStatus,
     mt5ConfirmExpiresAt,
-    deliveryStatus: 'delivered'
+    deliveryStatus
   };
 
   await persistDeliveryFlags(enrichedDoc._id, {
@@ -462,7 +703,7 @@ async function deliverToSubscriber(io, signalDoc, subscriber = null) {
     telegramAlertDeliveredAt,
     mt5ConfirmStatus,
     mt5ConfirmExpiresAt,
-    deliveryStatus: 'delivered'
+    deliveryStatus
   });
 
   console.log(`[DELIVERY Socket START] sub=${subLabel} symbol=${meta.symbol || 'n/a'}`);
@@ -628,6 +869,7 @@ module.exports = {
   deliverInApp,
   deliverEmail,
   deliverTelegram,
+  evaluateTelegramEligibility,
   deliverMt5Auto,
   queueManualExecution,
   ignoreManualExecution,
@@ -637,5 +879,10 @@ module.exports = {
   startManualConfirmExpiryJob,
   stopManualConfirmExpiryJob,
   resolveConfirmSeconds,
-  formatConfirmWindowLabel
+  formatConfirmWindowLabel,
+  isExpectedMt5Skip,
+  isExpectedTelegramSkip,
+  resolveDeliveryStatus,
+  MT5_EXPECTED_SKIP_REASONS,
+  TELEGRAM_EXPECTED_SKIP_REASONS
 };

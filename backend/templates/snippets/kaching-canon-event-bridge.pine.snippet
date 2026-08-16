@@ -1,0 +1,287 @@
+// ===== OPTION A — EVENT-SAFE CANONICAL BRIDGE (event_bridge_v1) =====
+// Detection stays inside canonSignalTuple() only.
+// Display charts NEVER re-run sweep/MSS/FVG/SL/TP math.
+//
+// Bridge modes (by chart vs CANONICAL_SIGNAL_TF):
+//   chart < canonical  → request.security(..., lookahead_off)  — one completed canon bar at a time
+//   chart == canonical → direct canonSignalTuple()             — no outer security wrapper
+//   chart > canonical  → request.security_lower_tf()           — ALL canon bars in this display bar
+//
+// Higher display TF MUST iterate every lower-TF event (never array.last only).
+// Pine rule: all array mutations stay in main-scope (no global writes inside functions).
+
+canonSec = timeframe.in_seconds(CANONICAL_SIGNAL_TF)
+useLowerTfBridge = chartSec > canonSec and canonSec > 0
+useDirectCanon = chartSec == canonSec and canonSec > 0
+useSecurityMirror = chartSec < canonSec and canonSec > 0
+
+// Canonical OHLC for lifecycle authority (same TF as signal engine).
+canonLifeTuple() =>
+    [high, low, close, time]
+
+// Event + lifecycle buffers for the current confirmed display bar.
+var array<int> evSignalTime = array.new_int()
+var array<int> evDir = array.new_int()
+var array<float> evEntry = array.new_float()
+var array<float> evSl = array.new_float()
+var array<float> evTp1 = array.new_float()
+var array<float> evTp2 = array.new_float()
+var array<float> evTp3 = array.new_float()
+var array<float> evFvgTop = array.new_float()
+var array<float> evFvgBot = array.new_float()
+var array<float> evConf = array.new_float()
+var array<float> evSlKind = array.new_float()
+
+var array<float> canonLifeHigh = array.new_float()
+var array<float> canonLifeLow = array.new_float()
+var array<float> canonLifeClose = array.new_float()
+var array<int> canonLifeTime = array.new_int()
+
+// Last projected scalar (debug only on HTF — arming uses ev* arrays).
+var bool cReadyLong = false
+var bool cReadyShort = false
+var float cEntry = na
+var float cSl = na
+var float cTp1 = na
+var float cTp2 = na
+var float cTp3 = na
+var float cFvgTop = na
+var float cFvgBot = na
+var float cConf = na
+var int cSignalTime = na
+var float cSlKind = na
+
+// Edge-scan while collecting multiple events inside one higher display bar.
+var int bridgeScanTime = na
+var int bridgeScanDir = 0
+
+// Populate event + lifecycle buffers on confirmed bars only (non-repaint gate).
+if barstate.isconfirmed
+    array.clear(evSignalTime)
+    array.clear(evDir)
+    array.clear(evEntry)
+    array.clear(evSl)
+    array.clear(evTp1)
+    array.clear(evTp2)
+    array.clear(evTp3)
+    array.clear(evFvgTop)
+    array.clear(evFvgBot)
+    array.clear(evConf)
+    array.clear(evSlKind)
+    array.clear(canonLifeHigh)
+    array.clear(canonLifeLow)
+    array.clear(canonLifeClose)
+    array.clear(canonLifeTime)
+    bridgeScanTime := lastArmedSignalTime
+    bridgeScanDir := lastArmedDir
+    cReadyLong := false
+    cReadyShort := false
+    cEntry := na
+    cSl := na
+    cTp1 := na
+    cTp2 := na
+    cTp3 := na
+    cFvgTop := na
+    cFvgBot := na
+    cConf := na
+    cSignalTime := na
+    cSlKind := na
+
+    if useLowerTfBridge
+        [rlArr, rsArr, eArr, slArr, t1Arr, t2Arr, t3Arr, gtArr, gbArr, cfArr, stArr, skArr] = request.security_lower_tf(syminfo.tickerid, CANONICAL_SIGNAL_TF, canonSignalTuple())
+        [lhArr, llArr, lcArr, ltArr] = request.security_lower_tf(syminfo.tickerid, CANONICAL_SIGNAL_TF, canonLifeTuple())
+        nEv = array.size(stArr)
+        // Require aligned lower-TF tuples before indexing companion arrays.
+        ltfAligned = nEv > 0 and array.size(rlArr) == nEv and array.size(rsArr) == nEv and array.size(eArr) == nEv and array.size(slArr) == nEv and array.size(t1Arr) == nEv and array.size(t2Arr) == nEv and array.size(t3Arr) == nEv and array.size(gtArr) == nEv and array.size(gbArr) == nEv and array.size(cfArr) == nEv and array.size(skArr) == nEv
+        if ltfAligned
+            for i = 0 to nEv - 1
+                st_i = int(nz(array.get(stArr, i), na))
+                if array.get(rlArr, i)
+                    dirCode = 1
+                    isNew = not na(st_i) and (na(bridgeScanTime) or st_i != bridgeScanTime or bridgeScanDir != dirCode)
+                    if isNew
+                        array.push(evSignalTime, st_i)
+                        array.push(evDir, 1)
+                        array.push(evEntry, array.get(eArr, i))
+                        array.push(evSl, array.get(slArr, i))
+                        array.push(evTp1, array.get(t1Arr, i))
+                        array.push(evTp2, array.get(t2Arr, i))
+                        array.push(evTp3, array.get(t3Arr, i))
+                        array.push(evFvgTop, array.get(gtArr, i))
+                        array.push(evFvgBot, array.get(gbArr, i))
+                        array.push(evConf, array.get(cfArr, i))
+                        array.push(evSlKind, array.get(skArr, i))
+                        bridgeScanTime := st_i
+                        bridgeScanDir := 1
+                    cReadyLong := true
+                    cReadyShort := false
+                    cEntry := array.get(eArr, i)
+                    cSl := array.get(slArr, i)
+                    cTp1 := array.get(t1Arr, i)
+                    cTp2 := array.get(t2Arr, i)
+                    cTp3 := array.get(t3Arr, i)
+                    cFvgTop := array.get(gtArr, i)
+                    cFvgBot := array.get(gbArr, i)
+                    cConf := array.get(cfArr, i)
+                    cSignalTime := st_i
+                    cSlKind := array.get(skArr, i)
+                if array.get(rsArr, i)
+                    dirCodeS = -1
+                    isNewS = not na(st_i) and (na(bridgeScanTime) or st_i != bridgeScanTime or bridgeScanDir != dirCodeS)
+                    if isNewS
+                        array.push(evSignalTime, st_i)
+                        array.push(evDir, -1)
+                        array.push(evEntry, array.get(eArr, i))
+                        array.push(evSl, array.get(slArr, i))
+                        array.push(evTp1, array.get(t1Arr, i))
+                        array.push(evTp2, array.get(t2Arr, i))
+                        array.push(evTp3, array.get(t3Arr, i))
+                        array.push(evFvgTop, array.get(gtArr, i))
+                        array.push(evFvgBot, array.get(gbArr, i))
+                        array.push(evConf, array.get(cfArr, i))
+                        array.push(evSlKind, array.get(skArr, i))
+                        bridgeScanTime := st_i
+                        bridgeScanDir := -1
+                    cReadyLong := false
+                    cReadyShort := true
+                    cEntry := array.get(eArr, i)
+                    cSl := array.get(slArr, i)
+                    cTp1 := array.get(t1Arr, i)
+                    cTp2 := array.get(t2Arr, i)
+                    cTp3 := array.get(t3Arr, i)
+                    cFvgTop := array.get(gtArr, i)
+                    cFvgBot := array.get(gbArr, i)
+                    cConf := array.get(cfArr, i)
+                    cSignalTime := st_i
+                    cSlKind := array.get(skArr, i)
+        nLife = array.size(ltArr)
+        lifeAligned = nLife > 0 and array.size(lhArr) == nLife and array.size(llArr) == nLife and array.size(lcArr) == nLife
+        if lifeAligned
+            for j = 0 to nLife - 1
+                array.push(canonLifeHigh, array.get(lhArr, j))
+                array.push(canonLifeLow, array.get(llArr, j))
+                array.push(canonLifeClose, array.get(lcArr, j))
+                array.push(canonLifeTime, int(nz(array.get(ltArr, j), na)))
+    else if useDirectCanon
+        [rl, rs, ee, ssl, t1, t2, t3, gt, gb, cf, st, sk] = canonSignalTuple()
+        cReadyLong := rl
+        cReadyShort := rs
+        cEntry := ee
+        cSl := ssl
+        cTp1 := t1
+        cTp2 := t2
+        cTp3 := t3
+        cFvgTop := gt
+        cFvgBot := gb
+        cConf := cf
+        cSignalTime := st
+        cSlKind := sk
+        if rl
+            isNewL = not na(st) and (na(bridgeScanTime) or st != bridgeScanTime or bridgeScanDir != 1)
+            if isNewL
+                array.push(evSignalTime, st)
+                array.push(evDir, 1)
+                array.push(evEntry, ee)
+                array.push(evSl, ssl)
+                array.push(evTp1, t1)
+                array.push(evTp2, t2)
+                array.push(evTp3, t3)
+                array.push(evFvgTop, gt)
+                array.push(evFvgBot, gb)
+                array.push(evConf, cf)
+                array.push(evSlKind, sk)
+                bridgeScanTime := st
+                bridgeScanDir := 1
+        if rs
+            isNewR = not na(st) and (na(bridgeScanTime) or st != bridgeScanTime or bridgeScanDir != -1)
+            if isNewR
+                array.push(evSignalTime, st)
+                array.push(evDir, -1)
+                array.push(evEntry, ee)
+                array.push(evSl, ssl)
+                array.push(evTp1, t1)
+                array.push(evTp2, t2)
+                array.push(evTp3, t3)
+                array.push(evFvgTop, gt)
+                array.push(evFvgBot, gb)
+                array.push(evConf, cf)
+                array.push(evSlKind, sk)
+                bridgeScanTime := st
+                bridgeScanDir := -1
+        array.push(canonLifeHigh, high)
+        array.push(canonLifeLow, low)
+        array.push(canonLifeClose, close)
+        array.push(canonLifeTime, time)
+    else if useSecurityMirror
+        [rlM, rsM, eeM, sslM, t1M, t2M, t3M, gtM, gbM, cfM, stM, skM] = request.security(syminfo.tickerid, CANONICAL_SIGNAL_TF, canonSignalTuple(), barmerge.gaps_off, barmerge.lookahead_off)
+        [lhM, llM, lcM, ltM] = request.security(syminfo.tickerid, CANONICAL_SIGNAL_TF, canonLifeTuple(), barmerge.gaps_off, barmerge.lookahead_off)
+        cReadyLong := rlM
+        cReadyShort := rsM
+        cEntry := eeM
+        cSl := sslM
+        cTp1 := t1M
+        cTp2 := t2M
+        cTp3 := t3M
+        cFvgTop := gtM
+        cFvgBot := gbM
+        cConf := cfM
+        cSignalTime := stM
+        cSlKind := skM
+        if rlM
+            isNewLM = not na(stM) and (na(bridgeScanTime) or stM != bridgeScanTime or bridgeScanDir != 1)
+            if isNewLM
+                array.push(evSignalTime, stM)
+                array.push(evDir, 1)
+                array.push(evEntry, eeM)
+                array.push(evSl, sslM)
+                array.push(evTp1, t1M)
+                array.push(evTp2, t2M)
+                array.push(evTp3, t3M)
+                array.push(evFvgTop, gtM)
+                array.push(evFvgBot, gbM)
+                array.push(evConf, cfM)
+                array.push(evSlKind, skM)
+                bridgeScanTime := stM
+                bridgeScanDir := 1
+        if rsM
+            isNewRM = not na(stM) and (na(bridgeScanTime) or stM != bridgeScanTime or bridgeScanDir != -1)
+            if isNewRM
+                array.push(evSignalTime, stM)
+                array.push(evDir, -1)
+                array.push(evEntry, eeM)
+                array.push(evSl, sslM)
+                array.push(evTp1, t1M)
+                array.push(evTp2, t2M)
+                array.push(evTp3, t3M)
+                array.push(evFvgTop, gtM)
+                array.push(evFvgBot, gbM)
+                array.push(evConf, cfM)
+                array.push(evSlKind, skM)
+                bridgeScanTime := stM
+                bridgeScanDir := -1
+        if not na(ltM)
+            array.push(canonLifeHigh, lhM)
+            array.push(canonLifeLow, llM)
+            array.push(canonLifeClose, lcM)
+            array.push(canonLifeTime, int(ltM))
+
+// Last-event edge flags for setupLong/Short helpers.
+// CRITICAL: Pine evaluates BOTH sides of and/or (no short-circuit).
+// Never guard last-element array.get with a size check joined by and — use ternary.
+// Empty arrays must yield lastEvDir=na (R10045 index -1 crash otherwise).
+bridgeEventCount = array.size(evSignalTime)
+evFieldsAligned =
+     bridgeEventCount > 0 and
+     array.size(evDir) == bridgeEventCount and
+     array.size(evEntry) == bridgeEventCount and
+     array.size(evSl) == bridgeEventCount and
+     array.size(evTp1) == bridgeEventCount and
+     array.size(evTp2) == bridgeEventCount and
+     array.size(evTp3) == bridgeEventCount and
+     array.size(evFvgTop) == bridgeEventCount and
+     array.size(evFvgBot) == bridgeEventCount and
+     array.size(evConf) == bridgeEventCount and
+     array.size(evSlKind) == bridgeEventCount
+lastEvDir = array.size(evDir) > 0 ? array.get(evDir, array.size(evDir) - 1) : na
+newCanonLong = evFieldsAligned and not na(lastEvDir) and lastEvDir == 1
+newCanonShort = evFieldsAligned and not na(lastEvDir) and lastEvDir == -1

@@ -100,7 +100,11 @@ HTF structure/liquidity/bias is fetched with `request.security(..., barmerge.loo
 2. Generate personal Pine (HTF default baked from Strategy Configuration). Lock labels include the strategy name (e.g. `Wrong Entry Timeframe (Scalping)`).
 3. Attach script to an allowed **Entry Timeframe** chart.
 4. Create alert → webhook → Kaching distribution (dashboard / Telegram / MT5).
-5. After admin TF/config changes or deploy: **all subscribers must regenerate Pine**, remove the old indicator, paste the new script, and recreate the alert (drawings stay synced with `alert()` only after re-paste).
+5. After admin TF/config changes or deploy that change baked Pine inputs: **subscribers must regenerate Pine**, remove the old indicator, paste the new script, and recreate the alert (drawings stay synced with `alert()` only after re-paste). Additive webhook metadata (e.g. `pineClientVersion`) does **not** require regen for existing scripts to keep working — see `docs/PINE_STABLE_CLIENT_ARCHITECTURE.md`.
+
+### Pine client versioning (prep — Phase 16 pre-deploy validated locally)
+
+Newly generated Pine stamps additive `pineClientVersion`, `scriptGenerationId`, `generatedAt`, and `capabilities` into every webhook payload. Missing fields ⇒ Legacy Mode (current delivery path). Feature flags for backend decisions default OFF (unset in env examples; no accidental activation from pine-gen). Registry is observability-only and never gates auth/delivery. Decision framework is pass-through only; webhook path discards its result. See `docs/PINE_STABLE_CLIENT_ARCHITECTURE.md`.
 
 Strategy math (liquidity sweep, FVG, BOS/CHOCH, entry models, confidence, risk/TP/SL) is unchanged by this architecture layer. Future strategies (Swing, Position, Crypto, Gold) register architecture slots without modifying Pine strategy math.
 

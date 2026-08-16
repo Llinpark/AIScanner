@@ -96,18 +96,53 @@ function verifyRequestSignature(rawBody, headerValue) {
 
 function parseWebhookBody(req) {
   if (typeof req.body === 'string') {
+    const raw = String(req.body || '').replace(/^\uFEFF/, '').trim();
+    // Empty body must NOT silently become {} — that collapses to opaque unauthorized.
+    if (!raw) {
+      return { __parseError: true, __rawPreview: '', __parseReason: 'empty_body' };
+    }
     try {
-      return JSON.parse(req.body);
+      return JSON.parse(raw);
     } catch {
-      return {};
+      // TradingView sometimes wraps JSON in quotes or sends human text — try unwrap once.
+      if (
+        (raw.startsWith('"') && raw.endsWith('"')) ||
+        (raw.startsWith("'") && raw.endsWith("'"))
+      ) {
+        try {
+          const unwrapped = JSON.parse(raw);
+          if (typeof unwrapped === 'string') {
+            const inner = unwrapped.replace(/^\uFEFF/, '').trim();
+            if (!inner) {
+              return { __parseError: true, __rawPreview: '', __parseReason: 'empty_body' };
+            }
+            return JSON.parse(inner);
+          }
+        } catch {
+          /* fall through */
+        }
+      }
+      return {
+        __parseError: true,
+        __rawPreview: raw.slice(0, 80),
+        __parseReason: 'invalid_json'
+      };
     }
   }
 
   if (req.body && typeof req.body === 'object') {
+    // Express may give {} for truly empty JSON bodies — treat as empty intake.
+    if (
+      !Array.isArray(req.body) &&
+      Object.keys(req.body).length === 0 &&
+      !(Buffer.isBuffer(req.rawBody) && req.rawBody.length > 2)
+    ) {
+      return { __parseError: true, __rawPreview: '', __parseReason: 'empty_body' };
+    }
     return req.body;
   }
 
-  return {};
+  return { __parseError: true, __rawPreview: '', __parseReason: 'empty_body' };
 }
 
 function verifyGlobalWebhookSecret(req, body, { allowInProduction = false } = {}) {
@@ -157,11 +192,21 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
    * license re-issue. Auth failures are rate-limited in server.js.
    */
   const body = parseWebhookBody(req);
+  if (body && body.__parseError) {
+    return {
+      ok: false,
+      reason: body.__parseReason === 'empty_body' ? 'empty_body' : 'invalid_json',
+      body: {},
+      parseError: true,
+      rawPreview: body.__rawPreview || null
+    };
+  }
   const rawBody = req.rawBody || Buffer.from(JSON.stringify(body), 'utf8');
   const bodyUserId = body.userId || body.user_id;
   const bodyTvUsername = extractBodyTradingViewUsername(body);
 
-  const signatureHeader = req.headers['x-kaching-signature'] || req.headers['x-webhook-signature'];
+  const signatureHeader =
+    req.headers?.['x-kaching-signature'] || req.headers?.['x-webhook-signature'];
   if (signatureHeader && verifyRequestSignature(rawBody, signatureHeader)) {
     return { ok: true, mode: 'signature', body, userId: bodyUserId || null };
   }

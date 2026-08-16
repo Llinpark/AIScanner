@@ -284,17 +284,19 @@ describe('DayTrading confidence weights', () => {
 });
 
 describe('DayTradingStrategy orchestrator', () => {
-  it('rejects HTF timeframe entries', () => {
+  it('does not reject solely for chart TF (HTF / non-preferred continue evaluating)', () => {
     const strat = new DayTradingStrategy({
       config: { filters: { rejectOnMajorNews: false, minAtrPips: 0 } }
     });
     const result = strat.analyze({
       symbol: 'EURUSD',
       timeframe: '4h',
+      strictTimeframe: true,
       candles: Array.from({ length: 30 }, (_, i) => candle(i, 1.1, 1.11, 1.09, 1.1)),
       htfCandles: Array.from({ length: 40 }, (_, i) => candle(i, 1.1, 1.11, 1.09, 1.1, 4 * 3600_000))
     });
-    assert.equal(result.reason, 'htf_never_entries');
+    assert.notEqual(result.reason, 'htf_never_entries');
+    assert.notEqual(result.reason, 'invalid_entry_timeframe');
   });
 
   it('rejects neutral HTF bias path when flat', () => {

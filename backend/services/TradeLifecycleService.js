@@ -136,8 +136,10 @@ function attachExpiryFields(signalData) {
 }
 
 /**
- * Reject new entries while an open trade exists for the same symbol:timeframe.
- * Different timeframes never block each other; nothing globally blocks the system.
+ * Gate new entries for the same symbol:timeframe.
+ * Same UUID → idempotent replay (ignore).
+ * Different UUID while active → REPLACE: close/clear old slot, allow new entry.
+ * Different timeframes never block each other.
  */
 async function assertCanOpenEntry(signalData) {
   let active = await ActiveSignalRegistry.getActive(signalData);
@@ -163,43 +165,73 @@ async function assertCanOpenEntry(signalData) {
   }
 
   if (active) {
-    // Idempotent webhook replay with the same permanent UUID is allowed (no overwrite).
     const incomingUuid = signalData.signalUuid || signalData.signalId || signalData.signalGroupId;
     if (incomingUuid && active.signalUuid && String(incomingUuid) === String(active.signalUuid)) {
+      // Option A: same canonical UUID from another allowed chartTf is still idempotent replay.
+      const chartTf = signalData.chartTf || null;
+      const crossTf =
+        chartTf &&
+        String(chartTf) !== String(signalData.timeframe || '') &&
+        String(chartTf) !== String(signalData.canonicalSignalTf || '');
+      const replayReason = crossTf ? 'CROSS_TF_CANONICAL_DUPLICATE' : 'same_uuid_replay';
       logLifecycleEvent('duplicate_webhook_replay', {
         symbol: signalData.symbol,
         timeframe: signalData.timeframe,
         signalUuid: incomingUuid,
         alertType: signalData.alertType,
         stage: active.stage || active.lifecycleStage,
-        reason: 'same_uuid_replay'
+        reason: replayReason,
+        chartTf: chartTf || undefined,
+        canonicalSignalTf: signalData.canonicalSignalTf || undefined,
+        canonicalSignalKey: signalData.canonicalSignalKey || undefined
       });
       return {
         allowed: false,
         active,
         reason: 'duplicate_webhook_replay',
-        message: `Duplicate webhook for active signalUuid ${incomingUuid}; ignored.`
+        message: `Duplicate webhook for active signalUuid ${incomingUuid}; ignored.`,
+        detail: replayReason
       };
     }
-    logLifecycleEvent('reject_duplicate_entry', {
+
+    // Replace active trade with the new confirmed entry (one-trade-at-a-time preserved).
+    const oldUuid = active.signalUuid || active.signalId || null;
+    try {
+      if (oldUuid) {
+        await SignalOutcomeService.closeEntryAsCancelled(oldUuid, {
+          closedReason: 'new_confirmed_setup',
+          replacedBySignalUuid: incomingUuid || null
+        });
+      }
+    } catch (err) {
+      console.warn('[TradeLifecycle] replace close old entry failed:', err.message);
+    }
+    try {
+      await ActiveSignalRegistry.clearActive(signalData);
+    } catch (err) {
+      console.warn('[TradeLifecycle] replace clear registry failed:', err.message);
+    }
+
+    logLifecycleEvent('replaced', {
       symbol: signalData.symbol,
       timeframe: signalData.timeframe,
-      signalUuid: signalData.signalUuid,
-      alertType: signalData.alertType,
-      stage: active.stage || active.lifecycleStage,
-      reason: 'active_trade_exists'
+      signalUuid: oldUuid,
+      alertType: 'cancelled',
+      lifecycleStage: STAGES.CANCELLED || 'CANCELLED',
+      reason: 'new_confirmed_setup',
+      replacedBySignalUuid: incomingUuid || null
     });
+
     return {
-      allowed: false,
-      active,
-      reason: 'active_trade_exists',
+      allowed: true,
+      replaced: true,
+      previousActive: active,
+      reason: 'replaced_active_trade',
       message:
-        `Active trade already open for ${signalData.symbol}` +
+        `Replaced active trade for ${signalData.symbol}` +
         (signalData.timeframe ? `:${signalData.timeframe}` : '') +
-        (signalData.strategyName || signalData.strategy
-          ? `:${signalData.strategyName || signalData.strategy}`
-          : '') +
-        '; new entry ignored until TP3/SL/expiry/cancel.'
+        (oldUuid ? ` (${oldUuid})` : '') +
+        ' with new confirmed setup.'
     };
   }
 
@@ -243,6 +275,21 @@ async function syncRegistryAfterTransition(signalData, updatedEntry, alertType) 
   }
 
   if (isPartialAlert(alertType) && updatedEntry) {
+    if (updatedEntry._outcomeIgnored) {
+      logLifecycleEvent('outcome_ignored', {
+        symbol: signalData.symbol,
+        timeframe: signalData.timeframe || updatedEntry.timeframe,
+        signalUuid: updatedEntry.signalUuid || signalData.signalUuid,
+        alertType,
+        lifecycleStage: updatedEntry.lifecycleStage,
+        reason: updatedEntry._outcomeIgnoreReason || 'same_stage_replay'
+      });
+      return {
+        signalData,
+        updatedEntry,
+        stage: updatedEntry.lifecycleStage
+      };
+    }
     const stage =
       signalData.lifecycleStage ||
       updatedEntry.lifecycleStage ||
@@ -270,6 +317,23 @@ async function syncRegistryAfterTransition(signalData, updatedEntry, alertType) 
   }
 
   if (isTerminalAlert(alertType)) {
+    // Conflicting/duplicate terminal webhook after lock — do not re-log a new terminal path.
+    if (updatedEntry?._outcomeIgnored) {
+      logLifecycleEvent('outcome_ignored', {
+        symbol: signalData.symbol,
+        timeframe: signalData.timeframe || updatedEntry?.timeframe,
+        signalUuid: updatedEntry?.signalUuid || signalData.signalUuid,
+        alertType,
+        lifecycleStage: updatedEntry?.lifecycleStage || signalData.lifecycleStage,
+        reason: updatedEntry._outcomeIgnoreReason || 'already_terminal',
+        closedReason: updatedEntry?.closedReason || signalData.closedReason
+      });
+      return {
+        signalData,
+        updatedEntry,
+        stage: updatedEntry?.lifecycleStage || signalData.lifecycleStage
+      };
+    }
     const stage =
       updatedEntry?.lifecycleStage ||
       signalData.lifecycleStage ||
@@ -380,6 +444,18 @@ const processWebhookLifecycle = processIncomingTradeAlert;
 
 function applyLocalOutcome(entrySignal, alertType, closedReason) {
   applyOutcomeUpdate(entrySignal, alertType, closedReason);
+  if (entrySignal._outcomeIgnored) {
+    logLifecycleEvent('outcome_ignored', {
+      symbol: entrySignal.symbol,
+      timeframe: entrySignal.timeframe,
+      signalUuid: entrySignal.signalUuid || entrySignal.signalId,
+      alertType,
+      lifecycleStage: entrySignal.lifecycleStage,
+      reason: entrySignal._outcomeIgnoreReason || 'already_terminal',
+      closedReason: entrySignal.closedReason
+    });
+    return entrySignal;
+  }
   logLifecycleEvent('updated', {
     symbol: entrySignal.symbol,
     timeframe: entrySignal.timeframe,

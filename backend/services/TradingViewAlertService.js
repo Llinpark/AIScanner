@@ -19,6 +19,9 @@ const TradeDeliveryService = require('../services/TradeDeliveryService');
 const TradeLifecycleService = require('../services/TradeLifecycleService');
 const { normalizeSymbol } = require('../config/symbols');
 const { logPipeline, extractPipelineMeta } = require('../utils/pipelineLog');
+const { extractPineClientMeta } = require('../utils/PineClientVersion');
+const { attachOptionalContext } = require('../utils/PineWebhookContext');
+const PineClientDecisionFramework = require('./PineClientDecisionFramework');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -62,23 +65,42 @@ function normalizeTradingViewUsername(value) {
 
 function parseWebhookBody(body) {
   if (typeof body === 'string') {
+    const raw = String(body || '').replace(/^\uFEFF/, '').trim();
+    if (!raw) {
+      return { __parseError: true, __rawPreview: '', __parseReason: 'empty_body' };
+    }
     try {
-      return JSON.parse(body);
+      return JSON.parse(raw);
     } catch {
-      return {};
+      return {
+        __parseError: true,
+        __rawPreview: raw.slice(0, 80),
+        __parseReason: 'invalid_json'
+      };
     }
   }
 
   if (!body || typeof body !== 'object') {
-    return {};
+    return { __parseError: true, __rawPreview: '', __parseReason: 'empty_body' };
+  }
+
+  if (body.__parseError) {
+    return body;
   }
 
   if (typeof body.message === 'string') {
-    try {
-      const parsed = JSON.parse(body.message);
-      return { ...body, ...parsed };
-    } catch {
-      return body;
+    const msg = body.message.trim();
+    // Only merge nested message when it is itself a JSON object/array.
+    // Human-readable alert text must never be treated as a second payload.
+    if (msg.startsWith('{') || msg.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(msg);
+        if (parsed && typeof parsed === 'object') {
+          return { ...body, ...parsed };
+        }
+      } catch {
+        return body;
+      }
     }
   }
 
@@ -113,6 +135,8 @@ function toSubscriberRecord(user) {
     id: user._id?.toString() || user.id,
     email: user.email,
     displayName: user.displayName,
+    // Keep role so userHasTierFeature / getEffectiveSubscription still see admin bypass.
+    role: user.role || null,
     subscription: getEffectiveSubscription(user),
     telegram: user.telegram || null,
     mt5: user.mt5 || null,
@@ -184,9 +208,15 @@ async function mapWithConcurrency(items, concurrency, mapper) {
 
 async function saveSignal(signalData, inMemorySignals) {
   const meta = extractPipelineMeta(signalData);
+  const requestId = signalData.pipelineRequestId || 'n/a';
   // Diagnostics only — START does not mark MongoSave PASS in PipelineStatus.
   console.log(
-    `[TV WEBHOOK Saving Signal] symbol=${meta.symbol || 'n/a'} signalUuid=${meta.signalUuid || 'n/a'}`
+    `[SIGNAL CREATE START] requestId=${requestId} symbol=${meta.symbol || 'n/a'} ` +
+      `timeframe=${meta.timeframe || 'n/a'} signalUuid=${meta.signalUuid || 'n/a'}`
+  );
+  console.log(
+    `[SIGNAL PERSIST START] requestId=${requestId} symbol=${meta.symbol || 'n/a'} ` +
+      `signalUuid=${meta.signalUuid || 'n/a'}`
   );
 
   if (!isDbConnected()) {
@@ -198,7 +228,14 @@ async function saveSignal(signalData, inMemorySignals) {
     if (Array.isArray(inMemorySignals)) {
       inMemorySignals.unshift(saved);
     }
-    console.log(`[TV WEBHOOK Mongo Success] mode=in_memory id=${saved._id}`);
+    console.log(
+      `[SIGNAL CREATE SUCCESS] requestId=${requestId} mode=in_memory id=${saved._id} ` +
+        `signalUuid=${saved.signalUuid || meta.signalUuid || 'n/a'}`
+    );
+    console.log(
+      `[SIGNAL PERSIST SUCCESS] requestId=${requestId} mode=in_memory id=${saved._id} ` +
+        `signalUuid=${saved.signalUuid || meta.signalUuid || 'n/a'}`
+    );
     logPipeline('MongoSave', 'PASS', {
       ...meta,
       reason: `Success; in_memory_fallback; id=${saved._id}`
@@ -222,7 +259,12 @@ async function saveSignal(signalData, inMemorySignals) {
       inMemorySignals.unshift(saved.toObject ? saved.toObject() : saved);
     }
     console.log(
-      `[TV WEBHOOK Mongo Success] id=${saved._id} signalUuid=${saved.signalUuid || saved.signalId || meta.signalUuid || 'n/a'}`
+      `[SIGNAL CREATE SUCCESS] requestId=${requestId} id=${saved._id} ` +
+        `signalUuid=${saved.signalUuid || saved.signalId || meta.signalUuid || 'n/a'}`
+    );
+    console.log(
+      `[SIGNAL PERSIST SUCCESS] requestId=${requestId} id=${saved._id} ` +
+        `signalUuid=${saved.signalUuid || saved.signalId || meta.signalUuid || 'n/a'}`
     );
     logPipeline('MongoSave', 'PASS', {
       ...meta,
@@ -248,7 +290,11 @@ async function saveSignal(signalData, inMemorySignals) {
             .map(([k, v]) => `${k}:${v?.message || v}`)
             .join(', ')
         : error.message;
-    console.error(`[TV WEBHOOK Mongo Failed] ${details}`);
+    console.error(
+      `[SIGNAL PERSIST FAILED] requestId=${requestId} symbol=${meta.symbol || 'n/a'} ` +
+        `signalUuid=${meta.signalUuid || 'n/a'} reason=${details || 'mongo_save_failed'}`
+    );
+    console.error(`[WEBHOOK FAIL:MONGO] ${details || 'mongo_save_failed'}`);
     console.error('[Alerts] saveSignal failed:', details);
     logPipeline('MongoSave', 'FAIL', {
       ...meta,
@@ -295,9 +341,49 @@ async function deliverBroadcastToSubscribers(io, savedSignal, subscribers) {
  * One Pine signal → ONE Mongo Signal document → fan-out delivery.
  * Never clones Signal docs per subscriber.
  */
+function explainSubscriberSkip(subscriber, signalData) {
+  if (!subscriber?.subscription) return 'subscription_inactive';
+  if (!isTradingViewSymbolAllowed(signalData.symbol, subscriber.subscription)) {
+    return 'symbol_mismatch';
+  }
+  if (
+    signalData.timeframe &&
+    !isTradingViewTimeframeAllowed(signalData.timeframe, subscriber.subscription)
+  ) {
+    return 'timeframe_mismatch';
+  }
+  return 'user_not_eligible';
+}
+
 async function broadcastToSubscribers(io, signalData, inMemorySignals = [], options = {}) {
+  const meta = extractPipelineMeta(signalData);
+  const requestId = signalData.pipelineRequestId || 'n/a';
   const subscribers = await findActiveSubscribers();
-  const eligible = subscribers.filter(sub => subscriberAllowsSignal(sub, signalData));
+  console.log(
+    `[BROADCAST START] requestId=${requestId} signalUuid=${meta.signalUuid || 'n/a'} ` +
+      `symbol=${meta.symbol || 'n/a'} timeframe=${meta.timeframe || 'n/a'} ` +
+      `activeSubscribers=${subscribers.length}`
+  );
+
+  const eligible = [];
+  const skipped = [];
+  for (const sub of subscribers) {
+    if (subscriberAllowsSignal(sub, signalData)) {
+      eligible.push(sub);
+    } else {
+      const reason = explainSubscriberSkip(sub, signalData);
+      skipped.push({ userId: sub.id, email: sub.email, reason });
+      console.log(
+        `[BROADCAST SKIPPED] requestId=${requestId} signalUuid=${meta.signalUuid || 'n/a'} ` +
+          `symbol=${meta.symbol || 'n/a'} userId=${sub.id || 'n/a'} reason=${reason}`
+      );
+    }
+  }
+
+  console.log(
+    `[BROADCAST ELIGIBLE] requestId=${requestId} signalUuid=${meta.signalUuid || 'n/a'} ` +
+      `count=${eligible.length}`
+  );
 
   let saved = options.existingSaved || null;
   let broadcastSaved = false;
@@ -321,17 +407,28 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
   if (eligible.length === 0) {
     if (subscribers.length === 0) {
       await deliverLiveAlert(io, saved);
+    } else {
+      logPipeline('Broadcast', 'FAIL', {
+        ...meta,
+        signalUuid: saved.signalUuid || saved.signalId || meta.signalUuid,
+        reason: `NO_ELIGIBLE_SUBSCRIBERS; active=${subscribers.length}; skipped=${skipped.length}`
+      });
     }
     return {
       delivered: 0,
       subscribers: [],
       broadcastSaved,
       skippedByEntitlement: subscribers.length,
+      skipped,
       signalUuid: saved.signalUuid || saved.signalId
     };
   }
 
   const settled = await mapWithConcurrency(eligible, FANOUT_CONCURRENCY, async subscriber => {
+    console.log(
+      `[BROADCAST DELIVERY START] signalUuid=${saved.signalUuid || meta.signalUuid || 'n/a'} ` +
+        `symbol=${meta.symbol || 'n/a'} userId=${subscriber.id || 'n/a'}`
+    );
     await deliverLiveAlert(io, saved, subscriber);
     return { userId: subscriber.id, email: subscriber.email };
   });
@@ -342,6 +439,7 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
     subscribers: results,
     broadcastSaved,
     skippedByEntitlement: subscribers.length - eligible.length,
+    skipped,
     signalUuid: saved.signalUuid || saved.signalId
   };
 }
@@ -429,6 +527,41 @@ function buildSignalData(body) {
     selfTest: body.selfTest === true || body.self_test === true || undefined
   };
 
+  // Additive Pine client metadata (optional). Old payloads without these fields stay valid.
+  const pineMeta = extractPineClientMeta(body);
+  if (pineMeta.pineClientVersion) signalData.pineClientVersion = pineMeta.pineClientVersion;
+  if (pineMeta.scriptGenerationId) signalData.scriptGenerationId = pineMeta.scriptGenerationId;
+  if (pineMeta.generatedAt) signalData.pineGeneratedAt = pineMeta.generatedAt;
+  if (pineMeta.capabilities.length) signalData.pineCapabilities = pineMeta.capabilities;
+  signalData.pineCompatMode = pineMeta.mode;
+
+  // Correlation only — not a Mongo schema field; stripped on strict persist, kept in-memory for diag.
+  if (body.pipelineRequestId) {
+    signalData.pipelineRequestId = String(body.pipelineRequestId);
+  }
+
+  // Option A additive identity/display fields (never required; never gate auth/delivery).
+  const chartTf = body.chartTf || body.chart_tf || body.chartTimeframe || null;
+  const canonicalSignalTf =
+    body.canonicalSignalTf || body.canonical_signal_tf || body.canonicalTimeframe || null;
+  const canonicalSignalKey =
+    body.canonicalSignalKey || body.canonical_signal_key || permanentId || null;
+  if (chartTf) signalData.chartTf = String(chartTf);
+  if (canonicalSignalTf) signalData.canonicalSignalTf = String(canonicalSignalTf);
+  if (canonicalSignalKey) signalData.canonicalSignalKey = String(canonicalSignalKey);
+
+  // Optional future context fields — accepted if present, ignored if absent.
+  attachOptionalContext(signalData, body);
+
+  // Decision framework stub: observability / future wiring only.
+  // Result is intentionally discarded — never filters, rescores, or rewrites delivery.
+  try {
+    const decision = PineClientDecisionFramework.evaluateEntryDecision(body, signalData);
+    void decision;
+  } catch {
+    // Never fail webhook on decision-framework prep errors.
+  }
+
   if (signalData.pattern === 'perfect_fvg' && !signalData.patternLabel) {
     signalData.patternLabel = 'Pattern A: Perfect Fair Value Gap';
   }
@@ -456,6 +589,9 @@ function buildSignalData(body) {
       console.warn(
         `[TV WEBHOOK VALIDATION FAILED] fields=${rejected.join(',') || 'n/a'} ` +
           `symbol=${signalData.symbol} msg=${error.message}`
+      );
+      console.warn(
+        `[WEBHOOK FAIL:VALIDATION] fields=${rejected.join(',') || 'n/a'} msg=${error.message}`
       );
       throw error;
     }
@@ -522,6 +658,10 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
   }
 
   const { signalData, updatedEntry } = lifecycle;
+  // Keep request correlation across lifecycle rebuilds (diagnostics only).
+  if (baseData.pipelineRequestId && signalData && !signalData.pipelineRequestId) {
+    signalData.pipelineRequestId = baseData.pipelineRequestId;
+  }
 
   logPipeline('Lifecycle', 'PASS', {
     ...extractPipelineMeta(signalData),
@@ -534,7 +674,8 @@ async function processTradingViewWebhook(io, rawBody, inMemorySignals = []) {
     updatedEntry
       ? {
           ...(updatedEntry.toObject ? updatedEntry.toObject() : updatedEntry),
-          alertType: signalData.alertType
+          alertType: signalData.alertType,
+          pipelineRequestId: signalData.pipelineRequestId || baseData.pipelineRequestId
         }
       : signalData,
     inMemorySignals,

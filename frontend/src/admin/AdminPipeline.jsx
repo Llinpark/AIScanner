@@ -17,6 +17,19 @@ function formatMs(value) {
   return `${(n / 1000).toFixed(1)} s`;
 }
 
+function eventStatusPillClass(status) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'PASS') return 'status-active';
+  if (s === 'SKIP' || s === 'N/A') return 'status-pending';
+  return 'status-cancelled';
+}
+
+function eventStatusLabel(status) {
+  const s = String(status || '').toUpperCase();
+  if (s === 'SKIP') return 'SKIP / N/A';
+  return status || '—';
+}
+
 function ToneDot({ tone }) {
   return <span className={`pipeline-tone pipeline-tone-${tone || 'yellow'}`} aria-hidden="true" />;
 }
@@ -94,6 +107,13 @@ export default function AdminPipeline() {
 
   const selected = subscribers.find(s => s.userId === selectedId) || subscribers[0] || null;
   const healthy = status?.pipelineHealthy;
+  const intakeState = status?.intakeState || 'NO_WEBHOOK_RECEIVED';
+  const intakeTone =
+    intakeState === 'TELEGRAM_SUCCESS' || intakeState === 'PIPELINE_ACTIVE'
+      ? 'status-active'
+      : intakeState === 'NO_WEBHOOK_RECEIVED'
+        ? 'status-pending'
+        : 'status-expired';
 
   return (
     <div className="admin-pipeline">
@@ -102,7 +122,59 @@ export default function AdminPipeline() {
         <span className={`admin-pill ${healthy ? 'status-active' : 'status-pending'}`}>
           {healthy ? 'Healthy' : 'Check stages'}
         </span>
+        <span className={`admin-pill ${intakeTone}`} title="Deterministic intake/delivery state">
+          {intakeState}
+        </span>
       </div>
+      {intakeState === 'NO_WEBHOOK_RECEIVED' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          No TradingView webhook has reached the backend yet. An empty pipeline does not mean Telegram
+          is broken — confirm the chart alert webhook URL and that Pine <code>alert()</code> is
+          firing.
+        </p>
+      )}
+      {intakeState === 'WEBHOOK_RECEIVED_AUTH_FAILED' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          A TradingView webhook arrived but authentication failed (licenseToken / username / userId).
+        </p>
+      )}
+      {intakeState === 'WEBHOOK_PARSE_FAILED' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          A TradingView webhook arrived but the body was empty or not valid JSON.
+        </p>
+      )}
+      {intakeState === 'WEBHOOK_SCHEMA_FAILED' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          Webhook authenticated but signal schema/levels validation failed.
+        </p>
+      )}
+      {intakeState === 'SIGNAL_PERSIST_FAILED' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          Signal create/persist failed — Telegram was not attempted.
+        </p>
+      )}
+      {intakeState === 'NO_ELIGIBLE_SUBSCRIBERS' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          Signal persisted, but no subscribers qualified for broadcast delivery.
+        </p>
+      )}
+      {intakeState === 'TELEGRAM_DELIVERY_FAILED' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          Upstream pipeline succeeded far enough to attempt Telegram, but Telegram delivery failed.
+          Check DeliveryTelegram reason / Bot API error.
+        </p>
+      )}
+      {intakeState === 'TELEGRAM_SUCCESS' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          Latest recorded Telegram trade-alert delivery succeeded.
+        </p>
+      )}
+      {intakeState === 'PIPELINE_ACTIVE' && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          TradingView webhook activity has been received and the pipeline is processing beyond intake
+          silence.
+        </p>
+      )}
 
       <div className="admin-stat-grid">
         <div className="admin-stat-card tone-accent">
@@ -136,6 +208,7 @@ export default function AdminPipeline() {
           <strong className="admin-stat-value">
             {delivery?.mt5SuccessPct != null ? `${delivery.mt5SuccessPct}%` : '—'}
           </strong>
+          <small className="admin-stat-hint">— = no MT5 attempts (Telegram-only is OK)</small>
         </div>
         <div className="admin-stat-card">
           <span className="admin-stat-label">Webhook success</span>
@@ -160,10 +233,10 @@ export default function AdminPipeline() {
           <strong className="admin-stat-value">{formatMs(delivery?.avgMongoToTelegramMs)}</strong>
         </div>
         <div className="admin-stat-card">
-          <span className="admin-stat-label">Waiting (no webhook)</span>
+          <span className="admin-stat-label">Subscribers never webhooked</span>
           <strong className="admin-stat-value">{status?.waitingSubscribers ?? 0}</strong>
           <small className="admin-stat-hint">
-            Active {status?.activeSubscribers ?? subscribers.length}
+            Active {status?.activeSubscribers ?? subscribers.length} · not a pipeline stall
           </small>
         </div>
       </div>
@@ -177,28 +250,56 @@ export default function AdminPipeline() {
         </div>
         <dl className="admin-meta-grid">
           <div className="admin-meta-item">
-            <dt>Last webhook</dt>
-            <dd>{formatDate(status?.lastWebhook?.at)}</dd>
+            <dt>Last Webhook Received</dt>
+            <dd>{formatDate(status?.lastWebhook?.at || status?.lastWebhookReceived?.at)}</dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last Auth PASS/FAIL</dt>
+            <dd>
+              {status?.lastFailureStage === 'Auth'
+                ? `FAIL — ${status.lastFailureReason || 'unauthorized'}`
+                : status?.lastAuthPassed
+                  ? `PASS — ${formatDate(status.lastAuthPassed.at)}`
+                  : '—'}
+            </dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last Validation PASS/FAIL</dt>
+            <dd>
+              {status?.lastFailureStage === 'Validation'
+                ? `FAIL — ${status.lastFailureReason || 'validation_failed'}`
+                : status?.lastValidation
+                  ? `PASS — ${formatDate(status.lastValidation.at)}`
+                  : '—'}
+            </dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last Mongo Save</dt>
+            <dd>{formatDate(status?.lastMongoSave?.at)}</dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last Telegram Delivery</dt>
+            <dd>{formatDate(status?.lastTelegram?.at || status?.lastTelegramDelivery?.at)}</dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last MT5 Delivery</dt>
+            <dd>{formatDate(status?.lastMT5?.at || status?.lastMT5Delivery?.at)}</dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last Failure Stage</dt>
+            <dd>{status?.lastFailureStage || '—'}</dd>
+          </div>
+          <div className="admin-meta-item">
+            <dt>Last Failure Reason</dt>
+            <dd>{status?.lastFailureReason || '—'}</dd>
           </div>
           <div className="admin-meta-item">
             <dt>Last published</dt>
             <dd>{formatDate(status?.lastPublishedSignal?.at)}</dd>
           </div>
           <div className="admin-meta-item">
-            <dt>Last Mongo</dt>
-            <dd>{formatDate(status?.lastMongoSave?.at)}</dd>
-          </div>
-          <div className="admin-meta-item">
-            <dt>Last Telegram</dt>
-            <dd>{formatDate(status?.lastTelegram?.at)}</dd>
-          </div>
-          <div className="admin-meta-item">
             <dt>Last Socket</dt>
             <dd>{formatDate(status?.lastSocket?.at)}</dd>
-          </div>
-          <div className="admin-meta-item">
-            <dt>Last MT5</dt>
-            <dd>{formatDate(status?.lastMT5?.at)}</dd>
           </div>
           <div className="admin-meta-item">
             <dt>Current stage</dt>
@@ -212,11 +313,6 @@ export default function AdminPipeline() {
             </dd>
           </div>
         </dl>
-        {status?.lastFailureStage && (
-          <p className="pipeline-timeline-note">
-            Last failure: {status.lastFailureStage} — {status.lastFailureReason || 'unknown'}
-          </p>
-        )}
         <Timeline stages={status?.timeline || []} />
       </div>
 
@@ -341,12 +437,8 @@ export default function AdminPipeline() {
                   <td>{formatDate(ev.at)}</td>
                   <td>{ev.type}</td>
                   <td>
-                    <span
-                      className={`admin-pill ${
-                        ev.status === 'PASS' ? 'status-active' : 'status-cancelled'
-                      }`}
-                    >
-                      {ev.status}
+                    <span className={`admin-pill ${eventStatusPillClass(ev.status)}`}>
+                      {eventStatusLabel(ev.status)}
                     </span>
                   </td>
                   <td>{ev.symbol || '—'}</td>

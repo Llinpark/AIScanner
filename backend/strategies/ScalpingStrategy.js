@@ -11,10 +11,8 @@
  */
 
 const { resolveScalpingConfig, STRATEGY_ID, STRATEGY_NAME } = require('./config/scalpingConfig');
-const {
-  STRATEGY_ARCHITECTURE,
-  isHtfChartTimeframe
-} = require('./config/strategyArchitecture');
+const { STRATEGY_ARCHITECTURE } = require('./config/strategyArchitecture');
+const { classifyForStrategy } = require('../utils/TradingStyleClassifier');
 const { IStrategy } = require('./interfaces/IStrategy');
 const { LiquidityDetector } = require('./detectors/LiquidityDetector');
 const { LiquiditySweepDetector } = require('./detectors/LiquiditySweepDetector');
@@ -83,21 +81,12 @@ class ScalpingStrategy extends IStrategy {
     const timeframe = context.timeframe || this.config.defaultEntryTimeframe;
     const entryTfs =
       this.config.entryTimeframes || [...STRATEGY_ARCHITECTURE.scalping.entryTimeframes];
-    const htfList = [
-      ...(this.config.htfTimeframes || STRATEGY_ARCHITECTURE.scalping.htfTimeframes),
-      this.config.htfTimeframe
-    ].filter(Boolean);
-
-    // Hard rule: never enter on HTF (allowlist from Strategy Architecture)
-    if (isHtfChartTimeframe(timeframe, htfList)) {
-      return { signal: false, stage: 'rejected', reason: 'htf_never_entries' };
-    }
-    if (entryTfs.length && !entryTfs.includes(timeframe) && context.enforceEntryTf !== false) {
-      // Allow analysis when caller passes explicit LTF candles without naming TF loosely
-      if (context.strictTimeframe === true) {
-        return { signal: false, stage: 'rejected', reason: 'invalid_entry_timeframe' };
-      }
-    }
+    // Chart TF → trading style is advisory metadata only (never rejects evaluation).
+    const styleMeta = classifyForStrategy(timeframe, 'scalping', {
+      entryTimeframes: entryTfs,
+      htfTimeframe: this.config.htfTimeframe,
+      htfTimeframes: this.config.htfTimeframes || STRATEGY_ARCHITECTURE.scalping.htfTimeframes
+    });
 
     const ltf = (context.candles || []).map(normalizeCandle);
     const htf = (context.scalpingHtfCandles || context.htfCandles || []).map(normalizeCandle);
@@ -233,7 +222,7 @@ class ScalpingStrategy extends IStrategy {
       return { signal: false, stage: 'rejected', reason: 'entry_resolve_failed' };
     }
 
-    // STEP 9 — SL
+    // STEP 9 — SL (entry-TF ATR cap + FVG fallback; reject if none valid)
     const stop = this.riskManager.computeStop({
       direction: sweep.direction,
       entry: entryResolved.entry,
@@ -242,11 +231,15 @@ class ScalpingStrategy extends IStrategy {
       candles: ltf,
       symbol
     });
-    if (!stop) {
-      return { signal: false, stage: 'rejected', reason: 'invalid_stop' };
+    if (!stop || stop.rejectReason || !Number.isFinite(stop.stop_loss)) {
+      return {
+        signal: false,
+        stage: 'rejected',
+        reason: stop?.rejectReason || 'SIGNAL_REJECTED_SL_TOO_FAR'
+      };
     }
 
-    // STEP 10 — TPs
+    // STEP 10 — TPs from FINAL accepted SL risk
     const atrVal = atr(ltf, this.config.displacement?.atrPeriod || 14);
     const tps = this.tpEngine.compute({
       direction: sweep.direction,
@@ -257,6 +250,14 @@ class ScalpingStrategy extends IStrategy {
       atrValue: atrVal,
       symbol
     });
+    const minRr = this.config.takeProfit?.minRr ?? 0.5;
+    if (!(tps.rr >= minRr)) {
+      return {
+        signal: false,
+        stage: 'rejected',
+        reason: 'SIGNAL_REJECTED_RR_TOO_LOW'
+      };
+    }
 
     // Confidence
     const scoring = this.confidence.score({
@@ -303,8 +304,14 @@ class ScalpingStrategy extends IStrategy {
       confidence: scoring.score,
       reasons,
       timeframe,
-      timestamp: ltf[ltf.length - 1]?.time
+      timestamp: ltf[ltf.length - 1]?.time,
+      htfTimeframe: this.config.htfTimeframe,
+      entryTimeframe: timeframe
     });
+    // Optional internal metadata — not part of TradingView webhook DTO.
+    entry.tradingStyle = styleMeta.tradingStyle;
+    entry.chartTimeframe = styleMeta.chartTimeframe;
+    entry.higherTimeframe = styleMeta.higherTimeframe;
 
     return {
       signal: true,
@@ -319,7 +326,8 @@ class ScalpingStrategy extends IStrategy {
         fvg,
         retrace,
         stop,
-        tps
+        tps,
+        tradingStyle: styleMeta
       }
     };
   }

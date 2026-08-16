@@ -74,18 +74,6 @@ function tfToSeconds(tf) {
 }
 
 /**
- * True when `tf` matches any HTF in the list (app form "15m"/"1h" or Pine minutes "15"/"60").
- * Used to enforce "never enter on HTF" without hardcoding per-strategy TF strings.
- * @param {string} tf
- * @param {string[]} htfTimeframes
- */
-function isHtfChartTimeframe(tf, htfTimeframes = []) {
-  const minutes = tfToMinutes(tf);
-  if (minutes == null) return false;
-  return (htfTimeframes || []).some(h => tfToMinutes(h) === minutes);
-}
-
-/**
  * Human label for TF lists, e.g. ["3m","5m"] → "3m or 5m"
  * @param {string[]} tfs
  */
@@ -122,9 +110,14 @@ const STRATEGY_ARCHITECTURE = Object.freeze({
     shortLabel: 'Scalping',
     pineShortTitle: 'Kaching Scalp',
     pineTitle: 'KachingFx Sweep+FVG Scalp',
-    /** Allowed entry chart timeframes (TradingView chart TF). Includes 1m — pre-Aug-3 production charts. */
+    /** Allowed entry/display chart timeframes. Includes 1m — pre-Aug-3 production charts. */
     entryTimeframes: Object.freeze(['1m', '3m', '5m']),
     defaultEntryTimeframe: '3m',
+    /**
+     * Option A: single canonical signal engine TF. Sweep/MSS/FVG/entry/SL/TP evaluate here;
+     * allowed display charts only mirror the same UUID/levels (chart != canonical is OK).
+     */
+    canonicalSignalTimeframe: '3m',
     /** Allowed HTF confirmation timeframes (via request.security only). */
     htfTimeframes: Object.freeze(['15m']),
     defaultHtfTimeframe: '15m',
@@ -138,11 +131,11 @@ const STRATEGY_ARCHITECTURE = Object.freeze({
       defaultEntry: 'SCALPING_DEFAULT_ENTRY_TF',
       htf: 'SCALPING_HTF_TF'
     }),
-    /** Diagnostic labels shown in Pine when TF validation fails. */
+    /** Labels shown in Pine when chart TF is outside the allowed display list. */
     diagnostics: Object.freeze({
       wrongEntry: 'Wrong Entry Timeframe',
-      wrongHtf: 'Wrong HTF Configuration',
-      chartIsHtf: 'Chart opened on HTF',
+      wrongHtf: 'Preferred HTF Configuration',
+      chartIsHtf: 'Chart opened on HTF (advisory)',
       unsupported: 'Unsupported Strategy Configuration',
       missingHtf: 'Missing HTF Confirmation'
     })
@@ -156,6 +149,8 @@ const STRATEGY_ARCHITECTURE = Object.freeze({
     pineTitle: 'KachingFx Sweep+FVG Day',
     entryTimeframes: Object.freeze(['5m', '15m']),
     defaultEntryTimeframe: '15m',
+    /** Option A: canonical signal engine TF (HTF still from config 1h/4h). */
+    canonicalSignalTimeframe: '5m',
     htfTimeframes: Object.freeze(['1h', '4h']),
     defaultHtfTimeframe: '1h',
     refineHtfTimeframes: Object.freeze(['1h', '4h']),
@@ -169,8 +164,8 @@ const STRATEGY_ARCHITECTURE = Object.freeze({
     }),
     diagnostics: Object.freeze({
       wrongEntry: 'Wrong Entry Timeframe',
-      wrongHtf: 'Wrong HTF Configuration',
-      chartIsHtf: 'Chart opened on HTF',
+      wrongHtf: 'Preferred HTF Configuration',
+      chartIsHtf: 'Chart opened on HTF (advisory)',
       unsupported: 'Unsupported Strategy Configuration',
       missingHtf: 'Missing HTF Confirmation'
     })
@@ -431,6 +426,7 @@ function assertStrategyArchitecturesValid(runtimeByKey = {}) {
  * @param {object} [resolvedConfig] - runtime strategy config (htfTimeframe, entryTimeframes, …)
  */
 function buildPineTfVariables(key, resolvedConfig = {}) {
+  const { buildPineTradingStyleExpression } = require('../../utils/TradingStyleClassifier');
   const arch = getStrategyArchitecture(key);
   if (!arch) {
     throw new Error(`Cannot build Pine TF variables for unknown strategy: ${key}`);
@@ -475,30 +471,35 @@ function buildPineTfVariables(key, resolvedConfig = {}) {
   const entryLabel = formatTfList(resolved.entryTimeframes);
   const htfLabel = formatTfList(arch.htfTimeframes.map(formatHtfDisplay));
   const htfShort = formatTfList(arch.htfTimeframes);
+  const canonicalTf = arch.canonicalSignalTimeframe;
+  const canonicalLabel = String(canonicalTf);
   const d = arch.diagnostics;
 
-  // Include shortLabel so users on the wrong chart know which strategy they attached
-  // (e.g. Scalping on 15m vs Day Trading which allows 15m entries).
-  const diagWrongEntry = `${d.wrongEntry} (${arch.shortLabel}) — attach to ${entryLabel} for entries (HTF is ${htfShort} via request.security)`;
-  const diagWrongHtf = `${d.wrongHtf} (${arch.shortLabel}) — set HTF context to ${htfLabel}`;
-  const diagChartIsHtf = `${d.chartIsHtf} (${arch.shortLabel}) — switch to ${entryLabel} for entries`;
+  // Option A: wrong-entry lists allowed display TFs. chart!=canonical is never a mismatch.
+  const diagWrongEntry = `${d.wrongEntry} (${arch.shortLabel}) — open an allowed display TF: ${entryLabel} (canonical signal TF ${canonicalLabel}; HTF ${htfShort} via request.security)`;
+  const diagWrongHtf = `${d.wrongHtf} (${arch.shortLabel}) — preferred HTF context ${htfLabel}`;
+  const diagChartIsHtf = `${d.chartIsHtf} (${arch.shortLabel}) — allowed display charts are ${entryLabel}`;
   const diagUnsupported = `${d.unsupported} — regenerate Pine from KachingFx for ${arch.shortLabel}`;
   const diagMissingHtf = `${d.missingHtf} (${arch.shortLabel}) — select a valid HTF context (${htfLabel})`;
 
-  const htfInputLabel = `HTF context (${htfShort} — never entries)`;
-  const htfInputTooltip = `Higher-timeframe confirmation only (${htfLabel}). Fetched via request.security — do not open this chart for entries. Default is baked from Strategy Configuration.`;
+  const htfInputLabel = `HTF context (${htfShort} — confirmation)`;
+  const htfInputTooltip = `Higher-timeframe confirmation (${htfLabel}). Fetched via request.security inside the canonical ${canonicalLabel} signal engine. Allowed display charts: ${entryLabel}. Chart TF may differ from canonical ${canonicalLabel}; event-safe bridge keeps UUID/Entry/SL/TP identical (security_lower_tf when chart > canonical). Default is baked from Strategy Configuration.`;
 
   const scalpFifteenTip =
     arch.key === 'scalping'
-      ? ' Want 15m entries? Generate Day Trading instead — 15m is Scalping HTF only.'
+      ? ' Prefer 15m profile settings? Generate Day Trading — Scalping allows 1m/3m/5m display (canonical 3m).'
       : '';
-  const instructionLead = `${arch.shortLabel}: Open TradingView → attach this script to a ${entryLabel} chart (entries blocked elsewhere). HTF confirmation uses ${htfShort} via request.security — never open ${htfShort} for entries.${scalpFifteenTip}`;
+  const alertTip = ` Prefer ONE TradingView alert on canonical ${canonicalLabel} (backend UUID-dedupes if you alert on multiple allowed charts).`;
+  const instructionLead = `${arch.shortLabel}: Open TradingView on an allowed display TF (${entryLabel}). Signals evaluate on canonical ${canonicalLabel} (one engine + event-safe bridge); UUID/Entry/SL/TP/lifecycle match across allowed charts. HTF confirmation uses ${htfShort} via request.security.${alertTip}${scalpFifteenTip}`;
 
   return {
     STRATEGY_KEY: arch.key,
     HTF_TF: tfToPine(resolved.htfTimeframe),
+    CANONICAL_SIGNAL_TF: tfToPine(canonicalTf),
+    ARCH_CANONICAL_SIGNAL_TF: canonicalTf,
     ENTRY_CHART_OK: entryChartOk,
     HTF_TF_OK: htfTfOk,
+    TRADING_STYLE_EXPR: buildPineTradingStyleExpression(),
     HTF_INPUT_LABEL: htfInputLabel,
     HTF_INPUT_TOOLTIP: htfInputTooltip,
     DIAG_WRONG_ENTRY: diagWrongEntry,
@@ -530,6 +531,7 @@ function getArchitecturePublicSummary() {
       shortLabel: a.shortLabel,
       entryTimeframes: [...a.entryTimeframes],
       defaultEntryTimeframe: a.defaultEntryTimeframe,
+      canonicalSignalTimeframe: a.canonicalSignalTimeframe,
       htfTimeframes: [...a.htfTimeframes],
       defaultHtfTimeframe: a.defaultHtfTimeframe,
       refineHtfTimeframes: [...a.refineHtfTimeframes],
@@ -546,7 +548,6 @@ module.exports = {
   tfToMinutes,
   tfToPine,
   tfToSeconds,
-  isHtfChartTimeframe,
   formatTfList,
   formatHtfDisplay,
   getStrategyArchitecture,

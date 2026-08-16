@@ -447,7 +447,7 @@ function LiquidityTargetScoringSection({
           ))}
         </select>
       </Field>
-      <Field label="Maximum ATR multiplier">
+      <Field label="Maximum TP ATR multiplier">
         <input
           type="number"
           min={0}
@@ -1412,6 +1412,17 @@ export default function AdminScanner() {
                   value={scalping.stop?.bufferAtrRatio ?? 0.05}
                   onChange={e =>
                     patchNested('scalping', 'stop', 'bufferAtrRatio', Number(e.target.value))
+                  }
+                />
+              </Field>
+              <Field label="Max stop (ATR mult)">
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={scalping.stop?.maxStopAtrMult ?? 1.5}
+                  onChange={e =>
+                    patchNested('scalping', 'stop', 'maxStopAtrMult', Number(e.target.value))
                   }
                 />
               </Field>

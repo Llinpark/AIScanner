@@ -74,6 +74,41 @@ function isOpenOutcome(outcome) {
   );
 }
 
+/** Closed tradeStatus values — once set, outcome must not be overwritten. */
+const TERMINAL_TRADE_STATUSES = new Set(['won', 'lost', 'expired', 'cancelled', 'closed']);
+
+const PARTIAL_MILESTONE_RANK = Object.freeze({ tp1: 1, tp2: 2 });
+
+function isTerminalTradeStatus(tradeStatus) {
+  return TERMINAL_TRADE_STATUSES.has(String(tradeStatus || '').toLowerCase());
+}
+
+/**
+ * True when the entry has reached an immutable terminal lifecycle state.
+ * Includes expiry-after-TP (outcome may still read tp1/tp2 while tradeStatus=won).
+ */
+function isTerminalEntry(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  if (isTerminalTradeStatus(entry.tradeStatus)) return true;
+  const outcome = String(entry.outcome || '').toLowerCase();
+  if (TERMINAL_OUTCOMES.has(outcome) && !PARTIAL_OUTCOMES.has(outcome)) return true;
+  if (entry.closedAt && !isOpenTradeStatus(entry.tradeStatus)) return true;
+  return false;
+}
+
+function logOutcomeIgnored(entrySignal, reason, incomingOutcome, alertType) {
+  const uuid = entrySignal.signalUuid || entrySignal.signalId || entrySignal.signalGroupId || 'n/a';
+  console.log(
+    `[OUTCOME IGNORED] reason=${reason}` +
+      ` signalUuid=${uuid}` +
+      ` existingOutcome=${entrySignal.outcome || 'n/a'}` +
+      ` incomingOutcome=${incomingOutcome || 'n/a'}` +
+      ` incomingAlertType=${alertType || 'n/a'}` +
+      ` tradeStatus=${entrySignal.tradeStatus || 'n/a'}` +
+      ` lifecycleStage=${entrySignal.lifecycleStage || 'n/a'}`
+  );
+}
+
 /**
  * Parse TradingView / human timeframe strings to milliseconds per bar.
  * Supports: 1m, 3m, 15m, 1h, 4h, 1d, and TV shorthand (1, 3, 15, 60, 240, D, W).
@@ -205,8 +240,54 @@ function findEntryBySignalUuid(signals, signalUuid) {
   );
 }
 
+/**
+ * Apply an outcome alert onto an entry in-place.
+ * Terminal entries are immutable (conflicting or duplicate terminal updates → no-op).
+ * Same partial stage replays are idempotent. Backward partial milestones are ignored.
+ *
+ * Sets ephemeral flags (not persisted):
+ *   _outcomeIgnored {boolean}
+ *   _outcomeIgnoreReason {string|null}
+ */
 function applyOutcomeUpdate(entrySignal, alertType, closedReason) {
   const outcome = outcomeFromAlertType(alertType);
+  const existingOutcome = String(entrySignal.outcome || '').toLowerCase();
+
+  entrySignal._outcomeIgnored = false;
+  entrySignal._outcomeIgnoreReason = null;
+
+  // Immutable once terminal (TP3 / SL / expired / cancelled / won|lost|…).
+  if (isTerminalEntry(entrySignal)) {
+    const reason =
+      existingOutcome === outcome || String(entrySignal.lifecycleStage || '') === lifecycleStageFromOutcome(outcome)
+        ? 'already_terminal_same'
+        : 'already_terminal';
+    logOutcomeIgnored(entrySignal, reason, outcome, alertType);
+    entrySignal._outcomeIgnored = true;
+    entrySignal._outcomeIgnoreReason = reason;
+    return entrySignal;
+  }
+
+  // Idempotent same-stage partial (TP1→TP1, TP2→TP2).
+  if (PARTIAL_OUTCOMES.has(outcome) && existingOutcome === outcome) {
+    logOutcomeIgnored(entrySignal, 'same_stage_replay', outcome, alertType);
+    entrySignal._outcomeIgnored = true;
+    entrySignal._outcomeIgnoreReason = 'same_stage_replay';
+    return entrySignal;
+  }
+
+  // Do not regress partial milestones (TP2 → TP1).
+  if (
+    PARTIAL_OUTCOMES.has(outcome) &&
+    PARTIAL_OUTCOMES.has(existingOutcome) &&
+    (PARTIAL_MILESTONE_RANK[outcome] || 0) < (PARTIAL_MILESTONE_RANK[existingOutcome] || 0)
+  ) {
+    logOutcomeIgnored(entrySignal, 'backward_transition', outcome, alertType);
+    entrySignal._outcomeIgnored = true;
+    entrySignal._outcomeIgnoreReason = 'backward_transition';
+    return entrySignal;
+  }
+
   const outcomeR = OUTCOME_R[outcome] ?? 0;
   const terminal = TERMINAL_OUTCOMES.has(outcome) && !PARTIAL_OUTCOMES.has(outcome);
 
@@ -545,6 +626,8 @@ module.exports = {
   findEntryBySignalUuid,
   strategiesMatch,
   applyOutcomeUpdate,
+  isTerminalEntry,
+  isTerminalTradeStatus,
   enrichEntrySignal,
   buildAnalytics,
   lifecycleStageFromOutcome,
@@ -555,6 +638,7 @@ module.exports = {
   WIN_OUTCOMES,
   PARTIAL_OUTCOMES,
   TERMINAL_OUTCOMES,
+  TERMINAL_TRADE_STATUSES,
   DECIDED_OUTCOMES,
   OUTCOME_KEYS
 };

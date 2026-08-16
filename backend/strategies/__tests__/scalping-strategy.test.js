@@ -826,7 +826,7 @@ describe('StrategyRegistry coexistence', () => {
 });
 
 describe('ScalpingStrategy orchestrator', () => {
-  it('rejects HTF timeframe entries', () => {
+  it('does not reject solely for chart TF (HTF / non-preferred continue evaluating)', () => {
     const strat = new ScalpingStrategy();
     const result = strat.analyze({
       symbol: 'EURUSD',
@@ -834,7 +834,33 @@ describe('ScalpingStrategy orchestrator', () => {
       candles: [candle(0, 1, 1, 1, 1)],
       htfCandles: Array.from({ length: 20 }, (_, i) => candle(i, 1.1, 1.11, 1.09, 1.1, 15 * 60_000))
     });
-    assert.equal(result.reason, 'htf_never_entries');
+    assert.notEqual(result.reason, 'htf_never_entries');
+    assert.notEqual(result.reason, 'invalid_entry_timeframe');
+    // Continues into candle-sufficiency / strategy stages instead of TF hard-reject.
+    assert.ok(
+      ['none', 'awaiting_htf_sweep', 'filtered', 'disabled'].includes(result.stage) ||
+        result.reason === 'insufficient_ltf' ||
+        result.reason === 'insufficient_htf'
+    );
+  });
+
+  it('classifies non-preferred chart TFs without rejecting evaluation', () => {
+    const strat = new ScalpingStrategy({
+      config: { filters: { rejectOnMajorNews: false, minAtrPips: 0, sidewaysAtrRatioMax: 0.01 } }
+    });
+    for (const tf of ['30m', '1h', '4h', '1d']) {
+      const flat = Array.from({ length: 40 }, (_, i) => candle(i, 1.1, 1.1005, 1.0995, 1.1));
+      const htf = Array.from({ length: 40 }, (_, i) => candle(i, 1.1, 1.1005, 1.0995, 1.1, 15 * 60_000));
+      const result = strat.analyze({
+        symbol: 'EURUSD',
+        timeframe: tf,
+        strictTimeframe: true,
+        candles: flat,
+        htfCandles: htf
+      });
+      assert.notEqual(result.reason, 'htf_never_entries', tf);
+      assert.notEqual(result.reason, 'invalid_entry_timeframe', tf);
+    }
   });
 
   it('returns awaiting_htf_sweep when no sweep', () => {

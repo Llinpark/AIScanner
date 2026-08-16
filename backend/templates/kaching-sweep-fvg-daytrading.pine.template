@@ -1,11 +1,16 @@
 //@version=5
-indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
+// COMPILE REQUIREMENT (Option A event_bridge_v1): dynamic_requests=true
+// Required because request.security_lower_tf / request.security run inside local scopes
+// (chart vs canonical bridge) and canonSignalTuple() nests HTF request.security().
+indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=true, dynamic_requests=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
 
 // Generated for: {{SUBSCRIBER_LABEL}}
 // Tier: {{SUBSCRIPTION_TIER}} | Script ID: {{SCRIPT_ID}}
+// pineClientVersion: {{PINE_CLIENT_VERSION}} | scriptGenerationId: {{SCRIPT_GENERATION_ID}} | generatedAt: {{PINE_GENERATED_AT}}
 // Strategy: Liquidity Sweep + Fair Value Gap (Day Trading)
-// TF architecture (from Strategy Configuration): entry = {{ARCH_ENTRY_LABEL}}; HTF = {{ARCH_HTF_LABEL}} via request.security() only.
-// Never require opening an HTF chart for entries; never fire entries on HTF candles.
+// TF architecture (Option A + event_bridge_v1): allowed display = {{ARCH_ENTRY_LABEL}}; canonical signal TF = {{ARCH_CANONICAL_SIGNAL_TF}}; HTF = {{ARCH_HTF_LABEL}} via nested request.security.
+// One canonical engine → event-safe bridge (security_lower_tf when chart > canonical) → same UUID/Entry/SL/TP on every allowed display TF.
+// Lifecycle/expiry use canonical OHLC bars. Wrong-TF lock only when chart is outside the allowed display list.
 // TradingView overlays show ONLY: Kaching Buy/Sell, Entry, SL, TP1–3 (with prices).
 
 // ===== CONFIGURATION =====
@@ -17,10 +22,10 @@ LICENSED_TV_USERNAME = "{{TV_USERNAME}}"
 CONFIRM_TV_USERNAME = input.string("{{TV_USERNAME}}", "Confirm your TradingView username", group="KachingFx License", tooltip="Prefilled with the username this script was licensed for. Leave as-is to unlock, or override if needed. Signals and alerts stay locked until it matches.")
 SHOW_TRADE_LINES = true
 SHOW_FVG_ZONE = input.bool(false, "Shade the fair value gap zone", group="KachingFx")
-DEBUG_MODE = input.bool(false, "DEBUG_MODE — show block reasons", group="KachingFx", tooltip="When ON: on-chart labels + Pine Logs show skip reasons and full gate state (chart/entry/HTF TF, confidence, licenseOk, entryTfOk, htfTfOk, tradeActive, confirmed, fireLong/Short). Does NOT change when alert() fires. Turn OFF for live trading.")
+DEBUG_MODE = input.bool(false, "DEBUG_MODE — show block reasons", group="KachingFx", tooltip="When ON: on-chart labels + Pine Logs show skip reasons and full gate state (chart/canonical/HTF TF, confidence, licenseOk, isAllowedDisplayTf, tradeActive, confirmed, fireLong/Short). Does NOT change strategy math. Turn OFF for live trading.")
 levelExtendBars = input.int(22, "Initial trade level length (bars)", minval=8, maxval=60, group="KachingFx Display", tooltip="Starting length of Entry/SL/TP lines. While a trade is active, lines keep extending with each new candle until TP3/SL/expiry/cancel.")
-enableTradeExpiry = input.bool(true, "Enable trade candle expiry", group="KachingFx Display", tooltip="When ON, active trades auto-close after expiryBars if TP3/SL not hit. When OFF, trades stay until TP3/SL/cancel only. Never clears because a later scan finds no setup.")
-expiryBars = input.int(80, "Active trade expiry (candles)", minval=5, maxval=500, group="KachingFx Display", tooltip="Close and remove the active trade after this many candles if TP3/SL not hit (only when Enable trade candle expiry is ON). Default 80 for day trading so trades are not wiped after a few moments.")
+enableTradeExpiry = input.bool(true, "Enable trade candle expiry", group="KachingFx Display", tooltip="When ON, active trades auto-close after expiryBars canonical candles if TP3/SL not hit. When OFF, trades stay until TP3/SL/cancel only. Never clears because a later scan finds no setup.")
+expiryBars = input.int(80, "Active trade expiry (canonical candles)", minval=5, maxval=500, group="KachingFx Display", tooltip="Close after this many CANONICAL signal-TF candles (5m for Day Trading), not chart candles. Default 80 × 5m. Independent of whether you view 5m or 15m.")
 smartLabelMinVerticalTicks = input.int(12, "Smart label min vertical gap (ticks)", minval=2, maxval=250, group="KachingFx Display", tooltip="Minimum price-space gap between trade labels before lower-priority labels are shifted.")
 minHorizontalGapBars = input.int(2, "Smart label min horizontal gap (bars)", minval=1, maxval=8, group="KachingFx Display", tooltip="Horizontal spacing used for staggered smart labels and left/right spillover.")
 
@@ -35,6 +40,9 @@ minDispAtr = input.float({{DISP_ATR_MULT}}, "Displacement min range/ATR", minval
 minGapAtr = input.float({{MIN_FVG_ATR}}, "Min FVG / ATR", minval=0.05, maxval=1.0, group="Day — FVG")
 entryModel = input.string("{{ENTRY_MODEL}}", "Entry model", options=["ce", "entire", "upper_half", "lower_half"], group="Day — Entry")
 stopModel = input.string("{{STOP_MODEL}}", "Stop model", options=["sweep", "fvg", "sweep_or_fvg"], group="Day — Risk")
+slBufferAtr = input.float({{SL_BUFFER_ATR}}, "SL buffer (ATR ratio)", minval=0.0, maxval=1.0, group="Day — Risk", tooltip="Tiny buffer beyond structural stop. Does NOT cap SL distance.")
+maxStopAtrMult = input.float({{MAX_STOP_ATR_MULT}}, "Max stop (ATR mult)", minval=0.1, maxval=20.0, group="Day — Risk", tooltip="Maximum permitted SL distance = canonical-TF ATR × this multiplier. Structural stops beyond this are rejected or fall back to a valid FVG stop.")
+minRr = input.float({{MIN_RR}}, "Minimum RR (TP1)", minval=0.1, maxval=10.0, group="Day — Risk", tooltip="Reject trade if TP1 reward/risk using FINAL SL is below this floor.")
 tp1R = input.float({{TP1_R}}, "Kaching TP1 (R)", group="Day — Risk")
 tp2R = input.float({{TP2_R}}, "Kaching TP2 (R)", group="Day — Risk")
 tp3R = input.float({{TP3_R}}, "Kaching TP3 (R)", group="Day — Risk")
@@ -48,22 +56,27 @@ requireEngulf = input.bool({{REQUIRE_ENGULFING}}, "Require engulfing", group="Da
 normalizeTvUser(string s) =>
     str.lower(str.replace_all(str.trim(s), "@", ""))
 
-licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_USERNAME) == LICENSED_TV_USERNAME
+licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_USERNAME) == normalizeTvUser(LICENSED_TV_USERNAME)
 
-// ===== TIMEFRAME VALIDATION (from Strategy Configuration — Day Trading) =====
-// Entry-chart allowlist and HTF confirmation are injected from backend Strategy Configuration.
+// ===== TIMEFRAME GATE (Option A — Day Trading) =====
+// Allowed display charts from Strategy Configuration. Canonical engine is independent of chart TF.
 STRATEGY_KEY = "{{STRATEGY_KEY}}"
 strategyCfgOk = STRATEGY_KEY == "daytrading"
-// Permitted entry charts only — signals never fire on HTF candles.
+CANONICAL_SIGNAL_TF = "{{CANONICAL_SIGNAL_TF}}"
+isCanonicalChart = timeframe.period == CANONICAL_SIGNAL_TF
+// Allowed entry/display charts (hard gate for arm/alert — not for chart==canonical).
 entryChartOk = {{ENTRY_CHART_OK}}
-// Required HTF (seconds). Default baked from Strategy Configuration; advanced users may change input.
+isAllowedDisplayTf = entryChartOk
+// HTF input diagnostics (non-blocking; nested security still runs with the selected HTF).
 htfSec = timeframe.in_seconds(htfTf)
 htfConfigured = htfSec > 0
 htfTfOk = {{HTF_TF_OK}}
-// Chart must be an entry TF; HTF is never a valid entry chart.
 chartSec = timeframe.in_seconds()
 chartIsHtf = htfConfigured and chartSec == htfSec
-entryTfOk = strategyCfgOk and entryChartOk and htfConfigured and htfTfOk and not chartIsHtf
+entryTfPreferred = strategyCfgOk and isAllowedDisplayTf and htfConfigured and htfTfOk and not chartIsHtf
+entryTfOk = entryTfPreferred
+// Trading style from chart TF — metadata/UI only; never used in fire conditions.
+tradingStyle = {{TRADING_STYLE_EXPR}}
 
 // Any TradingView instrument is valid — chart OHLC is the source of truth (no symbol allowlist).
 var label licenseLockLabel = na
@@ -78,14 +91,14 @@ if barstate.islast
     else if not na(licenseLockLabel)
         label.delete(licenseLockLabel)
         licenseLockLabel := na
-    // TF gate diagnostics — do not alter strategy math; never silently suppress without a label.
-    tfMsg = not strategyCfgOk ? "{{DIAG_UNSUPPORTED}}" : not htfConfigured ? "{{DIAG_MISSING_HTF}}" : not entryChartOk ? "{{DIAG_WRONG_ENTRY}}" : not htfTfOk ? "{{DIAG_WRONG_HTF}}" : chartIsHtf ? "{{DIAG_CHART_IS_HTF}}" : ""
+    // Wrong-TF lock ONLY when chart is outside allowed display list (canonical!=chart is OK).
+    tfMsg = not strategyCfgOk ? "{{DIAG_UNSUPPORTED}}" : not entryChartOk ? "{{DIAG_WRONG_ENTRY}}" : ""
     if str.length(tfMsg) > 0 and licenseOk
         if na(tfLockLabel)
-            tfLockLabel := label.new(bar_index, low, tfMsg, style=label.style_label_up, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
+            tfLockLabel := label.new(bar_index, low, tfMsg + " · style=" + tradingStyle, style=label.style_label_up, color=color.new(color.orange, 0), textcolor=color.white, size=size.small)
         else
             label.set_xy(tfLockLabel, bar_index, low)
-            label.set_text(tfLockLabel, tfMsg)
+            label.set_text(tfLockLabel, tfMsg + " · style=" + tradingStyle)
     else if not na(tfLockLabel)
         label.delete(tfLockLabel)
         tfLockLabel := na
@@ -101,8 +114,6 @@ colLongZoneBg = color.new(#16a34a, 85)
 colLongZoneBorder = color.new(#16a34a, 30)
 colShortZoneBg = color.new(#dc2626, 85)
 colShortZoneBorder = color.new(#dc2626, 30)
-
-atr14 = ta.atr(14)
 
 // Instrument tick magnitude for ATR/stop fallbacks only — never used to invent display decimals.
 pointSize() =>
@@ -126,169 +137,110 @@ kachingAlertLabel(string alertType) =>
      alertType == "cancelled" ? "Kaching Cancelled" :
      "Kaching Signal"
 
+// Escape string values for deterministic JSON (prevents WebhookParseError).
+jsonEsc(string s) =>
+    str.replace_all(str.replace_all(str.replace_all(str.replace_all(s, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n"), "\r", "\\r")
+
 // Human-readable alert body (stored in JSON message; webhook still receives full JSON)
 buildHumanMessage(string direction, float entry, float sl, float tp1, float tp2, float tp3) =>
     header = direction == "long" ? "🟦 Kaching BUY" : "🟥 Kaching SELL"
     header + "\\nEntry: " + formatPrice(entry) + "\\nSL: " + formatPrice(sl) + "\\nTP1: " + formatPrice(tp1) + "\\nTP2: " + formatPrice(tp2) + "\\nTP3: " + formatPrice(tp3)
 
+// timeframe = CANONICAL_SIGNAL_TF (not chart period). chartTf / canonicalSignalTf / canonicalSignalKey are additive.
 buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf, string signalId, string closedReason) =>
-    msgText = alertType == "entry" ? buildHumanMessage(direction, entry, sl, tp1, tp2, tp3) : kachingAlertLabel(alertType)
-    reasonJson = str.length(closedReason) > 0 ? ',"closedReason":"' + closedReason + '"' : ""
-    '{"symbol":"' + syminfo.ticker + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + timeframe.period + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + alertType + '","direction":"' + direction + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + signalId + '","signalUuid":"' + signalId + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + LICENSE_TOKEN + '","tradingviewUsername":"' + LICENSED_TV_USERNAME + '","broadcast":true' + reasonJson + '}'
+    msgText = jsonEsc(alertType == "entry" ? buildHumanMessage(direction, entry, sl, tp1, tp2, tp3) : kachingAlertLabel(alertType))
+    reasonJson = str.length(closedReason) > 0 ? ',"closedReason":"' + jsonEsc(closedReason) + '"' : ""
+    '{"symbol":"' + jsonEsc(syminfo.ticker) + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + jsonEsc(CANONICAL_SIGNAL_TF) + '","chartTf":"' + jsonEsc(timeframe.period) + '","canonicalSignalTf":"' + jsonEsc(CANONICAL_SIGNAL_TF) + '","canonicalSignalKey":"' + jsonEsc(signalId) + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + jsonEsc(alertType) + '","direction":"' + jsonEsc(direction) + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + ',"signalId":"' + jsonEsc(signalId) + '","signalUuid":"' + jsonEsc(signalId) + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + jsonEsc(LICENSE_TOKEN) + '","tradingviewUsername":"' + jsonEsc(LICENSED_TV_USERNAME) + '","broadcast":true,"pineClientVersion":"{{PINE_CLIENT_VERSION}}","generatedAt":"{{PINE_GENERATED_AT}}","scriptGenerationId":"{{SCRIPT_GENERATION_ID}}","capabilities":{{PINE_CAPABILITIES_JSON}}' + reasonJson + '}'
 
-// ===== HTF LIQUIDITY / STRUCTURE ({{ARCH_HTF_LABEL}} via request.security — never entry price) =====
-// lookahead_off + barstate.isconfirmed keep historical/realtime parity (no future HTF peek).
-htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
-htfLow = request.security(syminfo.tickerid, htfTf, low, barmerge.gaps_off, barmerge.lookahead_off)
-htfClose = request.security(syminfo.tickerid, htfTf, close, barmerge.gaps_off, barmerge.lookahead_off)
-htfAtr = request.security(syminfo.tickerid, htfTf, ta.atr(14), barmerge.gaps_off, barmerge.lookahead_off)
+// Stable UUID across all allowed display TFs (uses canonical bar time, not chart bar_index).
+makeCanonicalSignalId(int signalTime, string direction) =>
+    syminfo.ticker + "-" + STRATEGY_KEY + "-c" + CANONICAL_SIGNAL_TF + "-" + str.tostring(signalTime) + "-" + direction
 
-htfSwingHigh = request.security(syminfo.tickerid, htfTf, ta.pivothigh(high, swingLen, swingLen), barmerge.gaps_off, barmerge.lookahead_off)
-htfSwingLow = request.security(syminfo.tickerid, htfTf, ta.pivotlow(low, swingLen, swingLen), barmerge.gaps_off, barmerge.lookahead_off)
-
-var float lastSwingHigh = na
-var float lastSwingLow = na
-if not na(htfSwingHigh)
-    lastSwingHigh := htfSwingHigh
-if not na(htfSwingLow)
-    lastSwingLow := htfSwingLow
-
-// Sweep = trade beyond + close back (reject) on HTF series mapped to chart bars
-bullSweep = not na(lastSwingLow) and htfLow < lastSwingLow and htfClose > lastSwingLow
-bearSweep = not na(lastSwingHigh) and htfHigh > lastSwingHigh and htfClose < lastSwingHigh
-
-var int sweepDir = 0
-var float sweepExtreme = na
-var float sweepLevel = na
-var int sweepBar = na
-if bullSweep and barstate.isconfirmed
-    sweepDir := 1
-    sweepExtreme := htfLow
-    sweepLevel := lastSwingLow
-    sweepBar := bar_index
-if bearSweep and barstate.isconfirmed
-    sweepDir := -1
-    sweepExtreme := htfHigh
-    sweepLevel := lastSwingHigh
-    sweepBar := bar_index
-
-// Ignore setups before HTF sweep / stale sweeps
-sweepFresh = not na(sweepBar) and (bar_index - sweepBar) <= 40 and sweepDir != 0
-
-// ===== LTF MSS =====
-pivotHigh = ta.pivothigh(high, swingLen, swingLen)
-pivotLow = ta.pivotlow(low, swingLen, swingLen)
-var float lastLH = na
-var float lastHL = na
-if not na(pivotHigh)
-    lastLH := pivotHigh
-if not na(pivotLow)
-    lastHL := pivotLow
-
-bullMss = sweepFresh and sweepDir == 1 and not na(lastLH) and close > lastLH and barstate.isconfirmed
-bearMss = sweepFresh and sweepDir == -1 and not na(lastHL) and close < lastHL and barstate.isconfirmed
-
-var int mssDir = 0
-var int mssBar = na
-if bullMss
-    mssDir := 1
-    mssBar := bar_index
-if bearMss
-    mssDir := -1
-    mssBar := bar_index
-
-mssActive = not na(mssBar) and mssDir == sweepDir and (bar_index - mssBar) <= 24
-
-// ===== DISPLACEMENT =====
+// ===== PURE HELPERS (SL/RR math unchanged; ATR from calling series context) =====
 bodyRatio(cOpen, cClose, cHigh, cLow) =>
     math.abs(cClose - cOpen) / math.max(cHigh - cLow, syminfo.mintick)
 
 wickRatio(cOpen, cClose, cHigh, cLow) =>
     (cHigh - math.max(cOpen, cClose) + math.min(cOpen, cClose) - cLow) / math.max(cHigh - cLow, syminfo.mintick)
 
-avgBody = ta.sma(math.abs(close - open), 14)
-cRange = high - low
-bullDisp = mssActive and mssDir == 1 and close > open and bodyRatio(open, close, high, low) >= minBodyRatio and wickRatio(open, close, high, low) <= maxWickRatio and math.abs(close - open) > avgBody * 1.15 and cRange > atr14 * minDispAtr and (high - close) / math.max(cRange, syminfo.mintick) <= 0.25 and barstate.isconfirmed
-bearDisp = mssActive and mssDir == -1 and close < open and bodyRatio(open, close, high, low) >= minBodyRatio and wickRatio(open, close, high, low) <= maxWickRatio and math.abs(close - open) > avgBody * 1.15 and cRange > atr14 * minDispAtr and (close - low) / math.max(cRange, syminfo.mintick) <= 0.25 and barstate.isconfirmed
+isSyntheticTicker() =>
+    t = str.upper(syminfo.ticker)
+    str.contains(t, "JUMP") or str.contains(t, "BOOM") or str.contains(t, "CRASH") or str.contains(t, "VOLATILITY") or str.contains(t, "STEP") or str.contains(t, "RANGE") or str.contains(t, "DEX")
 
-var int dispBar = na
-var int dispDir = 0
-if bullDisp
-    dispBar := bar_index
-    dispDir := 1
-if bearDisp
-    dispBar := bar_index
-    dispDir := -1
+stopSideOk(string direction, float entryPx, float slPx) =>
+    direction == "long" ? slPx < entryPx : slPx > entryPx
 
-dispActive = not na(dispBar) and dispDir == sweepDir and (bar_index - dispBar) <= 18
+// Returns [ok, finalSl, kindCode, distance]
+// kindCode: 1=sweep, 2=fvg, 0=none
+// Never clamps structural SL arbitrarily closer to entry.
+resolveValidStop(string direction, float entryPx, float sweepExtreme, float fvgTop, float fvgBot) =>
+    atrNow = nz(ta.atr(14), pointSize())
+    buf = atrNow * slBufferAtr
+    maxDist = atrNow * maxStopAtrMult
+    sweepSl = direction == "long" ? sweepExtreme - buf : sweepExtreme + buf
+    fvgSl = direction == "long" ? fvgBot - buf : fvgTop + buf
+    sweepOk = not na(sweepSl) and stopSideOk(direction, entryPx, sweepSl) and math.abs(entryPx - sweepSl) > 0 and math.abs(entryPx - sweepSl) <= maxDist
+    fvgOk = not na(fvgSl) and stopSideOk(direction, entryPx, fvgSl) and math.abs(entryPx - fvgSl) > 0 and math.abs(entryPx - fvgSl) <= maxDist
+    bool ok = false
+    float finalSl = na
+    int kindCode = 0
+    // JUMP/synthetics: FVG first. Else configured model, then fallback. Prefer closer valid stop for sweep_or_fvg.
+    if isSyntheticTicker()
+        if fvgOk
+            ok := true
+            finalSl := fvgSl
+            kindCode := 2
+        else if sweepOk
+            ok := true
+            finalSl := sweepSl
+            kindCode := 1
+    else if stopModel == "fvg"
+        if fvgOk
+            ok := true
+            finalSl := fvgSl
+            kindCode := 2
+        else if sweepOk
+            ok := true
+            finalSl := sweepSl
+            kindCode := 1
+    else if stopModel == "sweep_or_fvg"
+        if sweepOk and fvgOk
+            if math.abs(entryPx - fvgSl) <= math.abs(entryPx - sweepSl)
+                ok := true
+                finalSl := fvgSl
+                kindCode := 2
+            else
+                ok := true
+                finalSl := sweepSl
+                kindCode := 1
+        else if fvgOk
+            ok := true
+            finalSl := fvgSl
+            kindCode := 2
+        else if sweepOk
+            ok := true
+            finalSl := sweepSl
+            kindCode := 1
+    else
+        if sweepOk
+            ok := true
+            finalSl := sweepSl
+            kindCode := 1
+        else if fvgOk
+            ok := true
+            finalSl := fvgSl
+            kindCode := 2
+    dist = ok ? math.abs(entryPx - finalSl) : na
+    [ok, finalSl, kindCode, dist]
 
-// ===== ENGULFING (preferred) =====
-bullEngulf = close > open and close[1] < open[1] and close >= math.max(open[1], close[1]) and open <= math.min(open[1], close[1])
-bearEngulf = close < open and close[1] > open[1] and open >= math.max(open[1], close[1]) and close <= math.min(open[1], close[1])
-engulfOk = not requireEngulf or (dispDir == 1 and bullEngulf) or (dispDir == -1 and bearEngulf)
-
-// ===== ICT FVG =====
-bullFvg = dispActive and high[2] < low[0] and (low[0] - high[2]) >= atr14 * minGapAtr and barstate.isconfirmed and bar_index > dispBar
-bearFvg = dispActive and low[2] > high[0] and (low[2] - high[0]) >= atr14 * minGapAtr and barstate.isconfirmed and bar_index > dispBar
-
-var float fvgTop = na
-var float fvgBot = na
-var float fvgCe = na
-var int fvgBar = na
-var int fvgDir = 0
-if bullFvg and engulfOk
-    fvgTop := low[0]
-    fvgBot := high[2]
-    fvgCe := (fvgTop + fvgBot) / 2
-    fvgBar := bar_index
-    fvgDir := 1
-if bearFvg and engulfOk
-    fvgTop := low[2]
-    fvgBot := high[0]
-    fvgCe := (fvgTop + fvgBot) / 2
-    fvgBar := bar_index
-    fvgDir := -1
-
-fvgActive = not na(fvgBar) and fvgDir == sweepDir and (bar_index - fvgBar) <= 10 and bar_index > fvgBar
-
-// Doji on C3 (confidence only)
-c3Doji = math.abs(close - open) / math.max(high - low, syminfo.mintick) <= 0.12
-
-// ===== RETRACE INTO FVG (never enter on displacement bar) =====
-zoneTop = entryModel == "ce" ? fvgCe + (fvgTop - fvgBot) * 0.08 : entryModel == "upper_half" ? fvgTop : entryModel == "lower_half" ? fvgCe : fvgTop
-zoneBot = entryModel == "ce" ? fvgCe - (fvgTop - fvgBot) * 0.08 : entryModel == "upper_half" ? fvgCe : entryModel == "lower_half" ? fvgBot : fvgBot
-
-retraceLong = fvgActive and fvgDir == 1 and bar_index > dispBar and low <= zoneTop and high >= zoneBot and close >= fvgBot
-retraceShort = fvgActive and fvgDir == -1 and bar_index > dispBar and low <= zoneTop and high >= zoneBot and close <= fvgTop
-
-// ===== CONFIDENCE (weights match backend) =====
-confScore() =>
-    float s = 0.0
-    if sweepFresh
-        s += 30
-    if mssActive
-        s += 20
-    if dispActive
-        s += 15
-    if fvgActive
-        s += 15
-    if retraceLong or retraceShort
-        s += 10
-    if (fvgDir == 1 and bullEngulf) or (fvgDir == -1 and bearEngulf)
-        s += 5
-    if c3Doji
-        s += 5
-    s
-
-// ===== LEVELS =====
 calcLevels(string direction, float entryPx, float slPx) =>
     risk = math.abs(entryPx - slPx)
     float tp1 = direction == "long" ? entryPx + risk * tp1R : entryPx - risk * tp1R
     float tp2 = direction == "long" ? entryPx + risk * tp2R : entryPx - risk * tp2R
     float tp3 = direction == "long" ? entryPx + risk * tp3R : entryPx - risk * tp3R
-    // ATR distance caps (Pine approximates backend dynamic TP caps; full SMC ranking is backend)
+    // ATR distance caps apply to TP only — never rewrite FINAL SL.
     if enableDynamicTp
-        atrNow = nz(atr14, pointSize())
+        atrNow = nz(ta.atr(14), pointSize())
         cap1 = atrNow * tp1AtrCap
         cap2 = atrNow * tp2AtrCap
         cap3 = atrNow * tp3AtrCap
@@ -297,183 +249,221 @@ calcLevels(string direction, float entryPx, float slPx) =>
         tp3 := direction == "long" ? math.min(tp3, entryPx + cap3) : math.max(tp3, entryPx - cap3)
     [entryPx, slPx, tp1, tp2, tp3, risk]
 
-resolveStop(string direction, float entryPx) =>
-    buf = nz(atr14, pointSize()) * 0.05
-    sweepSl = direction == "long" ? sweepExtreme - buf : sweepExtreme + buf
-    fvgSl = direction == "long" ? fvgBot - buf : fvgTop + buf
-    stopModel == "fvg" ? fvgSl : stopModel == "sweep_or_fvg" ? (direction == "long" ? math.min(sweepSl, fvgSl) : math.max(sweepSl, fvgSl)) : sweepSl
+rrOk(string direction, float entryPx, float slPx, float tp1) =>
+    risk = math.abs(entryPx - slPx)
+    reward = math.abs(tp1 - entryPx)
+    sideOk = direction == "long" ? tp1 > entryPx : tp1 < entryPx
+    risk > 0 and reward > 0 and sideOk and (reward / risk) >= minRr
 
-resolveEntry(string direction) =>
-    entryModel == "ce" ? fvgCe : close
+// ===== CANONICAL SIGNAL ENGINE (Option A) =====
+// Evaluated via request.security on CANONICAL_SIGNAL_TF so every allowed display chart
+// sees the same ready flags + levels. Nested HTF security stays inside. lookahead_off only.
+// Returns: [readyLong, readyShort, entry, sl, tp1, tp2, tp3, gapTop, gapBot, conf, signalTime, slKind]
+canonSignalTuple() =>
+    atr14 = ta.atr(14)
+    // HTF liquidity / structure (nested; never entry price)
+    htfHigh = request.security(syminfo.tickerid, htfTf, high, barmerge.gaps_off, barmerge.lookahead_off)
+    htfLow = request.security(syminfo.tickerid, htfTf, low, barmerge.gaps_off, barmerge.lookahead_off)
+    htfClose = request.security(syminfo.tickerid, htfTf, close, barmerge.gaps_off, barmerge.lookahead_off)
+    htfSwingHigh = request.security(syminfo.tickerid, htfTf, ta.pivothigh(high, swingLen, swingLen), barmerge.gaps_off, barmerge.lookahead_off)
+    htfSwingLow = request.security(syminfo.tickerid, htfTf, ta.pivotlow(low, swingLen, swingLen), barmerge.gaps_off, barmerge.lookahead_off)
 
-// DEBUG_MODE helper (must be declared before DRAWING_ENGINE executable blocks).
-// Does not change strategy math — only labels/log why alert() is skipped.
-pineAlertBlockReason(bool tradeActiveNow) =>
-    not licenseOk ? "license" :
-     not strategyCfgOk ? "unsupported_strategy_cfg" :
-     not htfConfigured ? "htf_missing" :
-     not entryChartOk ? "wrong_entry_tf" :
-     not htfTfOk ? "wrong_htf" :
-     chartIsHtf ? "chart_is_htf" :
-     tradeActiveNow ? "trade_active" :
-     not barstate.isconfirmed ? "bar_unconfirmed" :
-     confScore() < confThreshold ? "confidence" :
-     not fvgActive ? "fvg_invalid" :
-     not (retraceLong or retraceShort) ? "retrace" :
-     "no_setup"
+    var float lastSwingHigh = na
+    var float lastSwingLow = na
+    if not na(htfSwingHigh)
+        lastSwingHigh := htfSwingHigh
+    if not na(htfSwingLow)
+        lastSwingLow := htfSwingLow
 
-// entryTfOk computed in TIMEFRAME VALIDATION (Day Trading) — {{ARCH_ENTRY_LABEL}} entry + {{ARCH_HTF_LABEL}} HTF.
+    bullSweep = not na(lastSwingLow) and htfLow < lastSwingLow and htfClose > lastSwingLow
+    bearSweep = not na(lastSwingHigh) and htfHigh > lastSwingHigh and htfClose < lastSwingHigh
+
+    var int sweepDir = 0
+    var float sweepExtreme = na
+    var float sweepLevel = na
+    var int sweepBar = na
+    if bullSweep and barstate.isconfirmed
+        sweepDir := 1
+        sweepExtreme := htfLow
+        sweepLevel := lastSwingLow
+        sweepBar := bar_index
+    if bearSweep and barstate.isconfirmed
+        sweepDir := -1
+        sweepExtreme := htfHigh
+        sweepLevel := lastSwingHigh
+        sweepBar := bar_index
+
+    sweepFresh = not na(sweepBar) and (bar_index - sweepBar) <= 40 and sweepDir != 0
+
+    // LTF MSS (canonical TF OHLC)
+    pivotHigh = ta.pivothigh(high, swingLen, swingLen)
+    pivotLow = ta.pivotlow(low, swingLen, swingLen)
+    var float lastLH = na
+    var float lastHL = na
+    if not na(pivotHigh)
+        lastLH := pivotHigh
+    if not na(pivotLow)
+        lastHL := pivotLow
+
+    bullMss = sweepFresh and sweepDir == 1 and not na(lastLH) and close > lastLH and barstate.isconfirmed
+    bearMss = sweepFresh and sweepDir == -1 and not na(lastHL) and close < lastHL and barstate.isconfirmed
+
+    var int mssDir = 0
+    var int mssBar = na
+    if bullMss
+        mssDir := 1
+        mssBar := bar_index
+    if bearMss
+        mssDir := -1
+        mssBar := bar_index
+
+    mssActive = not na(mssBar) and mssDir == sweepDir and (bar_index - mssBar) <= 24
+
+    avgBody = ta.sma(math.abs(close - open), 14)
+    cRange = high - low
+    bullDisp = mssActive and mssDir == 1 and close > open and bodyRatio(open, close, high, low) >= minBodyRatio and wickRatio(open, close, high, low) <= maxWickRatio and math.abs(close - open) > avgBody * 1.15 and cRange > atr14 * minDispAtr and (high - close) / math.max(cRange, syminfo.mintick) <= 0.25 and barstate.isconfirmed
+    bearDisp = mssActive and mssDir == -1 and close < open and bodyRatio(open, close, high, low) >= minBodyRatio and wickRatio(open, close, high, low) <= maxWickRatio and math.abs(close - open) > avgBody * 1.15 and cRange > atr14 * minDispAtr and (close - low) / math.max(cRange, syminfo.mintick) <= 0.25 and barstate.isconfirmed
+
+    var int dispBar = na
+    var int dispDir = 0
+    if bullDisp
+        dispBar := bar_index
+        dispDir := 1
+    if bearDisp
+        dispBar := bar_index
+        dispDir := -1
+
+    dispActive = not na(dispBar) and dispDir == sweepDir and (bar_index - dispBar) <= 18
+
+    bullEngulf = close > open and close[1] < open[1] and close >= math.max(open[1], close[1]) and open <= math.min(open[1], close[1])
+    bearEngulf = close < open and close[1] > open[1] and open >= math.max(open[1], close[1]) and close <= math.min(open[1], close[1])
+    engulfOk = not requireEngulf or (dispDir == 1 and bullEngulf) or (dispDir == -1 and bearEngulf)
+
+    bullFvg = dispActive and high[2] < low[0] and (low[0] - high[2]) >= atr14 * minGapAtr and barstate.isconfirmed and bar_index > dispBar
+    bearFvg = dispActive and low[2] > high[0] and (low[2] - high[0]) >= atr14 * minGapAtr and barstate.isconfirmed and bar_index > dispBar
+
+    var float fvgTop = na
+    var float fvgBot = na
+    var float fvgCe = na
+    var int fvgBar = na
+    var int fvgDir = 0
+    if bullFvg and engulfOk
+        fvgTop := low[0]
+        fvgBot := high[2]
+        fvgCe := (fvgTop + fvgBot) / 2
+        fvgBar := bar_index
+        fvgDir := 1
+    if bearFvg and engulfOk
+        fvgTop := low[2]
+        fvgBot := high[0]
+        fvgCe := (fvgTop + fvgBot) / 2
+        fvgBar := bar_index
+        fvgDir := -1
+
+    fvgActive = not na(fvgBar) and fvgDir == sweepDir and (bar_index - fvgBar) <= 10 and bar_index > fvgBar
+    c3Doji = math.abs(close - open) / math.max(high - low, syminfo.mintick) <= 0.12
+
+    zoneTop = entryModel == "ce" ? fvgCe + (fvgTop - fvgBot) * 0.08 : entryModel == "upper_half" ? fvgTop : entryModel == "lower_half" ? fvgCe : fvgTop
+    zoneBot = entryModel == "ce" ? fvgCe - (fvgTop - fvgBot) * 0.08 : entryModel == "upper_half" ? fvgCe : entryModel == "lower_half" ? fvgBot : fvgBot
+
+    retraceLong = fvgActive and fvgDir == 1 and bar_index > dispBar and low <= zoneTop and high >= zoneBot and close >= fvgBot
+    retraceShort = fvgActive and fvgDir == -1 and bar_index > dispBar and low <= zoneTop and high >= zoneBot and close <= fvgTop
+
+    float confPts = 0.0
+    if sweepFresh
+        confPts += 30
+    if mssActive
+        confPts += 20
+    if dispActive
+        confPts += 15
+    if fvgActive
+        confPts += 15
+    if retraceLong or retraceShort
+        confPts += 10
+    if (fvgDir == 1 and bullEngulf) or (fvgDir == -1 and bearEngulf)
+        confPts += 5
+    if c3Doji
+        confPts += 5
+
+    bool readyLong = false
+    bool readyShort = false
+    float outEntry = na
+    float outSl = na
+    float outTp1 = na
+    float outTp2 = na
+    float outTp3 = na
+    float outGapTop = na
+    float outGapBot = na
+    float outConf = na
+    int outSignalTime = na
+    int outSlKind = 0
+
+    setupLong = retraceLong and barstate.isconfirmed and confPts >= confThreshold
+    setupShort = retraceShort and barstate.isconfirmed and confPts >= confThreshold
+
+    if setupLong
+        e = entryModel == "ce" ? fvgCe : close
+        [slOk, slCand, slKind, _] = resolveValidStop("long", e, sweepExtreme, fvgTop, fvgBot)
+        if not slOk
+            if DEBUG_MODE
+                log.info("[PIPELINE] SIGNAL_REJECTED_SL_TOO_FAR | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | entry=" + str.tostring(e, format.mintick) + " | atr=" + str.tostring(nz(atr14, pointSize()), "#.####") + " | maxStopAtrMult=" + str.tostring(maxStopAtrMult, "#.##") + " | maxDist=" + str.tostring(nz(atr14, pointSize()) * maxStopAtrMult, "#.####") + " | kindTried=" + str.tostring(slKind))
+        else
+            [ee, ssl, t1, t2, t3, _] = calcLevels("long", e, slCand)
+            if not rrOk("long", ee, ssl, t1)
+                if DEBUG_MODE
+                    log.info("[PIPELINE] SIGNAL_REJECTED_RR_TOO_LOW | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | entry=" + str.tostring(ee, format.mintick) + " | sl=" + str.tostring(ssl, format.mintick) + " | tp1=" + str.tostring(t1, format.mintick) + " | minRr=" + str.tostring(minRr, "#.##"))
+            else
+                readyLong := true
+                outEntry := ee
+                outSl := ssl
+                outTp1 := t1
+                outTp2 := t2
+                outTp3 := t3
+                outGapTop := fvgTop
+                outGapBot := fvgBot
+                outConf := confPts / 100.0
+                outSignalTime := time
+                outSlKind := slKind
+                fvgBar := na
+                dispBar := na
+
+    if setupShort and not readyLong
+        eS = entryModel == "ce" ? fvgCe : close
+        [slOkS, slCandS, slKindS, _] = resolveValidStop("short", eS, sweepExtreme, fvgTop, fvgBot)
+        if not slOkS
+            if DEBUG_MODE
+                log.info("[PIPELINE] SIGNAL_REJECTED_SL_TOO_FAR | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | entry=" + str.tostring(eS, format.mintick) + " | atr=" + str.tostring(nz(atr14, pointSize()), "#.####") + " | maxStopAtrMult=" + str.tostring(maxStopAtrMult, "#.##") + " | maxDist=" + str.tostring(nz(atr14, pointSize()) * maxStopAtrMult, "#.####") + " | kindTried=" + str.tostring(slKindS))
+        else
+            [eeS, sslS, t1S, t2S, t3S, _] = calcLevels("short", eS, slCandS)
+            if not rrOk("short", eeS, sslS, t1S)
+                if DEBUG_MODE
+                    log.info("[PIPELINE] SIGNAL_REJECTED_RR_TOO_LOW | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | entry=" + str.tostring(eeS, format.mintick) + " | sl=" + str.tostring(sslS, format.mintick) + " | tp1=" + str.tostring(t1S, format.mintick) + " | minRr=" + str.tostring(minRr, "#.##"))
+            else
+                readyShort := true
+                outEntry := eeS
+                outSl := sslS
+                outTp1 := t1S
+                outTp2 := t2S
+                outTp3 := t3S
+                outGapTop := fvgTop
+                outGapBot := fvgBot
+                outConf := confPts / 100.0
+                outSignalTime := time
+                outSlKind := slKindS
+                fvgBar := na
+                dispBar := na
+
+    [readyLong, readyShort, outEntry, outSl, outTp1, outTp2, outTp3, outGapTop, outGapBot, outConf, outSignalTime, outSlKind]
+
+
+// Dedup edge state shared with event-safe bridge (must be declared before the EVENT_BRIDGE snippet below).
+var int lastArmedSignalTime = na
+var int lastArmedDir = 0
+
+{{EVENT_BRIDGE}}
 
 {{DRAWING_ENGINE}}
 
-// One active trade per chart: never fire/replace while a trade is still open.
-// Alerts fire only on valid entry TF bars (entryTfOk); HTF is confirmation-only.
-// Regression fix (Aug 2026): do NOT require barstate.isrealtime inside fire* / arming.
-// TV already ignores alert() on historical bars; isrealtime gating (9331992) risked
-// suppressing live closes. Drawings stay tied to the same fireLong/fireShort event.
-fireLong = licenseOk and entryTfOk and not tradeIsActive() and retraceLong and barstate.isconfirmed and confScore() >= confThreshold
-fireShort = licenseOk and entryTfOk and not tradeIsActive() and retraceShort and barstate.isconfirmed and confScore() >= confThreshold
-confirmedSignal = fireLong or fireShort
+{{EVENT_ARM}}
 
-// DEBUG_MODE diagnostics only — never changes fireLong / fireShort / alert() gates.
-if DEBUG_MODE and barstate.islast
-    dbgTradeActive = tradeIsActive()
-    dbgReason = pineAlertBlockReason(dbgTradeActive)
-    dbgState = "chartTF=" + timeframe.period + " entryTF={{ARCH_ENTRY_LABEL}} htf=" + htfTf + " conf=" + str.tostring(confScore(), "#.#") + "/" + str.tostring(confThreshold, "#.#") + " licenseOk=" + str.tostring(licenseOk) + " entryTfOk=" + str.tostring(entryTfOk) + " htfTfOk=" + str.tostring(htfTfOk) + " tradeActive=" + str.tostring(dbgTradeActive) + " realtime=" + str.tostring(barstate.isrealtime) + " confirmed=" + str.tostring(barstate.isconfirmed) + " fireLong=" + str.tostring(fireLong) + " fireShort=" + str.tostring(fireShort) + " confirmedSignal=" + str.tostring(confirmedSignal)
-    log.info("[PIPELINE] DEBUG STATE | " + syminfo.ticker + " | " + dbgState)
-    if not confirmedSignal
-        dbgText = "DEBUG: " + dbgReason + " | " + dbgState
-        if na(debugBlockLabel)
-            debugBlockLabel := label.new(bar_index, high, dbgText, style=label.style_label_down, color=color.new(color.purple, 0), textcolor=color.white, size=size.small)
-        else
-            label.set_xy(debugBlockLabel, bar_index, high)
-            label.set_text(debugBlockLabel, dbgText)
-        log.info("[PIPELINE] ALERT NOT FIRED | " + syminfo.ticker + " | " + timeframe.period + " | reason=" + dbgReason + " | " + dbgState)
-    else if not na(debugBlockLabel)
-        label.delete(debugBlockLabel)
-        debugBlockLabel := na
-else if not na(debugBlockLabel) and not DEBUG_MODE
-    label.delete(debugBlockLabel)
-    debugBlockLabel := na
-
-// Arm trade ONLY on confirmedSignal (fireLong). Same event: drawings → DRAWING CREATED → ALERT FIRING → alert().
-if fireLong
-    e = resolveEntry("long")
-    sl = resolveStop("long", e)
-    [ee, ssl, t1, t2, t3, _] = calcLevels("long", e, sl)
-    conf = confScore() / 100.0
-    sigId = makeSignalId()
-    msg = buildPayload("entry", "long", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
-    // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
-    if array.size(tradeLevelLines) > 0
-        for i = 0 to array.size(tradeLevelLines) - 1
-            line.delete(array.get(tradeLevelLines, i))
-    if array.size(tradeLeaderLines) > 0
-        for i = 0 to array.size(tradeLeaderLines) - 1
-            line.delete(array.get(tradeLeaderLines, i))
-    if array.size(tradeLevelLabels) > 0
-        for i = 0 to array.size(tradeLevelLabels) - 1
-            label.delete(array.get(tradeLevelLabels, i))
-    array.clear(tradeLevelLines)
-    array.clear(tradeLeaderLines)
-    array.clear(tradeLevelLabels)
-    if array.size(tradeBadgeHold) > 0
-        label.delete(array.get(tradeBadgeHold, 0))
-        array.clear(tradeBadgeHold)
-    if array.size(tradeFvgHold) > 0
-        box.delete(array.get(tradeFvgHold, 0))
-        array.clear(tradeFvgHold)
-    buyBadge = label.new(bar_index, ee, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small)
-    array.push(tradeBadgeHold, buyBadge)
-    if SHOW_FVG_ZONE
-        buyZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colLongZoneBorder, border_width=1, bgcolor=colLongZoneBg)
-        array.push(tradeFvgHold, buyZone)
-    if SHOW_TRADE_LINES
-        [newLines, newLeaders, newLabels, layoutY, layoutSide, layoutStep] = buildTradeDrawings(ee, ssl, t1, t2, t3, true)
-        for i = 0 to array.size(newLines) - 1
-            array.push(tradeLevelLines, array.get(newLines, i))
-            array.push(tradeLeaderLines, array.get(newLeaders, i))
-            array.push(tradeLevelLabels, array.get(newLabels, i))
-            array.set(tradeLabelYs, i, array.get(layoutY, i))
-            array.set(tradeLayoutSide, i, array.get(layoutSide, i))
-            array.set(tradeLayoutStep, i, array.get(layoutStep, i))
-    array.set(tradeStrings, 1, sigId)
-    array.set(tradeStrings, 0, "long")
-    array.set(tradeFloats, 0, ee)
-    array.set(tradeFloats, 1, ssl)
-    array.set(tradeFloats, 2, t1)
-    array.set(tradeFloats, 3, t2)
-    array.set(tradeFloats, 4, t3)
-    array.set(tradeFloats, 5, fvgTop)
-    array.set(tradeFloats, 6, fvgBot)
-    array.set(tradeFlags, 1, bar_index)
-    array.set(tradeFlags, 0, 1)
-    array.set(tradeFlags, 2, 0)
-    array.set(tradeFlags, 3, 0)
-    if DEBUG_MODE
-        log.info("[PIPELINE] DRAWING CREATED | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | price=" + formatPrice(ee) + " | timestamp=" + str.tostring(timenow))
-        log.info("[PIPELINE] ALERT FIRING | direction=long | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
-    alert(msg, alert.freq_all)
-    fvgBar := na
-    dispBar := na
-
-// Arm trade ONLY on confirmedSignal (fireShort). Same event: drawings → DRAWING CREATED → ALERT FIRING → alert().
-if fireShort
-    e = resolveEntry("short")
-    sl = resolveStop("short", e)
-    [ee, ssl, t1, t2, t3, _] = calcLevels("short", e, sl)
-    conf = confScore() / 100.0
-    sigId = makeSignalId()
-    msg = buildPayload("entry", "short", ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
-    // clearPreviousTrade (inlined) — wipe any stale drawings before arming.
-    if array.size(tradeLevelLines) > 0
-        for i = 0 to array.size(tradeLevelLines) - 1
-            line.delete(array.get(tradeLevelLines, i))
-    if array.size(tradeLeaderLines) > 0
-        for i = 0 to array.size(tradeLeaderLines) - 1
-            line.delete(array.get(tradeLeaderLines, i))
-    if array.size(tradeLevelLabels) > 0
-        for i = 0 to array.size(tradeLevelLabels) - 1
-            label.delete(array.get(tradeLevelLabels, i))
-    array.clear(tradeLevelLines)
-    array.clear(tradeLeaderLines)
-    array.clear(tradeLevelLabels)
-    if array.size(tradeBadgeHold) > 0
-        label.delete(array.get(tradeBadgeHold, 0))
-        array.clear(tradeBadgeHold)
-    if array.size(tradeFvgHold) > 0
-        box.delete(array.get(tradeFvgHold, 0))
-        array.clear(tradeFvgHold)
-    sellBadge = label.new(bar_index, ee, "Kaching Sell", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, color=colSell, textcolor=color.white, size=size.small)
-    array.push(tradeBadgeHold, sellBadge)
-    if SHOW_FVG_ZONE
-        sellZone = box.new(bar_index - 2, math.max(fvgTop, fvgBot), bar_index + 5, math.min(fvgTop, fvgBot), border_color=colShortZoneBorder, border_width=1, bgcolor=colShortZoneBg)
-        array.push(tradeFvgHold, sellZone)
-    if SHOW_TRADE_LINES
-        [newLinesS, newLeadersS, newLabelsS, layoutYS, layoutSideS, layoutStepS] = buildTradeDrawings(ee, ssl, t1, t2, t3, false)
-        for i = 0 to array.size(newLinesS) - 1
-            array.push(tradeLevelLines, array.get(newLinesS, i))
-            array.push(tradeLeaderLines, array.get(newLeadersS, i))
-            array.push(tradeLevelLabels, array.get(newLabelsS, i))
-            array.set(tradeLabelYs, i, array.get(layoutYS, i))
-            array.set(tradeLayoutSide, i, array.get(layoutSideS, i))
-            array.set(tradeLayoutStep, i, array.get(layoutStepS, i))
-    array.set(tradeStrings, 1, sigId)
-    array.set(tradeStrings, 0, "short")
-    array.set(tradeFloats, 0, ee)
-    array.set(tradeFloats, 1, ssl)
-    array.set(tradeFloats, 2, t1)
-    array.set(tradeFloats, 3, t2)
-    array.set(tradeFloats, 4, t3)
-    array.set(tradeFloats, 5, fvgTop)
-    array.set(tradeFloats, 6, fvgBot)
-    array.set(tradeFlags, 1, bar_index)
-    array.set(tradeFlags, 0, 1)
-    array.set(tradeFlags, 2, 0)
-    array.set(tradeFlags, 3, 0)
-    if DEBUG_MODE
-        log.info("[PIPELINE] DRAWING CREATED | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | price=" + formatPrice(ee) + " | timestamp=" + str.tostring(timenow))
-        log.info("[PIPELINE] ALERT FIRING | direction=short | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
-    alert(msg, alert.freq_all)
-    fvgBar := na
-    dispBar := na
+{{DRAWING_RUNTIME}}

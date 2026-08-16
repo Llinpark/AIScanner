@@ -5,6 +5,8 @@
 //
 // Confirmation contract (templates): Entry/SL/TP drawings, UUID, alert(), and
 // lifecycle arm ONLY inside `if fireLong` / `if fireShort` (= confirmedSignal).
+// Templates may REPLACE an active trade: emit alertType=cancelled (reason
+// new_confirmed_setup), clear drawings/state, then arm the new entry.
 // This snippet NEVER arms a new trade from retrace/setup flags — only extends
 // or closes an already-active trade. Do not call buildTradeDrawings outside fire*.
 //
@@ -32,8 +34,10 @@ var array<float> tradeFloats = array.new_float(7, na)
 var array<float> tradeLabelYs = array.new_float(5, na)
 // String state: [direction, signalId]
 var array<string> tradeStrings = array.new_string(2, "")
-// Int flags: [active(0/1), entryBar, tp1Alerted(0/1), tp2Alerted(0/1)]
+// Int flags: [active(0/1), entryBar(chart), tp1Alerted(0/1), tp2Alerted(0/1)]
 var array<int> tradeFlags = array.new_int(4, 0)
+// Canonical lifecycle meta: [entrySignalTime, canonBarsAlive, lastProcessedLifeTime]
+var array<int> tradeCanonMeta = array.new_int(3, 0)
 // Per-level layout: side (1=right, -1=left) and stack step for horizontal offset
 var array<int> tradeLayoutSide = array.new_int(5, 1)
 var array<int> tradeLayoutStep = array.new_int(5, 0)
@@ -78,14 +82,24 @@ tradeTp1Alerted() =>
 tradeTp2Alerted() =>
     array.get(tradeFlags, 3) == 1
 
+tradeEntrySignalTime() =>
+    array.get(tradeCanonMeta, 0)
+
+tradeCanonBarsAlive() =>
+    array.get(tradeCanonMeta, 1)
+
+tradeLastLifeTime() =>
+    array.get(tradeCanonMeta, 2)
+
 smartLabelGapPrice() =>
     math.max(syminfo.mintick * smartLabelMinVerticalTicks, syminfo.mintick)
 
 smartLabelOffsetBars(int step) =>
     math.max(minHorizontalGapBars * step, 1)
 
-makeSignalId() =>
-    syminfo.ticker + "-" + str.tostring(time) + "-" + str.tostring(bar_index)
+// Legacy helper (chart-local). Option A templates override with makeCanonicalSignalId(signalTime, direction).
+makeSignalId(int signalTime, string direction) =>
+    syminfo.ticker + "-" + str.tostring(signalTime) + "-" + direction
 
 // Pure layout helper — only mutates local arrays it creates.
 resolveLabelLayout(array<float> anchors) =>
@@ -163,112 +177,3 @@ buildTradeDrawings(float entryPrice, float slPrice, float tp1Price, float tp2Pri
         array.push(outLeaders, leader)
         array.push(outLabels, lbl)
     [outLines, outLeaders, outLabels, layoutY, layoutSide, layoutStep]
-
-// ===================== MAIN-SCOPE: visual glue (every bar while active) =====================
-// Extends Entry/SL/TP lines to the live candle and repositions labels/leaders using
-// stored layout metadata. Must NOT wait for bar confirmation (avoids half-drawn lines).
-// No bgcolor() / barcolor() — never paint full-height vertical signal bands.
-if tradeIsActive()
-    rightX = bar_index
-    entryX = tradeEntryBar()
-    nLevels = array.size(tradeLevelLines)
-    if nLevels > 0
-        for i = 0 to nLevels - 1
-            anchorY = array.get(tradeFloats, i)
-            labelY = nz(array.get(tradeLabelYs, i), anchorY)
-            side = array.get(tradeLayoutSide, i)
-            step = array.get(tradeLayoutStep, i)
-            placeRight = side == 1
-            labelX = placeRight ? rightX + smartLabelOffsetBars(step + 1) : entryX - smartLabelOffsetBars(step + 1)
-            // Keep horizontal level glued from entry bar → current bar at fixed price.
-            line.set_xy1(array.get(tradeLevelLines, i), entryX, anchorY)
-            line.set_xy2(array.get(tradeLevelLines, i), rightX, anchorY)
-            if array.size(tradeLeaderLines) > i
-                leaderStartX = placeRight ? rightX : entryX
-                line.set_xy1(array.get(tradeLeaderLines, i), leaderStartX, anchorY)
-                line.set_xy2(array.get(tradeLeaderLines, i), labelX, labelY)
-            if array.size(tradeLevelLabels) > i
-                label.set_xy(array.get(tradeLevelLabels, i), labelX, labelY)
-                label.set_yloc(array.get(tradeLevelLabels, i), yloc.price)
-    // Badge stays on the entry candle at entry price — never drifts / never rewrites text.
-    if array.size(tradeBadgeHold) > 0
-        label.set_xy(array.get(tradeBadgeHold, 0), entryX, tradeEntry())
-        label.set_yloc(array.get(tradeBadgeHold, 0), yloc.price)
-
-// ===================== MAIN-SCOPE: confirmed lifecycle (TP/SL/expiry) =====================
-if tradeIsActive() and barstate.isconfirmed
-    longTrade = tradeDirection() == "long"
-    barsAlive = bar_index - tradeEntryBar()
-    hitSlWick = longTrade ? low <= tradeSl() : high >= tradeSl()
-    hitTp3Wick = longTrade ? high >= tradeTp3() : low <= tradeTp3()
-    hitTp2 = longTrade ? high >= tradeTp2() : low <= tradeTp2()
-    hitTp1 = longTrade ? high >= tradeTp1() : low <= tradeTp1()
-    // Same-bar SL+TP3: resolve by close (not wick alone).
-    hitSl = hitSlWick and hitTp3Wick ? (longTrade ? close <= tradeSl() : close >= tradeSl()) : hitSlWick
-    hitTp3 = hitSlWick and hitTp3Wick ? (longTrade ? close >= tradeTp3() : close <= tradeTp3()) : hitTp3Wick
-    expired = enableTradeExpiry and barsAlive >= expiryBars
-    closeNow = hitSl or hitTp3 or expired
-    closeAlertType = hitSl ? "stop_loss" : hitTp3 ? "take_profit_3" : "expired"
-    closeReason = hitSl ? "sl" : hitTp3 ? "tp3" : "candle_expiry"
-
-    if closeNow
-        if str.length(tradeSignalId()) > 0
-            closeMsg = buildPayload(closeAlertType, tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), closeReason)
-            if DEBUG_MODE
-                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=" + closeAlertType + " | reason=" + closeReason)
-            alert(closeMsg, alert.freq_all)
-        // clearPreviousTrade (inlined) — delete every drawing object then reset state.
-        if array.size(tradeLevelLines) > 0
-            for i = 0 to array.size(tradeLevelLines) - 1
-                line.delete(array.get(tradeLevelLines, i))
-        if array.size(tradeLeaderLines) > 0
-            for i = 0 to array.size(tradeLeaderLines) - 1
-                line.delete(array.get(tradeLeaderLines, i))
-        if array.size(tradeLevelLabels) > 0
-            for i = 0 to array.size(tradeLevelLabels) - 1
-                label.delete(array.get(tradeLevelLabels, i))
-        array.clear(tradeLevelLines)
-        array.clear(tradeLeaderLines)
-        array.clear(tradeLevelLabels)
-        if array.size(tradeBadgeHold) > 0
-            label.delete(array.get(tradeBadgeHold, 0))
-            array.clear(tradeBadgeHold)
-        if array.size(tradeFvgHold) > 0
-            box.delete(array.get(tradeFvgHold, 0))
-            array.clear(tradeFvgHold)
-        array.set(tradeFloats, 0, na)
-        array.set(tradeFloats, 1, na)
-        array.set(tradeFloats, 2, na)
-        array.set(tradeFloats, 3, na)
-        array.set(tradeFloats, 4, na)
-        array.set(tradeFloats, 5, na)
-        array.set(tradeFloats, 6, na)
-        for i = 0 to 4
-            array.set(tradeLabelYs, i, na)
-            array.set(tradeLayoutSide, i, 1)
-            array.set(tradeLayoutStep, i, 0)
-        array.set(tradeStrings, 0, "")
-        array.set(tradeStrings, 1, "")
-        array.set(tradeFlags, 0, 0)
-        array.set(tradeFlags, 1, 0)
-        array.set(tradeFlags, 2, 0)
-        array.set(tradeFlags, 3, 0)
-    else
-        // Partial TP alerts only — NEVER rewrite Buy/Sell badge text with TP markers.
-        if hitTp1 and not tradeTp1Alerted()
-            msgTp1 = buildPayload("take_profit_1", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp1")
-            if DEBUG_MODE
-                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_1")
-            alert(msgTp1, alert.freq_all)
-            array.set(tradeFlags, 2, 1)
-            // Soft-highlight TP1 label only (object remains "TP1").
-            if array.size(tradeLevelLabels) > 2
-                label.set_color(array.get(tradeLevelLabels, 2), color.new(colTpNear, 0))
-        if hitTp2 and not tradeTp2Alerted()
-            msgTp2 = buildPayload("take_profit_2", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp2")
-            if DEBUG_MODE
-                log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_2")
-            alert(msgTp2, alert.freq_all)
-            array.set(tradeFlags, 3, 1)
-            if array.size(tradeLevelLabels) > 3
-                label.set_color(array.get(tradeLevelLabels, 3), color.new(colTpNear, 0))

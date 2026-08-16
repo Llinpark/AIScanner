@@ -1,0 +1,31 @@
+// ===================== MAIN-SCOPE: visual glue (every bar while active) =====================
+// Extends Entry/SL/TP lines to the live candle and repositions labels/leaders using
+// stored layout metadata. Must NOT wait for bar confirmation (avoids half-drawn lines).
+// Canonical TP/SL/expiry lifecycle runs in EVENT_ARM (chronological with signal events).
+// No bgcolor() / barcolor() — never paint full-height vertical signal bands.
+if tradeIsActive()
+    rightX = bar_index
+    entryX = tradeEntryBar()
+    nLevels = array.size(tradeLevelLines)
+    if nLevels > 0
+        for i = 0 to nLevels - 1
+            anchorY = array.get(tradeFloats, i)
+            labelY = nz(array.get(tradeLabelYs, i), anchorY)
+            side = array.get(tradeLayoutSide, i)
+            step = array.get(tradeLayoutStep, i)
+            placeRight = side == 1
+            labelX = placeRight ? rightX + smartLabelOffsetBars(step + 1) : entryX - smartLabelOffsetBars(step + 1)
+            // Keep horizontal level glued from entry bar → current bar at fixed price.
+            line.set_xy1(array.get(tradeLevelLines, i), entryX, anchorY)
+            line.set_xy2(array.get(tradeLevelLines, i), rightX, anchorY)
+            if array.size(tradeLeaderLines) > i
+                leaderStartX = placeRight ? rightX : entryX
+                line.set_xy1(array.get(tradeLeaderLines, i), leaderStartX, anchorY)
+                line.set_xy2(array.get(tradeLeaderLines, i), labelX, labelY)
+            if array.size(tradeLevelLabels) > i
+                label.set_xy(array.get(tradeLevelLabels, i), labelX, labelY)
+                label.set_yloc(array.get(tradeLevelLabels, i), yloc.price)
+    // Badge stays on the entry candle at entry price — never drifts / never rewrites text.
+    if array.size(tradeBadgeHold) > 0
+        label.set_xy(array.get(tradeBadgeHold, 0), entryX, tradeEntry())
+        label.set_yloc(array.get(tradeBadgeHold, 0), yloc.price)

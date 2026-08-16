@@ -91,6 +91,13 @@ const {
   clientIp,
   payloadSize
 } = require('./utils/pipelineLog');
+const {
+  redactObject,
+  redactRawPreview,
+  safeHeaders,
+  logTvStage,
+  ensureRequestId
+} = require('./utils/webhookPipelineDiag');
 const MarketScannerService = require('./services/MarketScannerService');
 const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
 const PythonAiService = require('./services/PythonAiService');
@@ -166,25 +173,43 @@ async function resolveUser(username) {
 
 async function assertTradingViewWebhook(req, res) {
   // Prefer per-user licenseToken (HMAC) over legacy shared secret; rate-limit failures.
+  const requestId = ensureRequestId(req);
   const probeBody =
     typeof req.body === 'string'
       ? (() => {
           try {
-            return JSON.parse(req.body);
+            return JSON.parse(String(req.body || '').replace(/^\uFEFF/, '').trim());
           } catch {
-            return {};
+            return { __parseError: true };
           }
         })()
       : req.body || {};
   const meta = extractPipelineMeta(probeBody);
   // Diagnostics only — does not change auth decisions.
-  console.log(`[TV WEBHOOK AUTH START] symbol=${meta.symbol || 'n/a'} signalUuid=${meta.signalUuid || 'n/a'}`);
+  logTvStage('TV WEBHOOK PARSE START', {
+    requestId,
+    symbol: meta.symbol,
+    timeframe: meta.timeframe,
+    signalUuid: meta.signalUuid
+  });
+  logTvStage('TV WEBHOOK AUTH START', {
+    requestId,
+    symbol: meta.symbol,
+    timeframe: meta.timeframe,
+    signalUuid: meta.signalUuid
+  });
 
   if (!tradingViewAuthFailureTracker.check(req, res)) {
-    console.warn(`[TV WEBHOOK AUTH FAILED] reason=auth_rate_limited symbol=${meta.symbol || 'n/a'}`);
+    logTvStage('TV WEBHOOK AUTH FAIL', {
+      requestId,
+      reason: 'auth_rate_limited',
+      symbol: meta.symbol,
+      signalUuid: meta.signalUuid
+    });
+    console.warn('[WEBHOOK FAIL:AUTH] reason=auth_rate_limited');
     logPipeline('Auth', 'FAIL', {
       ...meta,
-      reason: 'auth_rate_limited'
+      reason: `auth_rate_limited; requestId=${requestId}`
     });
     return null;
   }
@@ -194,23 +219,70 @@ async function assertTradingViewWebhook(req, res) {
     tradingViewAuthFailureTracker.recordFailure(req);
     const reason = auth.reason || 'unauthorized';
     const bodyMeta = extractPipelineMeta(auth.body || probeBody);
-    console.warn(
-      `[TV WEBHOOK AUTH FAILED] reason=${reason} symbol=${bodyMeta.symbol || 'n/a'}`
-    );
-    logPipeline('Auth', 'FAIL', { ...bodyMeta, reason });
+    const body = auth.body || probeBody || {};
+    const licenseAbsent = !(body.licenseToken || body.license_token);
+    const authFailReason =
+      reason === 'invalid_json' || reason === 'empty_body'
+        ? reason
+        : licenseAbsent && reason === 'unauthorized'
+          ? 'licenseToken_absent'
+          : reason;
+    // Parse failures are distinct from auth credential failures.
+    if (auth.parseError || reason === 'invalid_json' || reason === 'empty_body') {
+      logTvStage('TV WEBHOOK PARSE FAIL', {
+        requestId,
+        reason: authFailReason,
+        symbol: bodyMeta.symbol,
+        signalUuid: bodyMeta.signalUuid,
+        rawPreview: redactRawPreview(auth.rawPreview || '')
+      });
+      logPipeline('WebhookParseError', 'FAIL', {
+        ...bodyMeta,
+        reason: `${authFailReason}; requestId=${requestId}`
+      });
+      res.status(400).json({
+        message: 'Invalid TradingView webhook JSON body',
+        reason: authFailReason,
+        requestId
+      });
+      return null;
+    }
+    logTvStage('TV WEBHOOK AUTH FAIL', {
+      requestId,
+      reason: authFailReason,
+      symbol: bodyMeta.symbol,
+      timeframe: bodyMeta.timeframe,
+      signalUuid: bodyMeta.signalUuid
+    });
+    console.warn(`[WEBHOOK FAIL:AUTH] reason=${authFailReason}`);
+    logPipeline('Auth', 'FAIL', {
+      ...bodyMeta,
+      reason: `${authFailReason}; requestId=${requestId}`
+    });
     res.status(401).json({
       message: 'Invalid webhook authentication',
-      reason
+      reason,
+      requestId
     });
     return null;
   }
-  console.log(
-    `[TV WEBHOOK AUTH PASSED] mode=${auth.mode || 'ok'} symbol=${extractPipelineMeta(auth.body || probeBody).symbol || 'n/a'}`
-  );
+  logTvStage('TV WEBHOOK PARSE PASS', {
+    requestId,
+    symbol: extractPipelineMeta(auth.body || probeBody).symbol,
+    signalUuid: extractPipelineMeta(auth.body || probeBody).signalUuid
+  });
+  logTvStage('TV WEBHOOK AUTH PASS', {
+    requestId,
+    mode: auth.mode || 'ok',
+    symbol: extractPipelineMeta(auth.body || probeBody).symbol,
+    timeframe: extractPipelineMeta(auth.body || probeBody).timeframe,
+    signalUuid: extractPipelineMeta(auth.body || probeBody).signalUuid,
+    userId: auth.userId || null
+  });
   logPipeline('Auth', 'PASS', {
     ...extractPipelineMeta(auth.body || probeBody),
     userId: auth.userId || null,
-    reason: `AUTH_PASSED; mode=${auth.mode || 'ok'}`
+    reason: `AUTH_PASSED; mode=${auth.mode || 'ok'}; requestId=${requestId}`
   });
   if (auth.userId) {
     try {
@@ -220,6 +292,13 @@ async function assertTradingViewWebhook(req, res) {
       });
     } catch {
       // diagnostics only
+    }
+    // Pine client version registry — observability only; never gates delivery/auth.
+    try {
+      const PineClientRegistry = require('./services/PineClientRegistry');
+      void PineClientRegistry.recordWebhookVersion(auth.userId, auth.body || probeBody || {});
+    } catch {
+      // registry must never fail the webhook
     }
   }
   req.webhookAuth = auth;
@@ -254,6 +333,7 @@ function parseTradingViewPayload(body) {
 const app = express();
 // Fly / reverse proxies: trust X-Forwarded-For / Fly-Client-IP for rate limits + optional IP checks.
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -270,6 +350,183 @@ function captureRawBody(req, res, buf) {
   }
 }
 
+/**
+ * Diagnostics only — pre-auth intake dump for TradingView webhooks.
+ * Never logs licenseToken / secrets / full sensitive payloads.
+ */
+function logTradingViewWebhookIntakeDiag(req, { stage = 'pre_auth' } = {}) {
+  const requestId = ensureRequestId(req);
+  const ip = clientIp(req);
+  const contentType = req.headers['content-type'] || '(none)';
+  const contentLength = req.headers['content-length'] ?? '(none)';
+  const userAgent = req.headers['user-agent'] || '(none)';
+  const raw =
+    Buffer.isBuffer(req.rawBody)
+      ? req.rawBody.toString('utf8')
+      : typeof req.body === 'string'
+        ? req.body
+        : req.body != null
+          ? (() => {
+              try {
+                return JSON.stringify(req.body);
+              } catch {
+                return '[unserializable-body]';
+              }
+            })()
+          : '';
+  const rawBytes = Buffer.isBuffer(req.rawBody)
+    ? req.rawBody.length
+    : Buffer.byteLength(raw || '', 'utf8');
+  const payloadBytes = rawBytes;
+
+  let parsedBody = null;
+  let parseNote = 'ok';
+  if (typeof req.body === 'object' && req.body != null && !Buffer.isBuffer(req.body)) {
+    parsedBody = req.body;
+  } else if (typeof req.body === 'string' && req.body.trim()) {
+    try {
+      parsedBody = JSON.parse(String(req.body).replace(/^\uFEFF/, '').trim());
+    } catch (err) {
+      parseNote = err?.message || 'parse_failed';
+      parsedBody = null;
+    }
+  } else if (typeof raw === 'string' && raw.trim()) {
+    try {
+      parsedBody = JSON.parse(raw.replace(/^\uFEFF/, '').trim());
+    } catch (err) {
+      parseNote = err?.message || 'parse_failed';
+      parsedBody = null;
+    }
+  } else {
+    parseNote = 'empty_body';
+  }
+
+  const meta = extractPipelineMeta(parsedBody || {});
+  const licenseTokenPresent = Boolean(
+    (parsedBody && typeof parsedBody === 'object' && (parsedBody.licenseToken || parsedBody.license_token)) ||
+      (typeof raw === 'string' && /"license[_]?[Tt]oken"\s*:/.test(raw))
+  );
+
+  logTvStage('TV WEBHOOK RECEIVED', {
+    requestId,
+    stage,
+    ip,
+    contentType,
+    contentLength,
+    rawBytes,
+    payloadBytes,
+    userAgent,
+    licenseToken: licenseTokenPresent ? 'present' : 'absent',
+    parseNote,
+    symbol: meta.symbol,
+    timeframe: meta.timeframe,
+    signalUuid: meta.signalUuid,
+    direction: parsedBody?.direction || parsedBody?.action || null,
+    pineClientVersion: parsedBody?.pineClientVersion || null,
+    scriptGenerationId: parsedBody?.scriptGenerationId || null
+  });
+  if (payloadBytes <= 2) {
+    console.warn(`[TV WEBHOOK RECEIVED] requestId=${requestId} Possible Empty TradingView Message`);
+  }
+  // Safe metadata only — never dump raw secrets or full webhook payloads.
+  console.log(
+    `[TV WEBHOOK INTAKE DIAG] requestId=${requestId} stage=${stage} ` +
+      `headers=${JSON.stringify(safeHeaders(req.headers || {}))} ` +
+      `rawPreview=${redactRawPreview(raw)} ` +
+      `parsedSafe=${JSON.stringify(
+        redactObject({
+          symbol: parsedBody?.symbol || parsedBody?.ticker,
+          timeframe: parsedBody?.timeframe || parsedBody?.interval || parsedBody?.tf,
+          direction: parsedBody?.direction || parsedBody?.action,
+          alertType: parsedBody?.alertType || parsedBody?.alert_type || parsedBody?.type,
+          signalUuid: parsedBody?.signalUuid || parsedBody?.signalId,
+          tradingviewUsername: parsedBody?.tradingviewUsername || parsedBody?.username,
+          userId: parsedBody?.userId || parsedBody?.user_id,
+          licenseToken: parsedBody?.licenseToken || parsedBody?.license_token,
+          pineClientVersion: parsedBody?.pineClientVersion,
+          scriptGenerationId: parsedBody?.scriptGenerationId
+        })
+      )}`
+  );
+}
+
+/**
+ * Diagnostics only — Expected vs Received field presence for Kaching TV payloads.
+ * Logs [WEBHOOK VERIFY] with ✓/✗ per field. Never changes auth or publish outcomes.
+ */
+function logTradingViewWebhookSelfCheck(body) {
+  const rawHint =
+    typeof body === 'string'
+      ? body
+      : body != null
+        ? (() => {
+            try {
+              return JSON.stringify(body);
+            } catch {
+              return '';
+            }
+          })()
+        : '';
+  const b =
+    body && typeof body === 'object' && !Array.isArray(body)
+      ? body
+      : typeof body === 'string'
+        ? (() => {
+            try {
+              return JSON.parse(body);
+            } catch {
+              return {};
+            }
+          })()
+        : {};
+
+  const pick = (...keys) => {
+    for (const key of keys) {
+      if (b[key] != null && b[key] !== '') return b[key];
+    }
+    return undefined;
+  };
+
+  const isPlaceholderLiteral = (value) => {
+    const s = String(value ?? '').trim();
+    return (
+      s === '{{strategy.order.alert_message}}' ||
+      s === '{{alert_message}}' ||
+      s === '{{strategy.order.alert_message}} / {{alert_message}}'
+    );
+  };
+
+  const fieldOk = (value) => value != null && value !== '' && !isPlaceholderLiteral(value);
+
+  const checks = [
+    ['licenseToken', pick('licenseToken', 'license_token')],
+    ['tradingviewUsername', pick('tradingviewUsername', 'username', 'user')],
+    ['signalUuid', pick('signalUuid', 'signalId', 'signal_uuid')],
+    ['symbol', pick('symbol', 'ticker')],
+    ['direction', pick('direction', 'action', 'signal')],
+    ['entry', pick('entry')],
+    ['stop_loss', pick('stop_loss', 'stop_loss_1', 'sl')],
+    ['take_profit_1', pick('take_profit_1', 'tp1')],
+    ['take_profit_2', pick('take_profit_2', 'tp2')],
+    ['take_profit_3', pick('take_profit_3', 'tp3')]
+  ];
+
+  const marks = checks.map(([name, value]) => `${name}=${fieldOk(value) ? '✓' : '✗'}`);
+  console.log(`[WEBHOOK VERIFY] ${marks.join(' ')}`);
+
+  if (
+    /\{\{\s*strategy\.order\.alert_message\s*\}\}/i.test(rawHint) ||
+    isPlaceholderLiteral(rawHint.trim())
+  ) {
+    console.warn(
+      '[WEBHOOK VERIFY] body looks like an unexpanded TradingView strategy placeholder — ' +
+        'Kaching Pine is indicator(); use blank Message or {{alert_message}}, never {{strategy.order.alert_message}}'
+    );
+  } else if (!rawHint || rawHint === '{}' || rawHint === 'null') {
+    console.warn('[WEBHOOK VERIFY] body is empty/{} — TradingView likely did not send alert(msg) JSON');
+  }
+}
+
 app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(cookieParser());
 app.use(globalApiLimiter);
@@ -278,6 +535,14 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+  // API JSON must not be cached by browsers/CDNs (hashed frontend assets are separate).
+  const pathOnly = String(req.path || '').split('?')[0];
+  if (pathOnly === '/api' || pathOnly.startsWith('/api/')) {
+    res.setHeader('Cache-Control', 'no-store, private');
+  }
   next();
 });
 app.use(express.json({ limit: '1mb', verify: captureRawBody }));
@@ -296,19 +561,11 @@ mongoose.connect(mongoUri, {
 }).then(() => console.log('MongoDB connected'))
   .catch(err => console.error('MongoDB connection error:', err));
 
+// Public health: minimal body for Fly checks — no infra URL leakage.
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'backend',
-    dbState: mongoose.connection.readyState,
-    domain: APP_DOMAIN,
-    frontendUrl: FRONTEND_URL,
-    publicBackendUrl: PUBLIC_BACKEND_URL,
-    architecture: 'tradingview_webhook_distribution',
-    pythonAi: {
-      configured: PythonAiService.isConfigured(),
-      url: PythonAiService.isConfigured() ? PythonAiService.getPythonServiceUrl() : null
-    }
+    service: 'backend'
   });
 });
 
@@ -363,32 +620,47 @@ app.post('/api/webhook/telegram', async (req, res) => {
 
 app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
   const t0 = Date.now();
+  const requestId = ensureRequestId(req);
+  // Intake dump BEFORE auth (headers / raw body / parsed body). Diagnostics only.
+  logTradingViewWebhookIntakeDiag(req, { stage: 'pre_auth' });
   // STEP 4 — log BEFORE auth so silent upstream drops are visible in Fly/local logs.
-  const earlyBody =
-    typeof req.body === 'string'
-      ? (() => {
-          try {
-            return JSON.parse(req.body);
-          } catch {
-            return {};
-          }
-        })()
-      : req.body && typeof req.body === 'object'
-        ? req.body
-        : {};
-  const earlyMeta = extractPipelineMeta(earlyBody);
+  // Diagnostics only — never treat invalid JSON as {} (auth/parse use verifyTradingViewWebhook).
+  let earlyBody = {};
+  let earlyParseNote = 'ok';
+  if (typeof req.body === 'string') {
+    const rawEarly = String(req.body || '')
+      .replace(/^\uFEFF/, '')
+      .trim();
+    if (!rawEarly) {
+      earlyParseNote = 'empty_body';
+    } else {
+      try {
+        earlyBody = JSON.parse(rawEarly);
+      } catch {
+        earlyParseNote = 'invalid_json';
+        earlyBody = { __parseError: true, __parseReason: 'invalid_json' };
+      }
+    }
+  } else if (req.body && typeof req.body === 'object') {
+    earlyBody = req.body;
+  } else {
+    earlyParseNote = 'empty_body';
+  }
+  // Diagnostics only — Expected vs Received field marks; never affects auth/publish.
+  if (!earlyBody.__parseError) {
+    logTradingViewWebhookSelfCheck(earlyBody);
+  }
+  const earlyMeta = extractPipelineMeta(earlyBody.__parseError ? {} : earlyBody);
   const size = payloadSize(req);
   const ip = clientIp(req);
-  const hasLicenseToken = Boolean(earlyBody.licenseToken || earlyBody.license_token);
-  console.log(
-    `[TV WEBHOOK RECEIVED] timestamp=${new Date().toISOString()} ip=${ip} ` +
-      `symbol=${earlyMeta.symbol || 'n/a'} timeframe=${earlyMeta.timeframe || 'n/a'} ` +
-      `signalUuid=${earlyMeta.signalUuid || 'n/a'} licenseToken=${hasLicenseToken ? 'present' : 'absent'} ` +
-      `payloadBytes=${size}`
+  const hasLicenseToken = Boolean(
+    !earlyBody.__parseError && (earlyBody.licenseToken || earlyBody.license_token)
   );
   logPipeline('WebhookReceived', 'PASS', {
     ...earlyMeta,
-    reason: `ip=${ip}; bytes=${size}; licenseToken=${hasLicenseToken ? 'present' : 'absent'}`
+    reason:
+      `ip=${ip}; bytes=${size}; licenseToken=${hasLicenseToken ? 'present' : 'absent'}; ` +
+      `parseNote=${earlyParseNote}; requestId=${requestId}`
   });
 
   try {
@@ -398,6 +670,28 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
     // Prefer auth.body (already JSON-parsed) so text/plain TV posts are not re-parsed incorrectly.
     const rawPayload = auth.body || req.body;
     const parsed = TradingViewAlertService.parseWebhookBody(rawPayload);
+    if (parsed?.__parseError) {
+      logTvStage('TV WEBHOOK PARSE FAIL', {
+        requestId,
+        reason: parsed.__parseReason || 'invalid_json',
+        symbol: earlyMeta.symbol,
+        signalUuid: earlyMeta.signalUuid,
+        rawPreview: redactRawPreview(parsed.__rawPreview || '')
+      });
+      logPipeline('WebhookParseError', 'FAIL', {
+        ...earlyMeta,
+        reason: `${parsed.__parseReason || 'invalid_json'}; requestId=${requestId}`
+      });
+      return res.status(400).json({
+        message: 'Invalid TradingView webhook JSON body',
+        reason: parsed.__parseReason || 'invalid_json',
+        requestId
+      });
+    }
+    // Correlation only — stripped by mongoose strict schema on persist.
+    if (parsed && typeof parsed === 'object') {
+      parsed.pipelineRequestId = requestId;
+    }
     const meta = extractPipelineMeta(parsed);
     const normalizedAlertType = TradingViewAlertService.normalizeAlertType(
       parsed.alertType || parsed.alert_type || parsed.type
@@ -420,25 +714,34 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       );
       logPipeline('CandleAck', 'PASS', {
         ...meta,
-        reason: 'candle_feed_no_signal_publish'
+        reason: `candle_feed_no_signal_publish; requestId=${requestId}`
       });
       return res.status(201).json({
         success: true,
         mode: 'candle_ack',
         publishOnly: true,
         scanned: false,
-        fetched: false
+        fetched: false,
+        requestId
       });
     }
 
+    logTvStage('TV WEBHOOK SCHEMA PASS', {
+      requestId,
+      symbol: meta.symbol,
+      timeframe: meta.timeframe,
+      signalUuid: meta.signalUuid,
+      alertType: normalizedAlertType,
+      structuredEntry: isStructuredEntry
+    });
     logPipeline('Validation', 'PASS', {
       ...meta,
-      reason: `alertType=${normalizedAlertType}; structuredEntry=${isStructuredEntry}`
+      reason: `alertType=${normalizedAlertType}; structuredEntry=${isStructuredEntry}; requestId=${requestId}`
     });
 
     const result = await MarketScannerService.publishTradingViewAlert(
       io,
-      rawPayload,
+      parsed,
       inMemorySignals
     );
 
@@ -447,34 +750,54 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       logPipeline('Publish', 'FAIL', {
         ...meta,
         signalUuid: result.signalUuid || meta.signalUuid,
-        reason: result.reason || 'rejected'
+        reason: `${result.reason || 'rejected'}; requestId=${requestId}`
       });
     } else {
+      logTvStage('TV WEBHOOK SIGNAL PERSISTED', {
+        requestId,
+        symbol: meta.symbol,
+        timeframe: meta.timeframe,
+        signalUuid: result.signalUuid || meta.signalUuid,
+        delivered: result.delivered ?? 0,
+        skippedByEntitlement: result.skippedByEntitlement ?? 0
+      });
       logPipeline('Publish', 'PASS', {
         ...meta,
         signalUuid: result.signalUuid || meta.signalUuid,
-        reason: `mode=${result.mode || 'broadcast'}; delivered=${result.delivered ?? 0}; latencyMs=${latencyMs}`
+        reason: `mode=${result.mode || 'broadcast'}; delivered=${result.delivered ?? 0}; latencyMs=${latencyMs}; requestId=${requestId}`
       });
     }
 
-    return res.status(201).json({ success: true, latencyMs, ...result });
+    return res.status(201).json({ success: true, latencyMs, requestId, ...result });
   } catch (error) {
     const rejectedFields =
       error?.rejectedFields ||
       (error?.message && /missing/i.test(error.message) ? error.message : null);
+    const validationReason = rejectedFields || error.message || 'webhook_processing_failed';
+    const isPersistFail = /mongo|persist|validation failed|Signal validation/i.test(
+      String(error?.message || '')
+    );
+    logTvStage(isPersistFail ? 'SIGNAL PERSIST FAILED' : 'TV WEBHOOK SCHEMA FAIL', {
+      requestId,
+      reason: Array.isArray(rejectedFields) ? rejectedFields.join(',') : validationReason,
+      symbol: earlyMeta.symbol,
+      signalUuid: earlyMeta.signalUuid
+    });
     logPipeline('Validation', 'FAIL', {
       ...earlyMeta,
-      reason: rejectedFields || error.message || 'webhook_processing_failed'
+      reason: `${validationReason}; requestId=${requestId}`
     });
     console.error(
-      `[TV WEBHOOK VALIDATION FAILED] reason=${rejectedFields || error.message || 'webhook_processing_failed'} ` +
+      `[TV WEBHOOK VALIDATION FAILED] requestId=${requestId} reason=${validationReason} ` +
         `symbol=${earlyMeta.symbol || 'n/a'}`
     );
+    console.error(`[WEBHOOK FAIL:VALIDATION] reason=${validationReason}`);
     console.error('TradingView webhook error:', error);
     return res.status(500).json({
       message: 'TradingView webhook processing failed',
       error: error.message,
-      rejectedFields: rejectedFields || undefined
+      rejectedFields: rejectedFields || undefined,
+      requestId
     });
   }
 });
@@ -1673,6 +1996,19 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
           strategy: generated.strategy || req.query.strategy || null,
           scriptId: generated.scriptId || null
         });
+        try {
+          const PineClientRegistry = require('./services/PineClientRegistry');
+          void PineClientRegistry.recordGeneration(userId, {
+            pineClientVersion: generated.pineClientVersion,
+            scriptGenerationId: generated.scriptGenerationId,
+            scriptId: generated.scriptId,
+            strategy: generated.strategy,
+            generatedAt: generated.generatedAt,
+            capabilities: generated.capabilities
+          });
+        } catch {
+          // registry must never fail pine generation
+        }
       }
     } catch {
       // never break pine download
@@ -1874,8 +2210,17 @@ app.get('/api/performance/summary', requireAuth, requireSubscription, requireTie
 
 // ===== STRUCTURAL PATTERN SCANNER =====
 
+// Public: non-sensitive architecture summary only (no symbol buffers / internal endpoints).
+// Full dump is unused by the frontend; authenticated clients use /api/system/status.
 app.get('/api/scanner/status', (req, res) => {
-  res.json(MarketScannerService.getScannerStatus());
+  const full = MarketScannerService.getScannerStatus();
+  return res.json({
+    architecture: full.architecture,
+    signalPublication: full.signalPublication,
+    liveProviderRole: full.liveProviderRole,
+    tradingViewWebhook: full.tradingViewWebhook,
+    autoScanEnabled: Boolean(full.autoScanEnabled)
+  });
 });
 
 app.get('/api/system/status', requireAuth, async (req, res) => {
@@ -2209,12 +2554,15 @@ app.use((err, req, res, next) => {
       (err.status === 400 || err.statusCode === 400 || err.type === 'entity.parse.failed'));
 
   if (isTvWebhook && isJsonParseError) {
+    // TEMPORARY Task 2 — dump raw intake on parse failures (never reaches route/auth).
+    logTradingViewWebhookIntakeDiag(req, { stage: 'parse_error' });
     const ip = clientIp(req);
     const detail = err?.message || 'entity.parse.failed';
     console.warn(
       `[TV WEBHOOK PARSE ERROR] path=/api/webhook/tradingview ip=${ip} ` +
         `type=${err?.type || 'SyntaxError'} detail=${detail}`
     );
+    console.warn(`[WEBHOOK FAIL:PARSE] WebhookParseError detail=${detail}`);
     logPipeline('WebhookParseError', 'FAIL', {
       reason: `ip=${ip}; type=${err?.type || 'SyntaxError'}; ${detail}`
     });

@@ -60,6 +60,27 @@ describe('Telegram link code redemption', () => {
     assert.equal(user.telegram.linkCode, null);
   });
 
+  it('preserves telegramMode alerts_only when linking (no MT5 wipe)', async () => {
+    devUserStore.upsertUser(userId, {
+      email: 'telegram-link@example.com',
+      subscription: {
+        status: 'active',
+        tier: 'professional',
+        current_period_end: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+      },
+      telegram: { telegramMode: 'alerts_only', enabled: true }
+    });
+
+    const { code } = await TelegramService.createLinkCode(userId);
+    const result = await TelegramService.linkByCode(code, 'chat-alerts-only', 'alertsuser');
+    assert.equal(result.ok, true);
+
+    const user = devUserStore.findById(userId);
+    assert.equal(String(user.telegram.chatId), 'chat-alerts-only');
+    assert.equal(user.telegram.telegramMode, 'alerts_only');
+    assert.equal(user.telegram.enabled, true);
+  });
+
   it('rejects Basic users with subscription_required and keeps the code', async () => {
     devUserStore.upsertUser(userId, {
       email: 'telegram-link@example.com',

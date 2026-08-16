@@ -51,6 +51,21 @@ async function updateEntryOutcome(entry, alertType, inMemorySignals, closedReaso
   const entryId = entry._id || entry.id;
   const updated = { ...entry };
   applyOutcomeUpdate(updated, alertType, closedReason);
+
+  // Terminal / same-stage / backward no-ops must not rewrite Mongo or retrain.
+  if (updated._outcomeIgnored) {
+    // Preserve ignore flags for callers (registry sync / diagnostics).
+    if (inMemorySignals && entryId) {
+      const idx = inMemorySignals.findIndex(s => String(s._id) === String(entryId));
+      if (idx >= 0) {
+        inMemorySignals[idx]._outcomeIgnored = true;
+        inMemorySignals[idx]._outcomeIgnoreReason = updated._outcomeIgnoreReason;
+        return inMemorySignals[idx];
+      }
+    }
+    return updated;
+  }
+
   const update = {
     outcome: updated.outcome,
     outcomeR: updated.outcomeR,
@@ -140,9 +155,36 @@ async function processSignalLifecycle(rawSignalData, inMemorySignals = [], optio
   return { signalData, updatedEntry: null, outcomeLinked: false };
 }
 
+/**
+ * Mark an open entry cancelled/replaced by UUID (replacement lifecycle).
+ * Does not create a new document; preserves audit history.
+ */
+async function closeEntryAsCancelled(signalUuid, meta = {}) {
+  const entry = await findEntryByUuidInDb(signalUuid);
+  if (!entry) return null;
+  const saved = await updateEntryOutcome(
+    entry,
+    'cancelled',
+    null,
+    meta.closedReason || 'new_confirmed_setup'
+  );
+  if (saved && meta.replacedBySignalUuid && isDbConnected() && (entry._id || entry.id)) {
+    try {
+      await Signal.findByIdAndUpdate(entry._id || entry.id, {
+        replacedBySignalUuid: String(meta.replacedBySignalUuid),
+        replacementReason: meta.closedReason || 'new_confirmed_setup'
+      });
+    } catch (err) {
+      console.warn('[SignalOutcome] replacedBySignalUuid update failed:', err.message);
+    }
+  }
+  return saved;
+}
+
 module.exports = {
   processSignalLifecycle,
   findOpenEntryInDb,
   findEntryByUuidInDb,
-  updateEntryOutcome
+  updateEntryOutcome,
+  closeEntryAsCancelled
 };

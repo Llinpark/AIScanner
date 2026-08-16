@@ -33,21 +33,23 @@ const DEMO_USER = {
 };
 
 describe('Strategy Architecture canonical layout', () => {
-  it('defines Scalping: entry 1m/3m/5m, HTF 15m', () => {
+  it('defines Scalping: entry 1m/3m/5m, HTF 15m, canonical 3m', () => {
     const a = STRATEGY_ARCHITECTURE.scalping;
     assert.deepEqual([...a.entryTimeframes], ['1m', '3m', '5m']);
     assert.deepEqual([...a.htfTimeframes], ['15m']);
     assert.equal(a.defaultEntryTimeframe, '3m');
     assert.equal(a.defaultHtfTimeframe, '15m');
+    assert.equal(a.canonicalSignalTimeframe, '3m');
     assert.ok(a.entryTimeframes.includes('1m'));
   });
 
-  it('defines Day Trading: entry 5m/15m, HTF 1h/4h', () => {
+  it('defines Day Trading: entry 5m/15m, HTF 1h/4h, canonical 5m', () => {
     const a = STRATEGY_ARCHITECTURE.daytrading;
     assert.deepEqual([...a.entryTimeframes], ['5m', '15m']);
     assert.deepEqual([...a.htfTimeframes], ['1h', '4h']);
     assert.equal(a.defaultEntryTimeframe, '15m');
     assert.equal(a.defaultHtfTimeframe, '1h');
+    assert.equal(a.canonicalSignalTimeframe, '5m');
   });
 
   it('reserves future strategy keys without registering live math', () => {
@@ -118,48 +120,80 @@ describe('Backend configs consume Strategy Architecture', () => {
     assert.equal(DEFAULT_DAYTRADING_CONFIG.htfTimeframe, arch.htfTimeframe);
   });
 
-  it('public summary exposes both strategies', () => {
+  it('public summary exposes both strategies including canonical TF', () => {
     const summary = getArchitecturePublicSummary();
     assert.ok(summary.scalping);
     assert.ok(summary.daytrading);
+    assert.equal(summary.scalping.canonicalSignalTimeframe, '3m');
+    assert.equal(summary.daytrading.canonicalSignalTimeframe, '5m');
   });
 });
 
 describe('Pine generator injects Strategy Configuration', () => {
-  it('buildPineTfVariables injects entry/HTF expressions and diagnostics', () => {
+  it('buildPineTfVariables injects entry/HTF/canonical expressions and Option A diagnostics', () => {
     const scalp = buildPineTfVariables('scalping');
     assert.equal(scalp.HTF_TF, '15');
+    assert.equal(scalp.CANONICAL_SIGNAL_TF, '3');
+    assert.equal(scalp.ARCH_CANONICAL_SIGNAL_TF, '3m');
     assert.match(scalp.ENTRY_CHART_OK, /multiplier == 1/);
     assert.match(scalp.ENTRY_CHART_OK, /multiplier == 3/);
     assert.match(scalp.ENTRY_CHART_OK, /multiplier == 5/);
     assert.equal(scalp.HTF_TF_OK, 'htfSec == 900');
     assert.match(scalp.DIAG_WRONG_ENTRY, /Wrong Entry Timeframe \(Scalping\)/);
-    assert.match(scalp.DIAG_WRONG_HTF, /Wrong HTF Configuration \(Scalping\)/);
-    assert.match(scalp.DIAG_CHART_IS_HTF, /Chart opened on HTF \(Scalping\)/);
+    assert.match(scalp.DIAG_WRONG_ENTRY, /allowed display TF/);
+    assert.match(scalp.DIAG_WRONG_ENTRY, /canonical signal TF 3m/);
+    assert.doesNotMatch(scalp.DIAG_WRONG_ENTRY, /alerts still evaluate/i);
     assert.match(scalp.DIAG_UNSUPPORTED, /Unsupported Strategy Configuration/);
-    assert.match(scalp.DIAG_MISSING_HTF, /Missing HTF Confirmation \(Scalping\)/);
+    assert.match(scalp.instructionLead, /canonical 3m/i);
+    assert.match(scalp.instructionLead, /1m, 3m, or 5m/);
 
     const day = buildPineTfVariables('daytrading');
     assert.equal(day.HTF_TF, '60'); // default HTF baked = 1h
+    assert.equal(day.CANONICAL_SIGNAL_TF, '5');
+    assert.equal(day.ARCH_CANONICAL_SIGNAL_TF, '5m');
     assert.match(day.ENTRY_CHART_OK, /multiplier == 5/);
     assert.match(day.ENTRY_CHART_OK, /multiplier == 15/);
     assert.match(day.HTF_TF_OK, /htfSec == 3600/);
     assert.match(day.HTF_TF_OK, /htfSec == 14400/);
+    assert.match(day.DIAG_WRONG_ENTRY, /Wrong Entry Timeframe \(Day Trading\)/);
+    assert.match(day.instructionLead, /canonical 5m/i);
   });
 
-  it('generated Pine matches configuration (scalping + daytrading)', () => {
+  it('generated Pine matches Option A configuration (scalping + daytrading)', () => {
     const scalp = Pine.generateForUser(DEMO_USER, { strategy: 'scalping' });
     const day = Pine.generateForUser(DEMO_USER, { strategy: 'daytrading' });
 
     assert.deepEqual(scalp.strategyArchitecture.entryTimeframes, ['1m', '3m', '5m']);
     assert.deepEqual(scalp.strategyArchitecture.htfTimeframes, ['15m']);
     assert.equal(scalp.strategyArchitecture.bakedHtfPine, '15');
+    assert.equal(scalp.strategyArchitecture.canonicalSignalTimeframe, '3m');
+    assert.equal(scalp.strategyArchitecture.bakedCanonicalSignalPine, '3');
     assert.match(scalp.script, /input\.timeframe\("15"/);
+    assert.match(scalp.script, /CANONICAL_SIGNAL_TF = "3"/);
+    assert.match(scalp.script, /canonSignalTuple/);
+    assert.match(scalp.script, /makeCanonicalSignalId/);
+    assert.match(scalp.script, /request\.security_lower_tf/);
     assert.match(scalp.script, /Wrong Entry Timeframe \(Scalping\)/);
-    assert.match(scalp.script, /Wrong HTF Configuration \(Scalping\)/);
-    assert.match(scalp.script, /Chart opened on HTF \(Scalping\)/);
     assert.match(scalp.script, /Unsupported Strategy Configuration/);
-    assert.match(scalp.script, /Missing HTF Confirmation \(Scalping\)/);
+    assert.match(scalp.script, /tradingStyle\s*=/);
+    assert.match(
+      scalp.script,
+      /setupLong\s*=\s*licenseOk and isAllowedDisplayTf and newCanonLong/
+    );
+    assert.match(scalp.script, /resolveValidStop/);
+    assert.match(scalp.script, /maxStopAtrMult/);
+    assert.doesNotMatch(
+      scalp.script,
+      /fireLong\s*=\s*licenseOk and entryTfOk/
+    );
+    assert.match(
+      scalp.script,
+      /tfMsg\s*=\s*not strategyCfgOk \? "[^"]+" : not entryChartOk \? "[^"]+" : ""/
+    );
+    assert.doesNotMatch(
+      scalp.script,
+      /tfMsg\s*=.*chartIsHtf/
+    );
     assert.match(
       scalp.script,
       /timeframe\.multiplier == 1 or timeframe\.multiplier == 3 or timeframe\.multiplier == 5/
@@ -168,11 +202,15 @@ describe('Pine generator injects Strategy Configuration', () => {
     assert.deepEqual(day.strategyArchitecture.entryTimeframes, ['5m', '15m']);
     assert.deepEqual(day.strategyArchitecture.htfTimeframes, ['1h', '4h']);
     assert.equal(day.strategyArchitecture.bakedHtfPine, '60');
+    assert.equal(day.strategyArchitecture.canonicalSignalTimeframe, '5m');
+    assert.equal(day.strategyArchitecture.bakedCanonicalSignalPine, '5');
     assert.match(day.script, /input\.timeframe\("60"/);
+    assert.match(day.script, /CANONICAL_SIGNAL_TF = "5"/);
     assert.match(day.script, /htfSec == 3600 or htfSec == 14400/);
     assert.match(day.script, /Wrong Entry Timeframe \(Day Trading\)/);
     assert.match(day.instructions[0], /Day Trading/);
     assert.match(day.instructions[0], /5m or 15m/);
+    assert.match(day.instructions[0], /canonical 5m/i);
     assert.match(scalp.instructions[0], /Scalping/);
     assert.match(scalp.instructions[0], /1m, 3m, or 5m/);
     assert.match(scalp.instructions[0], /Day Trading/);
@@ -192,12 +230,16 @@ describe('Pine generator injects Strategy Configuration', () => {
     for (const tpl of [scalpTpl, dayTpl]) {
       assert.match(tpl, /\{\{ENTRY_CHART_OK\}\}/);
       assert.match(tpl, /\{\{HTF_TF_OK\}\}/);
+      assert.match(tpl, /\{\{TRADING_STYLE_EXPR\}\}/);
       assert.match(tpl, /\{\{HTF_TF\}\}/);
+      assert.match(tpl, /\{\{CANONICAL_SIGNAL_TF\}\}/);
+      assert.match(tpl, /\{\{EVENT_BRIDGE\}\}/);
+      assert.match(tpl, /\{\{EVENT_ARM\}\}/);
+      assert.match(tpl, /\{\{DRAWING_RUNTIME\}\}/);
       assert.match(tpl, /\{\{DIAG_WRONG_ENTRY\}\}/);
-      assert.match(tpl, /\{\{DIAG_WRONG_HTF\}\}/);
-      assert.match(tpl, /\{\{DIAG_CHART_IS_HTF\}\}/);
       assert.match(tpl, /\{\{DIAG_UNSUPPORTED\}\}/);
-      assert.match(tpl, /\{\{DIAG_MISSING_HTF\}\}/);
+      assert.match(tpl, /canonSignalTuple/);
+      assert.match(tpl, /isAllowedDisplayTf/);
       assert.doesNotMatch(tpl, /timeframe\.multiplier == 3 or timeframe\.multiplier == 5/);
       assert.doesNotMatch(tpl, /htfSec == 900$/m);
     }

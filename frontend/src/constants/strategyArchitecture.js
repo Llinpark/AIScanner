@@ -14,13 +14,14 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     shortLabel: 'Scalping',
     entryTimeframes: Object.freeze(['1m', '3m', '5m']),
     defaultEntryTimeframe: '3m',
+    canonicalSignalTimeframe: '3m',
     htfTimeframes: Object.freeze(['15m']),
     defaultHtfTimeframe: '15m',
     /** UX copy for TradingView / admin */
     entrySummary: '1m, 3m, or 5m',
     htfSummary: '15m',
     chartHint:
-      'Scalping: attach to a 1m, 3m, or 5m chart. 15m is HTF Confirmation via request.security — not an entry chart. Want 15m entries? Switch strategy to Day Trading.'
+      'Scalping (Option A): allowed display charts are 1m, 3m, or 5m. Signals evaluate on canonical 3m with an event-safe bridge (same UUID/Entry/SL/TP/lifecycle on every allowed chart). Prefer ONE TradingView alert on 3m. 15m is HTF Confirmation via request.security. Prefer Day Trading for 15m profile settings.'
   }),
   daytrading: Object.freeze({
     key: 'daytrading',
@@ -29,6 +30,7 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     shortLabel: 'Day Trading',
     entryTimeframes: Object.freeze(['5m', '15m']),
     defaultEntryTimeframe: '15m',
+    canonicalSignalTimeframe: '5m',
     htfTimeframes: Object.freeze(['1h', '4h']),
     defaultHtfTimeframe: '1h',
     refineHtfTimeframes: Object.freeze(['1h', '4h']),
@@ -36,7 +38,7 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     entrySummary: '5m or 15m',
     htfSummary: '1H or 4H',
     chartHint:
-      'Day Trading: attach to a 5m or 15m chart. HTF Confirmation is 1H or 4H via request.security only — do not open 1H/4H for entries.'
+      'Day Trading (Option A): allowed display charts are 5m or 15m. Signals evaluate on canonical 5m with an event-safe bridge (same UUID/Entry/SL/TP/lifecycle on every allowed chart; 15m does not collapse multiple 5m events). Prefer ONE TradingView alert on 5m. HTF Confirmation is 1H or 4H via request.security.'
   })
 });
 

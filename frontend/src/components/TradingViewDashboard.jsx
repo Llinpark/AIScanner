@@ -88,7 +88,7 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
   const [pineMeta, setPineMeta] = useState(null);
   const [pineCopyState, setPineCopyState] = useState('idle');
   const [pineLoadError, setPineLoadError] = useState('');
-  // Day Trading first: default entry is 15m (common for gold). Scalping blocks 15m (HTF only).
+  // Day Trading first: default preferred entry is 15m (common for gold). Scalping prefers 1m/3m/5m.
   const [pineStrategy, setPineStrategy] = useState('daytrading');
   const pineScriptRef = useRef('');
   const [socketStatus, setSocketStatus] = useState('disconnected');
@@ -482,8 +482,12 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               <header className="tv-setup-intro">
                 <h3>Connect TradingView</h3>
                 <p>
-                  Link your TradingView username, copy your personal script, add it to a chart, then create one webhook
-                  alert. Kaching publishes those trades here — charts stay display-only.
+                  Link your TradingView username, copy your personal script, add the indicator to a chart, then create
+                  ONE alert (Condition: Any alert() function call). Paste the dashboard Webhook URL. Message: leave
+                  BLANK (strongly recommended). If TradingView requires a placeholder, use ONLY{' '}
+                  {'{{alert_message}}'} — never {'{{strategy.order.alert_message}}'} (strategy scripts only; breaks
+                  this indicator). After regenerating Pine, delete the old alert and create a new one. Kaching
+                  publishes those trades here — charts stay display-only.
                 </p>
               </header>
 
@@ -662,8 +666,9 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                           'Open TradingView → Pine Editor → paste your personal script → Add to chart',
                           'Confirm username is prefilled under KachingFx License — leave it to unlock',
                           'If an old locked copy is still on the chart, remove it and re-add the new script',
-                          'Create one alert for this script and enable webhook notifications',
-                          'Paste your Kaching webhook URL into the alert',
+                          'Create ONE alert. Condition: Any alert() function call. Enable Webhook URL and paste your Kaching webhook URL',
+                          'Message: leave BLANK (or ONLY {{alert_message}}). Never {{strategy.order.alert_message}}',
+                          'After regenerating Pine: delete the old alert and create a new one',
                           'Optional: enable TradingView mobile notifications'
                         ]
                     ).map(step => (

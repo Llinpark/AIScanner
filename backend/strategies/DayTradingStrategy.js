@@ -1,17 +1,16 @@
 /**
  * DayTradingStrategy — Liquidity Sweep + Fair Value Gap (Day Trading).
  *
- * HTF 4H bias (+ optional 1H refine) — NEVER entries.
- * Entries ONLY on 15m / 5m after: HTF sweep → MSS → displacement → FVG → retrace → min RR.
+ * HTF 4H bias (+ optional 1H refine) for confirmation.
+ * Preferred entry TFs 15m / 5m after: HTF sweep → MSS → displacement → FVG → retrace → min RR.
+ * Chart TF is advisory metadata only — never a hard reject gate.
  *
  * Shares SMC detectors with ScalpingStrategy (Liquidity*, MSS, Displacement, FVG, Retrace, etc.).
  */
 
 const { resolveDayTradingConfig, STRATEGY_ID, STRATEGY_NAME } = require('./config/dayTradingConfig');
-const {
-  STRATEGY_ARCHITECTURE,
-  isHtfChartTimeframe
-} = require('./config/strategyArchitecture');
+const { STRATEGY_ARCHITECTURE } = require('./config/strategyArchitecture');
+const { classifyForStrategy } = require('../utils/TradingStyleClassifier');
 const { IStrategy } = require('./interfaces/IStrategy');
 const { LiquidityDetector } = require('./detectors/LiquidityDetector');
 const { LiquiditySweepDetector } = require('./detectors/LiquiditySweepDetector');
@@ -85,20 +84,12 @@ class DayTradingStrategy extends IStrategy {
     const timeframe = context.timeframe || this.config.defaultEntryTimeframe;
     const entryTfs =
       this.config.entryTimeframes || [...STRATEGY_ARCHITECTURE.daytrading.entryTimeframes];
-    const htfList = [
-      ...(this.config.htfTimeframes || STRATEGY_ARCHITECTURE.daytrading.htfTimeframes),
-      this.config.htfTimeframe,
-      this.config.refineHtfTimeframe
-    ].filter(Boolean);
-
-    // Hard rule: never enter on HTF (allowlist from Strategy Architecture)
-    if (isHtfChartTimeframe(timeframe, htfList)) {
-      return { signal: false, stage: 'rejected', reason: 'htf_never_entries' };
-    }
-
-    if (context.strictTimeframe === true && entryTfs.length && !entryTfs.includes(timeframe)) {
-      return { signal: false, stage: 'rejected', reason: 'invalid_entry_timeframe' };
-    }
+    // Chart TF → trading style is advisory metadata only (never rejects evaluation).
+    const styleMeta = classifyForStrategy(timeframe, 'daytrading', {
+      entryTimeframes: entryTfs,
+      htfTimeframe: this.config.htfTimeframe,
+      htfTimeframes: this.config.htfTimeframes || STRATEGY_ARCHITECTURE.daytrading.htfTimeframes
+    });
 
     const ltf = (context.candles || []).map(normalizeCandle);
     const htf4h = (context.htf4hCandles || context.daytradingHtfCandles || context.htfCandles || []).map(
@@ -270,16 +261,15 @@ class DayTradingStrategy extends IStrategy {
       candles: ltf,
       symbol
     });
-    if (!stop) {
-      return { signal: false, stage: 'rejected', reason: 'invalid_stop' };
+    if (!stop || stop.rejectReason || !Number.isFinite(stop.stop_loss)) {
+      return {
+        signal: false,
+        stage: 'rejected',
+        reason: stop?.rejectReason || 'SIGNAL_REJECTED_SL_TOO_FAR'
+      };
     }
 
-    // Max SL size vs ATR
     const atrVal = atr(ltf, this.config.displacement?.atrPeriod || 14);
-    const maxSl = (this.config.stop?.maxStopAtrMult || 2.5) * (atrVal || 0);
-    if (maxSl > 0 && stop.risk > maxSl) {
-      return { signal: false, stage: 'filtered', reason: 'sl_too_large' };
-    }
 
     // STEP 10 — TPs
     const tps = this.tpEngine.compute({
@@ -354,6 +344,10 @@ class DayTradingStrategy extends IStrategy {
       htfBias: biasResult.bias,
       tpPartials: tps.partials || null
     });
+    // Optional internal metadata — not part of TradingView webhook DTO.
+    entry.tradingStyle = styleMeta.tradingStyle;
+    entry.chartTimeframe = styleMeta.chartTimeframe;
+    entry.higherTimeframe = styleMeta.higherTimeframe;
 
     return {
       signal: true,
@@ -370,7 +364,8 @@ class DayTradingStrategy extends IStrategy {
         retrace,
         stop,
         tps,
-        sessionLevels
+        sessionLevels,
+        tradingStyle: styleMeta
       }
     };
   }

@@ -9,3 +9,10 @@ npm-debug.log*
 coverage
 .nyc_output
 terminals
+deploy-out*.txt
+scripts/_tmp_*
+scripts/tmp_*
+scripts/_run_prod_*
+scripts/_sftp_*
+tmp-optiona-smoke-pine
+dev-users.json

@@ -19,6 +19,11 @@ const {
   normalizeTradingViewUsername
 } = require('../utils/webhookSecurity');
 const { getTierDisplayName, getEffectiveSubscription } = require('../utils/subscriptionAccess');
+const {
+  PINE_CLIENT_VERSION,
+  CURRENT_PINE_CAPABILITIES,
+  capabilitiesJsonLiteral
+} = require('../utils/PineClientVersion');
 
 const SCALPING_TEMPLATE = path.join(
   __dirname,
@@ -39,6 +44,27 @@ const DRAWING_ENGINE_SNIPPET = path.join(
   'snippets',
   'kaching-trade-drawing.pine.snippet'
 );
+const EVENT_BRIDGE_SNIPPET = path.join(
+  __dirname,
+  '..',
+  'templates',
+  'snippets',
+  'kaching-canon-event-bridge.pine.snippet'
+);
+const EVENT_ARM_SNIPPET = path.join(
+  __dirname,
+  '..',
+  'templates',
+  'snippets',
+  'kaching-canon-event-arm.pine.snippet'
+);
+const DRAWING_RUNTIME_SNIPPET = path.join(
+  __dirname,
+  '..',
+  'templates',
+  'snippets',
+  'kaching-trade-drawing-runtime.pine.snippet'
+);
 
 const templateCache = new Map();
 
@@ -53,6 +79,18 @@ function loadDrawingEngine() {
   return loadTemplate(DRAWING_ENGINE_SNIPPET);
 }
 
+function loadEventBridge() {
+  return loadTemplate(EVENT_BRIDGE_SNIPPET);
+}
+
+function loadEventArm() {
+  return loadTemplate(EVENT_ARM_SNIPPET);
+}
+
+function loadDrawingRuntime() {
+  return loadTemplate(DRAWING_RUNTIME_SNIPPET);
+}
+
 function escapePineString(value) {
   return String(value ?? '')
     .replace(/\\/g, '\\\\')
@@ -62,6 +100,12 @@ function escapePineString(value) {
 function buildScriptId(userId) {
   const hash = crypto.createHash('sha256').update(String(userId || 'anonymous')).digest('hex');
   return hash.slice(0, 12);
+}
+
+/** Unique id per generateForUser call (not the stable scriptId). */
+function buildScriptGenerationId(userId, scriptId) {
+  const stamp = `${userId || 'anon'}|${scriptId || ''}|${Date.now()}|${crypto.randomBytes(8).toString('hex')}`;
+  return crypto.createHash('sha256').update(stamp).digest('hex').slice(0, 16);
 }
 
 function renderTemplate(template, variables) {
@@ -102,7 +146,22 @@ function sampleHumanAlertMessage(direction, entry, sl, tp1, tp2, tp3) {
   return `${header}\nEntry: ${entry}\nSL: ${sl}\nTP1: ${tp1}\nTP2: ${tp2}\nTP3: ${tp3}`;
 }
 
-function sampleWebhookPayload(strategyKey = 'daytrading') {
+function sampleWebhookPayload(strategyKey = 'daytrading', versionMeta = null) {
+  const additive =
+    versionMeta && typeof versionMeta === 'object'
+      ? {
+          pineClientVersion: versionMeta.pineClientVersion || PINE_CLIENT_VERSION,
+          generatedAt: versionMeta.generatedAt || undefined,
+          scriptGenerationId: versionMeta.scriptGenerationId || undefined,
+          capabilities: Array.isArray(versionMeta.capabilities)
+            ? versionMeta.capabilities
+            : [...CURRENT_PINE_CAPABILITIES]
+        }
+      : {
+          pineClientVersion: PINE_CLIENT_VERSION,
+          capabilities: [...CURRENT_PINE_CAPABILITIES]
+        };
+
   if (strategyKey === 'scalping') {
     return {
       symbol: 'XAUUSD',
@@ -121,7 +180,8 @@ function sampleWebhookPayload(strategyKey = 'daytrading') {
       message: sampleHumanAlertMessage('long', 2650.5, 2648.2, 2655.1, 2657.4, 2659.7),
       licenseToken: '<your-license-token>',
       tradingviewUsername: '<your-tradingview-username>',
-      broadcast: true
+      broadcast: true,
+      ...additive
     };
   }
 
@@ -142,7 +202,8 @@ function sampleWebhookPayload(strategyKey = 'daytrading') {
     message: sampleHumanAlertMessage('long', 2650.5, 2644.0, 2663.5, 2670.0, 2680.0),
     licenseToken: '<your-license-token>',
     tradingviewUsername: '<your-tradingview-username>',
-    broadcast: true
+    broadcast: true,
+    ...additive
   };
 }
 
@@ -167,9 +228,12 @@ function buildSweepVariables(base, config, title, shortTitle, strategyKey) {
     INDICATOR_TITLE: escapePineString(title),
     INDICATOR_SHORTTITLE: escapePineString(shortTitle),
     HTF_TF: escapePineString(pineTf.HTF_TF),
+    CANONICAL_SIGNAL_TF: escapePineString(pineTf.CANONICAL_SIGNAL_TF),
+    ARCH_CANONICAL_SIGNAL_TF: escapePineString(pineTf.ARCH_CANONICAL_SIGNAL_TF),
     STRATEGY_KEY: escapePineString(pineTf.STRATEGY_KEY),
     ENTRY_CHART_OK: pineTf.ENTRY_CHART_OK,
     HTF_TF_OK: pineTf.HTF_TF_OK,
+    TRADING_STYLE_EXPR: pineTf.TRADING_STYLE_EXPR,
     HTF_INPUT_LABEL: escapePineString(pineTf.HTF_INPUT_LABEL),
     HTF_INPUT_TOOLTIP: escapePineString(pineTf.HTF_INPUT_TOOLTIP),
     DIAG_WRONG_ENTRY: escapePineString(pineTf.DIAG_WRONG_ENTRY),
@@ -187,6 +251,10 @@ function buildSweepVariables(base, config, title, shortTitle, strategyKey) {
     MIN_FVG_ATR: config.fvg?.minGapToAtrRatio ?? 0.12,
     ENTRY_MODEL: escapePineString(config.entry?.model || 'ce'),
     STOP_MODEL: escapePineString(config.stop?.model || 'sweep'),
+    SL_BUFFER_ATR: config.stop?.bufferAtrRatio ?? 0.05,
+    // Entry-TF ATR multiplier that actually caps structural SL distance (not TP caps).
+    MAX_STOP_ATR_MULT: config.stop?.maxStopAtrMult ?? 1.5,
+    MIN_RR: config.takeProfit?.minRr ?? rr[0] ?? 1.5,
     TP1_R: rr[0] ?? 1.5,
     TP2_R: rr[1] ?? 2,
     TP3_R: rr[2] ?? 3,
@@ -217,6 +285,10 @@ function generateForUser(user, options = {}) {
   }
 
   const scriptId = buildScriptId(userId);
+  const scriptGenerationId = buildScriptGenerationId(userId, scriptId);
+  const generatedAt = new Date().toISOString();
+  const pineClientVersion = PINE_CLIENT_VERSION;
+  const pineCapabilities = [...CURRENT_PINE_CAPABILITIES];
   const tierLabel = getTierDisplayName(tier);
   const subscriberLabel = user.email || user.displayName || userId || 'subscriber';
   const licenseToken = userId ? generateLicenseToken(userId, tvUsername) : '';
@@ -230,7 +302,12 @@ function generateForUser(user, options = {}) {
     WEBHOOK_SECRET: '',
     LICENSE_TOKEN: escapePineString(licenseToken),
     TV_USERNAME: escapePineString(tvUsername),
-    SUBSCRIBER_ID: escapePineString(userId)
+    SUBSCRIBER_ID: escapePineString(userId),
+    // Additive Pine client version metadata (new regenerations only).
+    PINE_CLIENT_VERSION: escapePineString(pineClientVersion),
+    SCRIPT_GENERATION_ID: escapePineString(scriptGenerationId),
+    PINE_GENERATED_AT: escapePineString(generatedAt),
+    PINE_CAPABILITIES_JSON: capabilitiesJsonLiteral(pineCapabilities)
   };
 
   // Fail before generation if Strategy Configuration is inconsistent.
@@ -279,14 +356,35 @@ function generateForUser(user, options = {}) {
   }
 
   const { _pineTf, ...templateVars } = variables;
+  // Snippets may contain {{ARCH_*}} (and similar) tokens. Pre-render them so a
+  // single-pass main-template replace cannot leave unresolved placeholders
+  // (or, historically, inject snippet bodies into comments that mentioned
+  // {{EVENT_BRIDGE}} by name).
+  const EVENT_BRIDGE = renderTemplate(loadEventBridge(), templateVars);
+  const DRAWING_ENGINE = renderTemplate(loadDrawingEngine(), templateVars);
+  const EVENT_ARM = renderTemplate(loadEventArm(), templateVars);
+  const DRAWING_RUNTIME = renderTemplate(loadDrawingRuntime(), templateVars);
   const script = renderTemplate(loadTemplate(templatePath), {
     ...templateVars,
-    DRAWING_ENGINE: loadDrawingEngine()
+    EVENT_BRIDGE,
+    DRAWING_ENGINE,
+    EVENT_ARM,
+    DRAWING_RUNTIME
   });
+
+  const versionMeta = {
+    pineClientVersion,
+    scriptGenerationId,
+    generatedAt,
+    capabilities: pineCapabilities
+  };
 
   return {
     script,
     scriptId,
+    scriptGenerationId,
+    pineClientVersion,
+    capabilities: pineCapabilities,
     webhookUrl,
     licenseToken,
     tradingviewUsername: tvUsername,
@@ -295,17 +393,19 @@ function generateForUser(user, options = {}) {
     subscriberLabel,
     strategy: strategyKey,
     strategyName: strategyLabel,
-    generatedAt: new Date().toISOString(),
+    generatedAt,
     architecture: 'tradingview_webhook_distribution',
     strategyArchitecture: {
       entryTimeframes: pineTfMeta.ARCH_ENTRY_TIMEFRAMES,
       htfTimeframes: pineTfMeta.ARCH_HTF_TIMEFRAMES,
+      canonicalSignalTimeframe: pineTfMeta.ARCH_CANONICAL_SIGNAL_TF,
       defaultHtfTimeframe: pineTfMeta.ARCH_DEFAULT_HTF,
       defaultEntryTimeframe: pineTfMeta.ARCH_DEFAULT_ENTRY,
-      bakedHtfPine: pineTfMeta.HTF_TF
+      bakedHtfPine: pineTfMeta.HTF_TF,
+      bakedCanonicalSignalPine: pineTfMeta.CANONICAL_SIGNAL_TF
     },
     flow: 'TradingView → webhook → Kaching dashboard / Telegram / MT5',
-    samplePayload: sampleWebhookPayload(strategyKey),
+    samplePayload: sampleWebhookPayload(strategyKey, versionMeta),
     availableStrategies: [
       { id: 'daytrading', name: DAYTRADING_SWEEP_NAME, default: strategyKey === 'daytrading' },
       { id: 'scalping', name: SCALPING_STRATEGY_NAME, default: strategyKey === 'scalping' }
@@ -319,16 +419,19 @@ function generateForUser(user, options = {}) {
     },
     instructions: [
       instructionLead,
-      'Works on any TradingView instrument (Forex, metals, crypto, indices, stocks, futures, CFDs, synthetics). Attach the script to the chart you want analysed — TradingView OHLC is the source of truth.',
+      '1) Paste the generated Pine into TradingView\'s Pine Editor, then Save.',
+      '2) Add this indicator to your chart (Kaching scripts are indicator() — not strategy()). TradingView OHLC on that chart is the source of truth (any instrument).',
       `Confirm username is prefilled to ${tvUsername} under KachingFx License — leave it as-is to unlock. Override only if needed; signals stay locked until Confirm matches the licensed username.`,
       'When a signal fires, TradingView shows separate labels: Kaching Buy/Sell badge, plus Buy/Sell, SL, TP1, TP2, TP3 (each one object). Badge text never mixes with TP text.',
       'Overlays stay until TP3, SL, candle expiry, or cancel — they do not disappear if a later setup fails. Lines extend to the live candle every bar while the trade is active.',
       'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry).',
-      // ONE alert only — webhook URL must match PUBLIC_BACKEND_URL /api/webhook/tradingview
-      `Create ONE alert on this chart for this script (Condition: Any alert() function call). Enable Webhook URL and paste exactly: ${webhookUrl}`,
-      'Alert message field: leave TradingView default {{strategy.order.alert_message}} / {{alert_message}} so the JSON from alert() is sent unchanged. Do not wrap or edit the JSON.',
+      // ONE alert only — webhook URL from PUBLIC_BACKEND_URL / WEBHOOK_TRADINGVIEW_URL
+      `3) Create ONE alert on this chart for this script. Condition: Any alert() function call. Enable Webhook URL and paste exactly: ${webhookUrl}`,
+      '4) Message: Leave BLANK. If TradingView requires a placeholder, use ONLY {{alert_message}}. Never {{strategy.order.alert_message}} — that strategy() order placeholder will NOT expand on this indicator() and breaks webhooks.',
+      '5) Never type custom JSON into the Message field. Never wrap, edit, or replace the payload from alert().',
       'Alert frequency: Once Per Bar Close (script already uses alert.freq_all on confirmed bars). Expiration: Open-ended / no expire — do not let the alert expire or webhooks stop.',
       'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',
+      '6) After regenerating Pine: delete the old alert and create a new one (stale Message / strategy placeholders break webhooks).',
       'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs ([PIPELINE] DEBUG STATE / ALERT NOT FIRED / DRAWING CREATED / ALERT FIRING) for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, bar unconfirmed, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
       'Entry/SL/TP drawings arm with the same confirmed fireLong/fireShort event as alert(). DRAWING CREATED always precedes ALERT FIRING in Pine Logs. TradingView ignores alert() on historical bars.',
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
@@ -344,8 +447,11 @@ module.exports = {
   generateForUser,
   escapePineString,
   buildScriptId,
+  buildScriptGenerationId,
   sampleWebhookPayload,
   resolveStrategyKey,
   resolveTradingViewUsername,
-  buildSweepVariables
+  buildSweepVariables,
+  PINE_CLIENT_VERSION,
+  CURRENT_PINE_CAPABILITIES
 };

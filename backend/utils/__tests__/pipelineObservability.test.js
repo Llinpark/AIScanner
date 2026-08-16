@@ -146,6 +146,35 @@ describe('PipelineStatusService ring buffer + extended status', () => {
     assert.ok(status.timeline.length >= 10);
   });
 
+  it('SKIP delivery stages do not set lastFailure or increment deliveryFailures', async () => {
+    logPipeline('WebhookReceived', 'PASS', { symbol: 'EURUSD', signalUuid: 'skip-1' });
+    logPipeline('Auth', 'PASS', { symbol: 'EURUSD', signalUuid: 'skip-1' });
+    logPipeline('MongoSave', 'PASS', { symbol: 'EURUSD', signalUuid: 'skip-1' });
+    logPipeline('DeliveryTelegram', 'PASS', { symbol: 'EURUSD', signalUuid: 'skip-1' });
+    logPipeline('DeliveryMT5', 'SKIP', {
+      symbol: 'EURUSD',
+      signalUuid: 'skip-1',
+      reason: 'SKIP / NOT_LINKED_OR_N_A; manual_mode'
+    });
+
+    const status = await PipelineStatusService.getStatus();
+    assert.ok(status.lastTelegram?.at || status.lastTelegramDelivery?.at);
+    assert.notEqual(status.lastFailureStage, 'DeliveryMT5');
+    assert.equal(status.deliveryFailures || 0, 0);
+    const live = await PipelineStatusService.getLivePipeline(10);
+    const mt5 = (live.events || []).find(e => e.type === 'DeliveryMT5');
+    assert.equal(mt5.status, 'SKIP');
+  });
+
+  it('WebhookParseError remains visible as failure (not SKIP)', async () => {
+    logPipeline('WebhookParseError', 'FAIL', {
+      reason: "ip=1.2.3.4; type=entity.parse.failed; Expected property name"
+    });
+    const status = await PipelineStatusService.getStatus();
+    assert.equal(status.lastFailureStage, 'WebhookParseError');
+    assert.match(String(status.lastFailureReason || ''), /entity\.parse\.failed|Expected property name/i);
+  });
+
   it('counts auth failures toward webhookFailures', async () => {
     logPipeline('Auth', 'FAIL', { reason: 'invalid_license_token' });
     const status = await PipelineStatusService.getStatus();

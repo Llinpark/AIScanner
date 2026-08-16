@@ -306,6 +306,10 @@ function pickScalpingAdminPatch(patch = {}) {
       const n = Number(patch.stop.bufferAtrRatio);
       out.stop.bufferAtrRatio = Number.isFinite(n) ? Math.max(0, n) : 0;
     }
+    if (patch.stop.maxStopAtrMult !== undefined) {
+      const n = Number(patch.stop.maxStopAtrMult);
+      out.stop.maxStopAtrMult = Number.isFinite(n) ? Math.max(0, n) : 0;
+    }
   }
 
   if (patch.takeProfit && typeof patch.takeProfit === 'object') {
@@ -517,7 +521,8 @@ function toAdminScalpingView(cfg) {
     },
     stop: {
       model: cfg.stop?.model || 'sweep',
-      bufferAtrRatio: cfg.stop?.bufferAtrRatio
+      bufferAtrRatio: cfg.stop?.bufferAtrRatio,
+      maxStopAtrMult: cfg.stop?.maxStopAtrMult
     },
     takeProfit: toAdminTakeProfitView(cfg.takeProfit, {
       profileId: SCALPING_TP_PROFILE.profileId,
@@ -527,7 +532,7 @@ function toAdminScalpingView(cfg) {
       maxTpDistancePips: SCALPING_TP_PROFILE.maxTpDistancePips,
       deferredLiquidityCategories: [...SCALPING_TP_PROFILE.deferredLiquidityCategories],
       scoreWeights: SCALPING_TP_SCORE_WEIGHTS,
-      includeMinRr: false
+      includeMinRr: true
     }),
     fvg: {
       minGapToAtrRatio: cfg.fvg?.minGapToAtrRatio

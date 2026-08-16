@@ -13,9 +13,11 @@ describe('frontend Strategy Architecture', () => {
   it('matches Scalping / Day Trading canonical TFs', () => {
     assert.deepEqual([...STRATEGY_ARCHITECTURE.scalping.entryTimeframes], ['1m', '3m', '5m']);
     assert.deepEqual([...STRATEGY_ARCHITECTURE.scalping.htfTimeframes], ['15m']);
+    assert.equal(STRATEGY_ARCHITECTURE.scalping.canonicalSignalTimeframe, '3m');
     assert.ok(STRATEGY_ARCHITECTURE.scalping.entryTimeframes.includes('1m'));
     assert.deepEqual([...STRATEGY_ARCHITECTURE.daytrading.entryTimeframes], ['5m', '15m']);
     assert.deepEqual([...STRATEGY_ARCHITECTURE.daytrading.htfTimeframes], ['1h', '4h']);
+    assert.equal(STRATEGY_ARCHITECTURE.daytrading.canonicalSignalTimeframe, '5m');
   });
 
   it('restore packs stay aligned with architecture', () => {
@@ -40,8 +42,12 @@ describe('frontend Strategy Architecture', () => {
   it('exposes chart hints and future slots', () => {
     assert.match(getStrategyArchitecture('scalping').chartHint, /1m, 3m, or 5m/);
     assert.match(getStrategyArchitecture('scalping').chartHint, /Day Trading/);
+    assert.match(getStrategyArchitecture('scalping').chartHint, /canonical 3m/i);
+    assert.match(getStrategyArchitecture('scalping').chartHint, /event-safe bridge/i);
     assert.match(getStrategyArchitecture('daytrading').chartHint, /1H or 4H/);
     assert.match(getStrategyArchitecture('daytrading').chartHint, /15m/);
+    assert.match(getStrategyArchitecture('daytrading').chartHint, /canonical 5m/i);
+    assert.match(getStrategyArchitecture('daytrading').chartHint, /event-safe bridge/i);
     assert.match(formatEntryHtfLine('scalping'), /Entry Timeframe/);
     assert.ok(FUTURE_STRATEGY_KEYS.includes('swing'));
   });

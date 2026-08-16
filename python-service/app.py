@@ -103,12 +103,10 @@ class SignalResponse(BaseModel):
 
 @app.get('/health')
 def health_check():
-    status = market_data_service.status()
+    # Minimal public health — no Redis/cache/provider leakage.
     return {
         'status': 'ok',
         'service': 'python-ai-analytics',
-        'market_data': status,
-        'api_key_required': bool(PYTHON_SERVICE_API_KEY),
     }
 
 

@@ -180,14 +180,18 @@ function trackInflight(stage, ok, entry) {
  */
 function record(stage, status, meta = {}) {
   const s = String(stage || '');
-  const ok = String(status || '').toUpperCase() === 'PASS';
+  const statusUpper = String(status || 'FAIL').toUpperCase();
+  const ok = statusUpper === 'PASS';
+  // Expected channel skips (e.g. MT5 not linked while Telegram-only is valid).
+  // Must not pollute lastFailure* / deliveryFailures / intake classification.
+  const skip = statusUpper === 'SKIP' || statusUpper === 'N/A';
   const entry = stamp(meta);
   memory.updatedAt = entry.at;
   memory.currentPipelineStage = s || memory.currentPipelineStage;
 
   pushEvent({
     type: s,
-    status: ok ? 'PASS' : String(status || 'FAIL').toUpperCase(),
+    status: ok ? 'PASS' : skip ? statusUpper : statusUpper || 'FAIL',
     at: entry.at,
     symbol: entry.symbol,
     timeframe: entry.timeframe,
@@ -202,32 +206,32 @@ function record(stage, status, meta = {}) {
   if (/^WebhookReceived$/i.test(s)) {
     memory.lastWebhookReceived = entry;
     if (ok) memory.lastAlertFired = entry;
-    else memory.webhookFailures += 1;
+    else if (!skip) memory.webhookFailures += 1;
   } else if (/^WebhookRateLimited$/i.test(s) || /^WebhookParseError$/i.test(s)) {
     // Pre-route rejects (429 / bad JSON) — never reach [TV WEBHOOK RECEIVED].
     memory.webhookFailures += 1;
   } else if (/^Auth$/i.test(s)) {
     if (ok) memory.lastAuthPassed = entry;
-    else {
+    else if (!skip) {
       memory.authFailures += 1;
       memory.webhookFailures += 1;
     }
   } else if (/^Validation$/i.test(s)) {
     memory.lastValidation = entry;
-    if (!ok) memory.validationFailures += 1;
+    if (!ok && !skip) memory.validationFailures += 1;
   } else if (/^MongoSave$/i.test(s)) {
     if (ok) memory.lastMongoSave = entry;
   } else if (/^Publish$/i.test(s)) {
     if (ok) memory.lastPublished = entry;
   } else if (/^DeliveryTelegram$/i.test(s)) {
     if (ok) memory.lastTelegramDelivery = entry;
-    else memory.deliveryFailures += 1;
+    else if (!skip) memory.deliveryFailures += 1;
   } else if (/^DeliveryMT5$/i.test(s)) {
     if (ok) memory.lastMT5Delivery = entry;
-    else memory.deliveryFailures += 1;
+    else if (!skip) memory.deliveryFailures += 1;
   } else if (/^DeliverySocket$/i.test(s)) {
     if (ok) memory.lastSocketDelivery = entry;
-    else memory.deliveryFailures += 1;
+    else if (!skip) memory.deliveryFailures += 1;
   } else if (/^DeliveryEmail$/i.test(s) && ok) {
     memory.lastEmailDelivery = entry;
   } else if (/^AlertEvaluated$/i.test(s)) {
@@ -236,7 +240,7 @@ function record(stage, status, meta = {}) {
     memory.lastAlertFired = entry;
   }
 
-  if (!ok) {
+  if (!ok && !skip) {
     memory.lastFailureStage = s || 'unknown';
     memory.lastFailureReason = entry.reason || 'failed';
   }
@@ -332,8 +336,16 @@ async function getStatus(extra = {}) {
   });
 
   const pipelineHealthy = isPipelineHealthy(memory);
+  let intakeState = 'NO_WEBHOOK_RECEIVED';
+  try {
+    const { resolveIntakeState } = require('../utils/webhookPipelineDiag');
+    intakeState = resolveIntakeState(memory);
+  } catch {
+    intakeState = memory.lastWebhookReceived ? 'PIPELINE_ACTIVE' : 'NO_WEBHOOK_RECEIVED';
+  }
 
   return {
+    intakeState,
     ...memory,
     // Keep arrays out of default JSON if huge — expose summaries instead.
     pipelineLatenciesMs: undefined,

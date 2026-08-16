@@ -77,10 +77,12 @@ const DEFAULT_SCALPING_CONFIG = Object.freeze({
     neverEnterOnDisplacement: true
   },
 
-  // Stop models: sweep | fvg | sweep_or_fvg (more protective)
+  // Stop models: sweep | fvg | sweep_or_fvg (risk-valid closer preference)
+  // maxStopAtrMult caps structural SL distance using entry-TF ATR (independent of TP ATR caps).
   stop: {
     model: process.env.SCALPING_STOP_MODEL || 'sweep',
-    bufferAtrRatio: Number(process.env.SCALPING_SL_BUFFER_ATR || 0.05)
+    bufferAtrRatio: Number(process.env.SCALPING_SL_BUFFER_ATR || 0.05),
+    maxStopAtrMult: Number(process.env.SCALPING_MAX_SL_ATR || 1.5)
   },
 
   // TP — Scalping Strategy Profile (independent of day trading)
@@ -102,6 +104,7 @@ const DEFAULT_SCALPING_CONFIG = Object.freeze({
     minScore: Number(process.env.SCALPING_TP_MIN_SCORE || _scalpTp.minScore),
     scoreProximity: Number(process.env.SCALPING_TP_SCORE_PROXIMITY || _scalpTp.scoreProximity),
     allowRrFallback: process.env.SCALPING_TP_RR_FALLBACK !== 'false',
+    minRr: Number(process.env.SCALPING_MIN_RR || 0.5),
     deferredLiquidityCategories: [..._scalpTp.deferredLiquidityCategories],
     scoreWeights: {
       internal_liquidity: Number(

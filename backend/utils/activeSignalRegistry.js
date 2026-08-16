@@ -8,7 +8,8 @@ const { getRedisClient } = require('./redisClient');
  *   2) Mongo Signal open docs (hydrate on miss)
  *   3) In-process Map (tests / Redis unavailable)
  *
- * Confirmed trades are never replaced by a later scan; only terminal closes free the slot.
+ * One open trade per symbol:timeframe. A new confirmed entry may REPLACE the active
+ * trade (cleared here after old entry is marked cancelled). Terminal closes also free the slot.
  */
 
 const memoryStore = new Map();
