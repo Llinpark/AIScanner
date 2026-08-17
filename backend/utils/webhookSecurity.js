@@ -95,6 +95,8 @@ function verifyRequestSignature(rawBody, headerValue) {
 }
 
 function parseWebhookBody(req) {
+  const { diagnoseTradingViewWebhookBody } = require('./webhookPipelineDiag');
+
   if (typeof req.body === 'string') {
     const raw = String(req.body || '').replace(/^\uFEFF/, '').trim();
     // Empty body must NOT silently become {} — that collapses to opaque unauthorized.
@@ -122,10 +124,14 @@ function parseWebhookBody(req) {
           /* fall through */
         }
       }
+      const diagnosed = diagnoseTradingViewWebhookBody(raw);
       return {
         __parseError: true,
         __rawPreview: raw.slice(0, 80),
-        __parseReason: 'invalid_json'
+        __parseReason: diagnosed.reason,
+        __parseKind: diagnosed.kind,
+        __parseHint: diagnosed.hint,
+        __placeholder: diagnosed.placeholder || null
       };
     }
   }
@@ -195,10 +201,18 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
   if (body && body.__parseError) {
     return {
       ok: false,
-      reason: body.__parseReason === 'empty_body' ? 'empty_body' : 'invalid_json',
+      reason:
+        body.__parseReason === 'empty_body'
+          ? 'empty_body'
+          : body.__parseReason === 'unexpanded_tv_placeholder'
+            ? 'unexpanded_tv_placeholder'
+            : 'invalid_json',
       body: {},
       parseError: true,
-      rawPreview: body.__rawPreview || null
+      rawPreview: body.__rawPreview || null,
+      parseKind: body.__parseKind || null,
+      parseHint: body.__parseHint || null,
+      placeholder: body.__placeholder || null
     };
   }
   const rawBody = req.rawBody || Buffer.from(JSON.stringify(body), 'utf8');

@@ -483,11 +483,11 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                 <h3>Connect TradingView</h3>
                 <p>
                   Link your TradingView username, copy your personal script, add the indicator to a chart, then create
-                  ONE alert (Condition: Any alert() function call). Paste the dashboard Webhook URL. Message: leave
-                  BLANK (strongly recommended). If TradingView requires a placeholder, use ONLY{' '}
-                  {'{{alert_message}}'} — never {'{{strategy.order.alert_message}}'} (strategy scripts only; breaks
-                  this indicator). After regenerating Pine, delete the old alert and create a new one. Kaching
-                  publishes those trades here — charts stay display-only.
+                  ONE alert. Condition: Kaching indicator → Any alert() function call. Paste the dashboard Webhook URL.
+                  Message: exactly {'{{alert_message}}'} so TradingView substitutes the Pine alert() JSON — never{' '}
+                  {'{{strategy.order.alert_message}}'} (strategy scripts only; arrives as a literal {'{{…}}'} and fails
+                  JSON parse). After regenerating Pine, delete the old alert and create a new one. Kaching publishes
+                  those trades here — charts stay display-only.
                 </p>
               </header>
 
@@ -666,8 +666,8 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
                           'Open TradingView → Pine Editor → paste your personal script → Add to chart',
                           'Confirm username is prefilled under KachingFx License — leave it to unlock',
                           'If an old locked copy is still on the chart, remove it and re-add the new script',
-                          'Create ONE alert. Condition: Any alert() function call. Enable Webhook URL and paste your Kaching webhook URL',
-                          'Message: leave BLANK (or ONLY {{alert_message}}). Never {{strategy.order.alert_message}}',
+                          'Create ONE alert. Condition: Kaching indicator → Any alert() function call. Enable Webhook URL and paste your Kaching webhook URL',
+                          'Message: exactly {{alert_message}} (expands to Pine alert() JSON). Never {{strategy.order.alert_message}}',
                           'After regenerating Pine: delete the old alert and create a new one',
                           'Optional: enable TradingView mobile notifications'
                         ]

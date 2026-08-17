@@ -426,8 +426,8 @@ function generateForUser(user, options = {}) {
       'Overlays stay until TP3, SL, candle expiry, or cancel — they do not disappear if a later setup fails. Lines extend to the live candle every bar while the trade is active.',
       'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry).',
       // ONE alert only — webhook URL from PUBLIC_BACKEND_URL / WEBHOOK_TRADINGVIEW_URL
-      `3) Create ONE alert on this chart for this script. Condition: Any alert() function call. Enable Webhook URL and paste exactly: ${webhookUrl}`,
-      '4) Message: Leave BLANK. If TradingView requires a placeholder, use ONLY {{alert_message}}. Never {{strategy.order.alert_message}} — that strategy() order placeholder will NOT expand on this indicator() and breaks webhooks.',
+      `3) Create ONE alert on this chart for this script. Condition: Kaching indicator → Any alert() function call. Enable Webhook URL and paste exactly: ${webhookUrl}`,
+      '4) Message: type exactly {{alert_message}} so TradingView substitutes the Pine alert() JSON. Never {{strategy.order.alert_message}} — that strategy() placeholder arrives as a literal {{…}} string and fails JSON parse.',
       '5) Never type custom JSON into the Message field. Never wrap, edit, or replace the payload from alert().',
       'Alert frequency: Once Per Bar Close (script already uses alert.freq_all on confirmed bars). Expiration: Open-ended / no expire — do not let the alert expire or webhooks stop.',
       'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',

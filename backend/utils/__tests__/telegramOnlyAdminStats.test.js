@@ -73,6 +73,18 @@ describe('WebhookParseError classification remains strict', () => {
     );
   });
 
+  it('unexpanded_tv_placeholder stays WEBHOOK_PARSE_FAILED', () => {
+    const { resolveIntakeState, PIPELINE_INTAKE_STATE } = require('../webhookPipelineDiag');
+    assert.equal(
+      resolveIntakeState({
+        lastFailureStage: 'WebhookParseError',
+        lastFailureReason: 'ip=1.2.3.4; type=entity.parse.failed; unexpanded_tv_placeholder; Expected property name',
+        lastWebhookReceived: { at: new Date().toISOString() }
+      }),
+      PIPELINE_INTAKE_STATE.WEBHOOK_PARSE_FAILED
+    );
+  });
+
   it('Telegram success after MT5 SKIP is TELEGRAM_SUCCESS (not delivery failed)', () => {
     const { resolveIntakeState, PIPELINE_INTAKE_STATE } = require('../webhookPipelineDiag');
     assert.equal(

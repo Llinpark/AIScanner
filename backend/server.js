@@ -96,7 +96,8 @@ const {
   redactRawPreview,
   safeHeaders,
   logTvStage,
-  ensureRequestId
+  ensureRequestId,
+  diagnoseTradingViewWebhookBody
 } = require('./utils/webhookPipelineDiag');
 const MarketScannerService = require('./services/MarketScannerService');
 const { initMarketDataHub, getMarketDataHub } = require('./services/MarketDataHubService');
@@ -222,20 +223,31 @@ async function assertTradingViewWebhook(req, res) {
     const body = auth.body || probeBody || {};
     const licenseAbsent = !(body.licenseToken || body.license_token);
     const authFailReason =
-      reason === 'invalid_json' || reason === 'empty_body'
+      reason === 'invalid_json' ||
+      reason === 'empty_body' ||
+      reason === 'unexpanded_tv_placeholder'
         ? reason
         : licenseAbsent && reason === 'unauthorized'
           ? 'licenseToken_absent'
           : reason;
     // Parse failures are distinct from auth credential failures.
-    if (auth.parseError || reason === 'invalid_json' || reason === 'empty_body') {
+    if (
+      auth.parseError ||
+      reason === 'invalid_json' ||
+      reason === 'empty_body' ||
+      reason === 'unexpanded_tv_placeholder'
+    ) {
       logTvStage('TV WEBHOOK PARSE FAIL', {
         requestId,
         reason: authFailReason,
+        kind: auth.parseKind || null,
         symbol: bodyMeta.symbol,
         signalUuid: bodyMeta.signalUuid,
         rawPreview: redactRawPreview(auth.rawPreview || '')
       });
+      if (auth.parseHint) {
+        console.warn(`[TV WEBHOOK CONFIG HINT] requestId=${requestId} ${auth.parseHint}`);
+      }
       logPipeline('WebhookParseError', 'FAIL', {
         ...bodyMeta,
         reason: `${authFailReason}; requestId=${requestId}`
@@ -428,11 +440,19 @@ function logTradingViewWebhookIntakeDiag(req, { stage = 'pre_auth' } = {}) {
   if (payloadBytes <= 2) {
     console.warn(`[TV WEBHOOK RECEIVED] requestId=${requestId} Possible Empty TradingView Message`);
   }
+  if (parseNote !== 'ok' || String(raw || '').replace(/^\uFEFF/, '').trim().startsWith('{{')) {
+    const intakeDiagnosis = diagnoseTradingViewWebhookBody(raw);
+    console.warn(
+      `[TV WEBHOOK CONFIG HINT] requestId=${requestId} reason=${intakeDiagnosis.reason} ` +
+        `kind=${intakeDiagnosis.kind} hint=${intakeDiagnosis.hint}`
+    );
+  }
   // Safe metadata only — never dump raw secrets or full webhook payloads.
   console.log(
     `[TV WEBHOOK INTAKE DIAG] requestId=${requestId} stage=${stage} ` +
       `headers=${JSON.stringify(safeHeaders(req.headers || {}))} ` +
       `rawPreview=${redactRawPreview(raw)} ` +
+      `parseNote=${parseNote} ` +
       `parsedSafe=${JSON.stringify(
         redactObject({
           symbol: parsedBody?.symbol || parsedBody?.ticker,
@@ -516,11 +536,13 @@ function logTradingViewWebhookSelfCheck(body) {
 
   if (
     /\{\{\s*strategy\.order\.alert_message\s*\}\}/i.test(rawHint) ||
-    isPlaceholderLiteral(rawHint.trim())
+    isPlaceholderLiteral(rawHint.trim()) ||
+    /^\{\{/.test(rawHint.trim())
   ) {
     console.warn(
-      '[WEBHOOK VERIFY] body looks like an unexpanded TradingView strategy placeholder — ' +
-        'Kaching Pine is indicator(); use blank Message or {{alert_message}}, never {{strategy.order.alert_message}}'
+      '[WEBHOOK VERIFY] body looks like an unexpanded TradingView placeholder — ' +
+        'Kaching Pine is indicator(); Condition: Any alert() function call; Message: exactly {{alert_message}} ' +
+        '(never {{strategy.order.alert_message}})'
     );
   } else if (!rawHint || rawHint === '{}' || rawHint === 'null') {
     console.warn('[WEBHOOK VERIFY] body is empty/{} — TradingView likely did not send alert(msg) JSON');
@@ -2574,24 +2596,37 @@ app.use((err, req, res, next) => {
       (err.status === 400 || err.statusCode === 400 || err.type === 'entity.parse.failed'));
 
   if (isTvWebhook && isJsonParseError) {
-    // TEMPORARY Task 2 — dump raw intake on parse failures (never reaches route/auth).
+    // Dump raw intake on parse failures (never reaches route/auth).
     logTradingViewWebhookIntakeDiag(req, { stage: 'parse_error' });
     const ip = clientIp(req);
+    const raw =
+      Buffer.isBuffer(req.rawBody)
+        ? req.rawBody.toString('utf8')
+        : typeof req.body === 'string'
+          ? req.body
+          : '';
+    const diagnosed = diagnoseTradingViewWebhookBody(raw);
     const detail = err?.message || 'entity.parse.failed';
     console.warn(
       `[TV WEBHOOK PARSE ERROR] path=/api/webhook/tradingview ip=${ip} ` +
-        `type=${err?.type || 'SyntaxError'} detail=${detail}`
+        `type=${err?.type || 'SyntaxError'} detail=${detail} ` +
+        `reason=${diagnosed.reason} kind=${diagnosed.kind} ` +
+        `rawPreview=${redactRawPreview(raw)}`
     );
-    console.warn(`[WEBHOOK FAIL:PARSE] WebhookParseError detail=${detail}`);
+    console.warn(`[TV WEBHOOK CONFIG HINT] ${diagnosed.hint}`);
+    console.warn(
+      `[WEBHOOK FAIL:PARSE] WebhookParseError detail=${detail} reason=${diagnosed.reason}`
+    );
     logPipeline('WebhookParseError', 'FAIL', {
-      reason: `ip=${ip}; type=${err?.type || 'SyntaxError'}; ${detail}`
+      reason: `ip=${ip}; type=${err?.type || 'SyntaxError'}; ${diagnosed.reason}; ${detail}`
     });
     if (res.headersSent) {
       return next(err);
     }
     return res.status(400).json({
       message: 'Invalid JSON body for TradingView webhook',
-      reason: 'entity.parse.failed'
+      reason: diagnosed.reason,
+      detail: 'entity.parse.failed'
     });
   }
 

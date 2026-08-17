@@ -140,7 +140,11 @@ export default function AdminPipeline() {
       )}
       {intakeState === 'WEBHOOK_PARSE_FAILED' && (
         <p className="admin-table-meta" style={{ marginBottom: 12 }}>
-          A TradingView webhook arrived but the body was empty or not valid JSON.
+          A TradingView webhook arrived but the body was empty, not valid JSON, or a literal{' '}
+          <code>{'{{…}}'}</code> placeholder. Fix the alert: Condition → Kaching indicator → Any{' '}
+          <code>alert()</code> function call; Message → exactly <code>{'{{alert_message}}'}</code>{' '}
+          (never <code>{'{{strategy.order.alert_message}}'}</code>). Check Fly logs for{' '}
+          <code>[TV WEBHOOK CONFIG HINT]</code>.
         </p>
       )}
       {intakeState === 'WEBHOOK_SCHEMA_FAILED' && (

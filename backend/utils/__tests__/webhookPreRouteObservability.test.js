@@ -123,4 +123,20 @@ describe('TV webhook JSON parse error middleware contract (unit shape)', () => {
         (err.status === 400 || err.statusCode === 400 || err.type === 'entity.parse.failed'));
     assert.equal(isJsonParseError, true);
   });
+
+  it('diagnoses literal {{alert_message}} and strategy placeholders without accepting them', () => {
+    const { diagnoseTradingViewWebhookBody } = require('../webhookPipelineDiag');
+    const alertMsg = diagnoseTradingViewWebhookBody('{{alert_message}}');
+    assert.equal(alertMsg.reason, 'unexpanded_tv_placeholder');
+    assert.equal(alertMsg.kind, 'alert_message_placeholder');
+    assert.match(alertMsg.hint, /Any alert\(\) function call/);
+
+    const strategy = diagnoseTradingViewWebhookBody('{{strategy.order.alert_message}}');
+    assert.equal(strategy.reason, 'unexpanded_tv_placeholder');
+    assert.equal(strategy.kind, 'strategy_placeholder');
+    assert.match(strategy.hint, /strategy\(\) order fills/);
+
+    const empty = diagnoseTradingViewWebhookBody('  ');
+    assert.equal(empty.reason, 'empty_body');
+  });
 });

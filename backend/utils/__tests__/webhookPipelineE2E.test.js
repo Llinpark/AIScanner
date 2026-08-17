@@ -145,6 +145,54 @@ describe('webhook parse hardening (A/B)', () => {
     // Must not collapse to unauthorized / empty object auth path.
     assert.notEqual(auth.reason, 'unauthorized');
   });
+
+  it('C. literal {{alert_message}} → unexpanded_tv_placeholder (clear diagnosis)', async () => {
+    const raw = '{{alert_message}}';
+    const body = parseWebhookBody({ body: raw });
+    assert.equal(body.__parseError, true);
+    assert.equal(body.__parseReason, 'unexpanded_tv_placeholder');
+    assert.equal(body.__parseKind, 'alert_message_placeholder');
+    assert.match(String(body.__parseHint || ''), /Any alert\(\) function call/);
+    const auth = await verifyTradingViewWebhook({ body: raw, headers: {} }, async () => null);
+    assert.equal(auth.ok, false);
+    assert.equal(auth.parseError, true);
+    assert.equal(auth.reason, 'unexpanded_tv_placeholder');
+    const gate = classifyWebhookGate(auth);
+    assert.equal(gate.httpStatus, 400);
+    assert.equal(gate.intakeState, PIPELINE_INTAKE_STATE.WEBHOOK_PARSE_FAILED);
+    assert.equal(gate.reason, 'unexpanded_tv_placeholder');
+  });
+
+  it('D. literal {{strategy.order.alert_message}} → unexpanded_tv_placeholder', async () => {
+    const raw = '{{strategy.order.alert_message}}';
+    const body = parseWebhookBody({ body: raw });
+    assert.equal(body.__parseError, true);
+    assert.equal(body.__parseReason, 'unexpanded_tv_placeholder');
+    assert.equal(body.__parseKind, 'strategy_placeholder');
+    assert.match(String(body.__parseHint || ''), /strategy\(\) order fills/);
+    const auth = await verifyTradingViewWebhook({ body: raw, headers: {} }, async () => null);
+    assert.equal(auth.ok, false);
+    assert.equal(auth.reason, 'unexpanded_tv_placeholder');
+    const gate = classifyWebhookGate(auth);
+    assert.equal(gate.intakeState, PIPELINE_INTAKE_STATE.WEBHOOK_PARSE_FAILED);
+  });
+
+  it('E. valid Pine JSON body is not a parse error', async () => {
+    const raw = JSON.stringify({
+      symbol: 'XAUUSD',
+      alertType: 'entry',
+      direction: 'long',
+      entry: 2400,
+      stop_loss: 2390,
+      take_profit_1: 2410,
+      signalUuid: 'pine-valid-1',
+      licenseToken: 'kls_v1.not-a-real-token.signature'
+    });
+    const body = parseWebhookBody({ body: raw });
+    assert.equal(body.__parseError, undefined);
+    assert.equal(body.symbol, 'XAUUSD');
+    assert.equal(body.signalUuid, 'pine-valid-1');
+  });
 });
 
 describe('webhook auth gate (C/D/E)', () => {

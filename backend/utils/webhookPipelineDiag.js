@@ -71,6 +71,54 @@ function redactRawPreview(raw, maxLen = 160) {
   return `${scrubbed.slice(0, maxLen)}…[truncated]`;
 }
 
+/**
+ * Classify TradingView webhook raw bodies that fail JSON parse.
+ * Diagnostics only — never grants auth or invents a successful payload.
+ *
+ * Common TV misconfig: Alert Message left as a literal {{…}} placeholder while
+ * Content-Type is application/json → express.json fails at position 1.
+ */
+function diagnoseTradingViewWebhookBody(raw) {
+  const text = String(raw ?? '');
+  const trimmed = text.replace(/^\uFEFF/, '').trim();
+  if (!trimmed) {
+    return {
+      reason: 'empty_body',
+      kind: 'empty',
+      hint:
+        'TradingView sent an empty webhook body. Alert Message must deliver Pine alert() JSON — use Message={{alert_message}} with Condition: Any alert() function call (never leave a broken/empty Message).'
+    };
+  }
+
+  const placeholderMatch = trimmed.match(/^\{\{\s*([^}]+?)\s*\}\}\s*$/);
+  if (placeholderMatch || trimmed.startsWith('{{')) {
+    const token = placeholderMatch ? placeholderMatch[1].trim() : trimmed.slice(0, 80);
+    const isStrategy = /strategy\.order\.alert_message/i.test(token);
+    const isAlertMessage = /alert_message/i.test(token) && !isStrategy;
+    return {
+      reason: 'unexpanded_tv_placeholder',
+      kind: isStrategy
+        ? 'strategy_placeholder'
+        : isAlertMessage
+          ? 'alert_message_placeholder'
+          : 'tv_placeholder',
+      placeholder: String(token).slice(0, 120),
+      hint: isStrategy
+        ? 'TradingView sent literal {{strategy.order.alert_message}} — that only expands for strategy() order fills. Kaching is an indicator: Condition → Any alert() function call, Message → {{alert_message}} only.'
+        : isAlertMessage
+          ? 'TradingView sent literal {{alert_message}} (unexpanded). Fix Alert Condition to: Kaching indicator → Any alert() function call, and keep Message exactly {{alert_message}} so Pine alert(json) is substituted.'
+          : `TradingView sent an unexpanded placeholder starting with {{ (${String(token).slice(0, 60)}). Webhook body must be the Pine alert() JSON, not a literal {{…}} string.`
+    };
+  }
+
+  return {
+    reason: 'invalid_json',
+    kind: 'malformed',
+    hint:
+      'Webhook body is not valid JSON. Do not type custom JSON in Alert Message — Pine alert() already builds the payload. Message should be exactly {{alert_message}}.'
+  };
+}
+
 function safeHeaders(headers = {}) {
   const out = {};
   for (const [k, v] of Object.entries(headers || {})) {
@@ -112,7 +160,7 @@ function resolveIntakeState(status = {}) {
   // Failure stages always win over "no webhook" — a failed attempt is not silence.
   if (
     /WebhookParseError/i.test(lastFail) ||
-    /invalid_json|empty_body/i.test(lastFailReason)
+    /invalid_json|empty_body|unexpanded_tv_placeholder/i.test(lastFailReason)
   ) {
     return PIPELINE_INTAKE_STATE.WEBHOOK_PARSE_FAILED;
   }
@@ -149,7 +197,12 @@ function classifyWebhookGate(authResult = {}) {
     };
   }
   const reason = authResult.reason || 'unauthorized';
-  if (authResult.parseError || reason === 'invalid_json' || reason === 'empty_body') {
+  if (
+    authResult.parseError ||
+    reason === 'invalid_json' ||
+    reason === 'empty_body' ||
+    reason === 'unexpanded_tv_placeholder'
+  ) {
     return {
       httpStatus: 400,
       intakeState: PIPELINE_INTAKE_STATE.WEBHOOK_PARSE_FAILED,
@@ -172,6 +225,7 @@ module.exports = {
   redactObject,
   redactRawPreview,
   redactValue,
+  diagnoseTradingViewWebhookBody,
   safeHeaders,
   logTvStage,
   resolveIntakeState,
