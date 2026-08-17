@@ -111,7 +111,7 @@ export default function Pricing({
                 <>
                   {' '}
                   Status: <strong>{subscriptionStatusLabel(subscription)}</strong>. Pay via M-Pesa
-                  Till to unlock live alerts.
+                  Till or Binance ID to unlock live alerts.
                 </>
               )}
             </>
@@ -215,7 +215,7 @@ export default function Pricing({
 
           <section className="pricing-payment-info" aria-label="Direct payment details">
             <p className="pricing-payment-kicker">Direct payment</p>
-            <p className="pricing-payment-intro">Pay via M-Pesa Till</p>
+            <p className="pricing-payment-intro">Pay via M-Pesa Till or Binance ID</p>
             <ul className="pricing-payment-details">
               <li>
                 <span className="pricing-payment-label">M-Pesa Till</span>

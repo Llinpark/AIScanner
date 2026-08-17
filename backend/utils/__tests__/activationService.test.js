@@ -21,6 +21,7 @@ describe('ActivationService helpers', () => {
 
   it('maps payment methods to paymentSource constants', () => {
     assert.equal(mapPaymentSource('manual_mpesa'), 'MANUAL_MPESA');
+    assert.equal(mapPaymentSource('manual_binance'), 'MANUAL_BINANCE');
     assert.equal(mapPaymentSource('paypal'), 'PAYPAL');
     assert.equal(mapPaymentSource('daraja'), 'DARAJA');
     assert.equal(mapPaymentSource('stripe'), 'STRIPE');

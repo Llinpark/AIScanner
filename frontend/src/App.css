@@ -3140,6 +3140,34 @@ h1, h2, h3, h4, h5, h6,
   margin-bottom: 22px;
 }
 
+.manual-pay-method-toggle {
+  display: inline-flex;
+  gap: 6px;
+  margin: 0 0 18px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-color);
+}
+
+.manual-pay-method-btn {
+  appearance: none;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 16px;
+  background: transparent;
+  color: var(--heading-color);
+  font-family: var(--nav-font);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manual-pay-method-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
 .mpesa-kicker,
 .auto-trading-kicker {
   margin: 0 0 6px;

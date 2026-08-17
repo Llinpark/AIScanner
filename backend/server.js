@@ -1217,7 +1217,7 @@ app.get('/api/subscription/me', requireAuth, (req, res) => {
   });
 });
 
-/** Manual M-Pesa Till — user submits "I Have Paid" (pending verification, no access yet). */
+/** Manual M-Pesa Till / Binance ID — user submits "I Have Paid" (pending verification, no access yet). */
 app.post('/api/payments/manual/submit', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
@@ -1225,19 +1225,27 @@ app.post('/api/payments/manual/submit', requireAuth, async (req, res) => {
       userId: req.userId,
       tier: body.tier || body.planId,
       billingCycle: body.billingCycle,
-      mpesaCode: body.mpesaCode || body.paymentReference,
+      method: body.method || body.provider || body.paymentMethod,
+      mpesaCode: body.mpesaCode,
+      binanceTxId: body.binanceTxId || body.binanceOrderId,
+      paymentReference: body.paymentReference,
       phoneNumber: body.phoneNumber || body.phone,
       amount: body.amount,
       notes: body.notes,
       screenshotUrl: body.screenshotUrl || body.screenshot
     });
+    const method = result.payment.paymentMethod || result.payment.provider;
+    const isBinance = method === 'manual_binance';
     res.status(201).json({
       message: 'Payment submitted. Awaiting verification.',
       status: 'pending',
       payment: {
         id: String(result.payment._id),
         status: result.payment.status,
-        mpesaCode: result.payment.providerReference,
+        paymentMethod: method,
+        paymentReference: result.payment.providerReference,
+        mpesaCode: isBinance ? null : result.payment.providerReference,
+        binanceTxId: isBinance ? result.payment.providerReference : null,
         amount: result.payment.amount,
         currency: result.payment.currency,
         tier: result.payment.tier,
@@ -1262,25 +1270,37 @@ app.get('/api/payments/manual/mine', requireAuth, async (req, res) => {
     const PaymentTransaction = require('./models/PaymentTransaction');
     const rows = await PaymentTransaction.find({
       userId: req.userId,
-      $or: [{ provider: 'manual_mpesa' }, { paymentMethod: 'manual_mpesa' }]
+      $or: [
+        { provider: 'manual_mpesa' },
+        { paymentMethod: 'manual_mpesa' },
+        { provider: 'manual_binance' },
+        { paymentMethod: 'manual_binance' }
+      ]
     })
       .sort({ createdAt: -1 })
       .limit(20)
       .lean();
     res.json({
-      payments: rows.map(row => ({
-        id: String(row._id),
-        status: row.status,
-        tier: row.tier,
-        amount: row.amount,
-        currency: row.currency,
-        mpesaCode: row.providerReference,
-        phoneNumber: row.phoneNumber,
-        notes: row.notes || '',
-        createdAt: row.createdAt,
-        activationDate: row.activationDate || null,
-        completedAt: row.completedAt || null
-      }))
+      payments: rows.map(row => {
+        const method = row.paymentMethod || row.provider;
+        const isBinance = method === 'manual_binance';
+        return {
+          id: String(row._id),
+          status: row.status,
+          tier: row.tier,
+          amount: row.amount,
+          currency: row.currency,
+          paymentMethod: method,
+          paymentReference: row.providerReference,
+          mpesaCode: isBinance ? null : row.providerReference,
+          binanceTxId: isBinance ? row.providerReference : null,
+          phoneNumber: row.phoneNumber,
+          notes: row.notes || '',
+          createdAt: row.createdAt,
+          activationDate: row.activationDate || null,
+          completedAt: row.completedAt || null
+        };
+      })
     });
   } catch (error) {
     console.error('Manual payment list error:', error);

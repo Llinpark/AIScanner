@@ -115,6 +115,7 @@ const UserConfigSchema = new mongoose.Schema({
         'paystack',
         'beta',
         'manual_mpesa',
+        'manual_binance',
         'daraja',
         'stripe',
         'bank',
@@ -125,7 +126,18 @@ const UserConfigSchema = new mongoose.Schema({
     /** Canonical source for how access was granted (uppercase constants). */
     paymentSource: {
       type: String,
-      enum: ['MANUAL_MPESA', 'DARAJA', 'STRIPE', 'PAYPAL', 'BANK', 'ADMIN', 'BINANCE', 'MOCK', 'BETA'],
+      enum: [
+        'MANUAL_MPESA',
+        'MANUAL_BINANCE',
+        'DARAJA',
+        'STRIPE',
+        'PAYPAL',
+        'BANK',
+        'ADMIN',
+        'BINANCE',
+        'MOCK',
+        'BETA'
+      ],
       default: undefined
     },
     providerCustomerId: { type: String },

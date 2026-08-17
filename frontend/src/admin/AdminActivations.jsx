@@ -24,9 +24,31 @@ function defaultExpiry(billingCycle) {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
+function isBinancePayment(payment) {
+  return (payment?.paymentMethod || '') === 'manual_binance';
+}
+
+function paymentMethodLabel(payment) {
+  return isBinancePayment(payment) ? 'Binance ID' : 'M-Pesa Till';
+}
+
+function paymentRefLabel(payment) {
+  return isBinancePayment(payment) ? 'Binance Tx ID' : 'M-Pesa Code';
+}
+
+function paymentRefValue(payment) {
+  return (
+    payment?.paymentReference ||
+    payment?.binanceTxId ||
+    payment?.mpesaCode ||
+    ''
+  );
+}
+
 function ApproveDialog({ payment, onClose, onApproved }) {
+  const binance = isBinancePayment(payment);
   const [tier, setTier] = useState(payment.tier || 'basic');
-  const [mpesaCode, setMpesaCode] = useState(payment.mpesaCode || '');
+  const [paymentRef, setPaymentRef] = useState(paymentRefValue(payment));
   const [phone, setPhone] = useState(payment.phone || '');
   const [amount, setAmount] = useState(String(payment.amount || ''));
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 10));
@@ -40,16 +62,22 @@ function ApproveDialog({ payment, onClose, onApproved }) {
     setSaving(true);
     setError('');
     try {
-      const response = await adminApi.approveManualActivation(payment.id, {
+      const payload = {
         tier,
-        mpesaCode,
         phoneNumber: phone,
         amount: Number(amount),
         startDate: new Date(startDate).toISOString(),
         expiryDate: new Date(`${expiryDate}T23:59:59`).toISOString(),
         notes,
-        billingCycle: payment.billingCycle
-      });
+        billingCycle: payment.billingCycle,
+        paymentReference: paymentRef
+      };
+      if (binance) {
+        payload.binanceTxId = paymentRef;
+      } else {
+        payload.mpesaCode = paymentRef;
+      }
+      const response = await adminApi.approveManualActivation(payment.id, payload);
       onApproved(response.data);
     } catch (err) {
       setError(err.response?.data?.message || 'Unable to approve payment.');
@@ -87,18 +115,22 @@ function ApproveDialog({ payment, onClose, onApproved }) {
         </label>
         <label className="admin-field">
           <span>Payment Method</span>
-          <input className="admin-input" value="manual_mpesa" disabled />
+          <input className="admin-input" value={payment.paymentMethod || 'manual_mpesa'} disabled />
         </label>
         <label className="admin-field">
-          <span>M-Pesa Code</span>
-          <input className="admin-input" value={mpesaCode} onChange={e => setMpesaCode(e.target.value.toUpperCase())} />
+          <span>{paymentRefLabel(payment)}</span>
+          <input
+            className="admin-input"
+            value={paymentRef}
+            onChange={e => setPaymentRef(e.target.value.toUpperCase())}
+          />
         </label>
         <label className="admin-field">
-          <span>Phone</span>
+          <span>Phone{binance ? ' (optional)' : ''}</span>
           <input className="admin-input" value={phone} onChange={e => setPhone(e.target.value)} />
         </label>
         <label className="admin-field">
-          <span>Amount</span>
+          <span>Amount ({payment.currency || (binance ? 'USDT' : 'KES')})</span>
           <input className="admin-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} />
         </label>
         <label className="admin-field">
@@ -146,12 +178,16 @@ function ViewDialog({ payment, onClose }) {
           <dd>{payment.tier}</dd>
         </div>
         <div className="admin-meta-item">
+          <dt>Method</dt>
+          <dd>{paymentMethodLabel(payment)}</dd>
+        </div>
+        <div className="admin-meta-item">
           <dt>Phone</dt>
           <dd>{payment.phone || '—'}</dd>
         </div>
         <div className="admin-meta-item">
-          <dt>M-Pesa Code</dt>
-          <dd>{payment.mpesaCode || '—'}</dd>
+          <dt>{paymentRefLabel(payment)}</dt>
+          <dd>{paymentRefValue(payment) || '—'}</dd>
         </div>
         <div className="admin-meta-item">
           <dt>Amount</dt>
@@ -239,7 +275,8 @@ export default function AdminActivations() {
   const rejectPayment = async payment => {
     const notes = window.prompt('Rejection reason / notes (optional):', '') ?? null;
     if (notes === null) return;
-    if (!window.confirm(`Reject payment ${payment.mpesaCode}?`)) return;
+    const ref = paymentRefValue(payment);
+    if (!window.confirm(`Reject payment ${ref || payment.id}?`)) return;
     setBusyId(payment.id);
     try {
       await adminApi.rejectManualActivation(payment.id, { notes });
@@ -304,7 +341,8 @@ export default function AdminActivations() {
           <div>
             <h3>Manual Activations</h3>
             <p className="admin-table-meta">
-              Super Admin — verify M-Pesa Till payments and grant subscription access. {total} record(s)
+              Super Admin — verify M-Pesa Till and Binance ID payments, then grant access. {total}{' '}
+              record(s)
             </p>
           </div>
         </div>
@@ -315,7 +353,7 @@ export default function AdminActivations() {
         <div className="admin-toolbar admin-activations-toolbar">
           <input
             className="admin-input"
-            placeholder="Search name, email, phone, M-Pesa code"
+            placeholder="Search name, email, phone, M-Pesa code, Binance Tx ID"
             value={searchInput}
             onChange={e => setSearchInput(e.target.value)}
             onKeyDown={e => {
@@ -365,8 +403,8 @@ export default function AdminActivations() {
                 <tr>
                   <th>User</th>
                   <th>Plan</th>
-                  <th>Phone</th>
-                  <th>M-Pesa Code</th>
+                  <th>Method</th>
+                  <th>Reference</th>
                   <th>Amount</th>
                   <th>Submitted</th>
                   <th>Status</th>
@@ -386,10 +424,13 @@ export default function AdminActivations() {
                       <td data-label="User">
                         <div>{payment.userName || '—'}</div>
                         <small className="admin-table-meta">{payment.userEmail}</small>
+                        {payment.phone ? (
+                          <small className="admin-table-meta">{payment.phone}</small>
+                        ) : null}
                       </td>
                       <td data-label="Plan">{payment.tier}</td>
-                      <td data-label="Phone">{payment.phone || '—'}</td>
-                      <td data-label="M-Pesa Code">{payment.mpesaCode || '—'}</td>
+                      <td data-label="Method">{paymentMethodLabel(payment)}</td>
+                      <td data-label="Reference">{paymentRefValue(payment) || '—'}</td>
                       <td data-label="Amount">{formatMoney(payment.amount, payment.currency)}</td>
                       <td data-label="Submitted">{formatDate(payment.createdAt)}</td>
                       <td data-label="Status">
@@ -507,7 +548,7 @@ export default function AdminActivations() {
           <div className="admin-drawer-header">
             <div>
               <h3>Edit notes</h3>
-              <p className="admin-table-meta">{notesPayment.mpesaCode}</p>
+              <p className="admin-table-meta">{paymentRefValue(notesPayment)}</p>
             </div>
             <button type="button" className="btn-small admin-btn" onClick={() => setNotesPayment(null)}>
               Close

@@ -23,6 +23,7 @@ const PaymentTransactionSchema = new mongoose.Schema({
       'sasapay',
       'paystack',
       'manual_mpesa',
+      'manual_binance',
       'daraja',
       'stripe',
       'bank',
@@ -33,7 +34,18 @@ const PaymentTransactionSchema = new mongoose.Schema({
   /** Canonical payment method for new flows (mirrors provider when unset). */
   paymentMethod: {
     type: String,
-    enum: ['manual_mpesa', 'daraja', 'stripe', 'paypal', 'bank', 'complimentary', 'binance', 'mock', 'mpesa'],
+    enum: [
+      'manual_mpesa',
+      'manual_binance',
+      'daraja',
+      'stripe',
+      'paypal',
+      'bank',
+      'complimentary',
+      'binance',
+      'mock',
+      'mpesa'
+    ],
     default: undefined
   },
   amount: { type: Number, required: true },
@@ -71,6 +83,18 @@ PaymentTransactionSchema.index(
     name: 'manual_mpesa_code_unique',
     partialFilterExpression: {
       provider: 'manual_mpesa',
+      providerReference: { $type: 'string' }
+    }
+  }
+);
+// Manual Binance transfer / order IDs must be unique.
+PaymentTransactionSchema.index(
+  { providerReference: 1 },
+  {
+    unique: true,
+    name: 'manual_binance_ref_unique',
+    partialFilterExpression: {
+      provider: 'manual_binance',
       providerReference: { $type: 'string' }
     }
   }

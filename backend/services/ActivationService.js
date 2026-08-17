@@ -24,6 +24,7 @@ const SUBSCRIPTION_PERIOD_DAYS = 30;
 
 const PAYMENT_SOURCE_BY_METHOD = {
   manual_mpesa: 'MANUAL_MPESA',
+  manual_binance: 'MANUAL_BINANCE',
   mpesa: 'DARAJA',
   daraja: 'DARAJA',
   stripe: 'STRIPE',
@@ -35,6 +36,11 @@ const PAYMENT_SOURCE_BY_METHOD = {
   admin: 'ADMIN',
   beta: 'BETA'
 };
+
+const MANUAL_PROVIDERS = new Set(['manual_mpesa', 'manual_binance']);
+const BINANCE_ID_DEFAULT = '484947783';
+const MPESA_TILL_DEFAULT = '5337170';
+const BUSINESS_NAME_DEFAULT = 'KachingFx Official';
 
 function isDbReady() {
   return mongoose.connection.readyState === 1;
@@ -52,6 +58,29 @@ function normalizeMpesaCode(code) {
     .trim()
     .toUpperCase()
     .replace(/\s+/g, '');
+}
+
+function normalizeBinanceTxId(code) {
+  return String(code || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+}
+
+function normalizeManualMethod(method) {
+  const key = String(method || 'manual_mpesa')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+  if (key === 'binance' || key === 'manual_binance') return 'manual_binance';
+  if (key === 'mpesa' || key === 'manual_mpesa' || key === 'manual') return 'manual_mpesa';
+  return null;
+}
+
+function isManualPayment(payment) {
+  const provider = String(payment?.provider || '').toLowerCase();
+  const method = String(payment?.paymentMethod || '').toLowerCase();
+  return MANUAL_PROVIDERS.has(provider) || MANUAL_PROVIDERS.has(method);
 }
 
 function mapPaymentSource(paymentMethodOrProvider) {
@@ -289,22 +318,42 @@ async function activateFromCompletedPayment(payment, options = {}) {
 
 /**
  * User submits "I Have Paid" — creates pending Payment only (no access yet).
+ * Supports manual_mpesa (Till) and manual_binance (pay to Binance ID).
  */
 async function submitManualPaymentRequest({
   userId,
   tier,
   billingCycle = 'monthly',
+  method,
+  provider,
   mpesaCode,
+  binanceTxId,
+  paymentReference,
   phoneNumber,
   amount,
   notes = '',
   screenshotUrl = ''
 }) {
-  const code = normalizeMpesaCode(mpesaCode);
-  if (!/^[A-Z0-9]{8,15}$/.test(code)) {
-    throw Object.assign(new Error('Enter a valid M-Pesa transaction code (8–15 characters).'), {
-      status: 400
-    });
+  const manualMethod = normalizeManualMethod(method || provider || 'manual_mpesa');
+  if (!manualMethod) {
+    throw Object.assign(new Error('Unsupported manual payment method.'), { status: 400 });
+  }
+
+  const rawReference = paymentReference || (manualMethod === 'manual_binance' ? binanceTxId : mpesaCode);
+  const code =
+    manualMethod === 'manual_binance' ? normalizeBinanceTxId(rawReference) : normalizeMpesaCode(rawReference);
+
+  if (manualMethod === 'manual_mpesa') {
+    if (!/^[A-Z0-9]{8,15}$/.test(code)) {
+      throw Object.assign(new Error('Enter a valid M-Pesa transaction code (8–15 characters).'), {
+        status: 400
+      });
+    }
+  } else if (!/^[A-Z0-9_-]{6,64}$/.test(code)) {
+    throw Object.assign(
+      new Error('Enter a valid Binance transaction / order ID (6–64 characters).'),
+      { status: 400 }
+    );
   }
 
   const allowedTiers = new Set(['basic', 'professional', 'premium']);
@@ -314,14 +363,24 @@ async function submitManualPaymentRequest({
 
   const cycle = normalizeBillingCycle(billingCycle);
   const pricing = getTierPricing(tier, cycle);
-  const paidAmount = amount != null ? Number(amount) : pricing.price;
+  const isBinance = manualMethod === 'manual_binance';
+  const defaultAmount = isBinance
+    ? Number((pricing.priceCents / 100).toFixed(2))
+    : pricing.price;
+  const paidAmount = amount != null && amount !== '' ? Number(amount) : defaultAmount;
   if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
     throw Object.assign(new Error('Amount must be a positive number.'), { status: 400 });
   }
 
   const phone = String(phoneNumber || '').trim();
-  if (!/^\+?[0-9]{9,15}$/.test(phone)) {
-    throw Object.assign(new Error('Enter a valid phone number (9–15 digits).'), { status: 400 });
+  if (manualMethod === 'manual_mpesa') {
+    if (!/^\+?[0-9]{9,15}$/.test(phone)) {
+      throw Object.assign(new Error('Enter a valid phone number (9–15 digits).'), { status: 400 });
+    }
+  } else if (phone && !/^\+?[0-9]{9,15}$/.test(phone)) {
+    throw Object.assign(new Error('Enter a valid phone number (9–15 digits), or leave it blank.'), {
+      status: 400
+    });
   }
 
   if (screenshotUrl && String(screenshotUrl).length > 400_000) {
@@ -336,10 +395,17 @@ async function submitManualPaymentRequest({
 
   const existing = await PaymentTransaction.findOne({
     providerReference: code,
-    provider: 'manual_mpesa'
+    provider: manualMethod
   }).lean();
   if (existing) {
-    throw Object.assign(new Error('This M-Pesa code has already been submitted.'), { status: 409 });
+    throw Object.assign(
+      new Error(
+        isBinance
+          ? 'This Binance transaction ID has already been submitted.'
+          : 'This M-Pesa code has already been submitted.'
+      ),
+      { status: 409 }
+    );
   }
 
   const user = await UserConfig.findById(userId);
@@ -368,24 +434,41 @@ async function submitManualPaymentRequest({
     const payment = await PaymentTransaction.create({
       userId,
       tier,
-      provider: 'manual_mpesa',
-      paymentMethod: 'manual_mpesa',
+      provider: manualMethod,
+      paymentMethod: manualMethod,
       amount: paidAmount,
-      currency: pricing.currency || 'KES',
+      currency: isBinance ? pricing.currencyBinance || 'USDT' : pricing.currency || 'KES',
       billingCycle: cycle,
       providerReference: code,
-      phoneNumber: phone,
+      phoneNumber: phone || null,
       status: 'pending',
       notes: String(notes || '').trim().slice(0, 2000),
       screenshotUrl: String(screenshotUrl || '').slice(0, 400_000),
-      rawPayload: { source: 'manual_till', tillNumber: '5337170', businessName: 'KachingFx Official' },
+      rawPayload: isBinance
+        ? {
+            source: 'manual_binance_id',
+            binanceId: BINANCE_ID_DEFAULT,
+            businessName: BUSINESS_NAME_DEFAULT
+          }
+        : {
+            source: 'manual_till',
+            tillNumber: MPESA_TILL_DEFAULT,
+            businessName: BUSINESS_NAME_DEFAULT
+          },
       createdAt: new Date(),
       updatedAt: new Date()
     });
     return { payment, user, subscription: serializeSubscription(user.subscription) };
   } catch (error) {
     if (error?.code === 11000) {
-      throw Object.assign(new Error('This M-Pesa code has already been submitted.'), { status: 409 });
+      throw Object.assign(
+        new Error(
+          isBinance
+            ? 'This Binance transaction ID has already been submitted.'
+            : 'This M-Pesa code has already been submitted.'
+        ),
+        { status: 409 }
+      );
     }
     throw error;
   }
@@ -403,8 +486,10 @@ async function approveManualPayment(paymentId, adminUser, options = {}, req = nu
   if (!payment) {
     throw Object.assign(new Error('Payment not found.'), { status: 404 });
   }
-  if (payment.provider !== 'manual_mpesa' && payment.paymentMethod !== 'manual_mpesa') {
-    throw Object.assign(new Error('Only manual M-Pesa payments can be approved here.'), { status: 400 });
+  if (!isManualPayment(payment)) {
+    throw Object.assign(new Error('Only manual M-Pesa or Binance payments can be approved here.'), {
+      status: 400
+    });
   }
   if (payment.status === 'completed' && payment.activationDate) {
     throw Object.assign(new Error('This payment was already activated.'), { status: 409 });
@@ -419,12 +504,17 @@ async function approveManualPayment(paymentId, adminUser, options = {}, req = nu
     amount,
     phoneNumber,
     mpesaCode,
+    binanceTxId,
+    paymentReference,
     startDate,
     expiryDate,
     notes,
     billingCycle,
     io
   } = options;
+
+  const method = normalizeManualMethod(payment.paymentMethod || payment.provider) || 'manual_mpesa';
+  const isBinance = method === 'manual_binance';
 
   if (tier && ['basic', 'professional', 'premium'].includes(tier)) {
     payment.tier = tier;
@@ -435,21 +525,34 @@ async function approveManualPayment(paymentId, adminUser, options = {}, req = nu
   if (phoneNumber) {
     payment.phoneNumber = String(phoneNumber).trim();
   }
-  if (mpesaCode) {
-    const code = normalizeMpesaCode(mpesaCode);
-    if (!/^[A-Z0-9]{8,15}$/.test(code)) {
+
+  const nextReferenceRaw = paymentReference || binanceTxId || mpesaCode;
+  if (nextReferenceRaw) {
+    const code = isBinance
+      ? normalizeBinanceTxId(nextReferenceRaw)
+      : normalizeMpesaCode(nextReferenceRaw);
+    if (isBinance) {
+      if (!/^[A-Z0-9_-]{6,64}$/.test(code)) {
+        throw Object.assign(new Error('Invalid Binance transaction / order ID.'), { status: 400 });
+      }
+    } else if (!/^[A-Z0-9]{8,15}$/.test(code)) {
       throw Object.assign(new Error('Invalid M-Pesa code.'), { status: 400 });
     }
     if (code !== payment.providerReference) {
       const clash = await PaymentTransaction.findOne({
         providerReference: code,
-        provider: 'manual_mpesa',
+        provider: method,
         _id: { $ne: payment._id }
       }).lean();
       if (clash) {
-        throw Object.assign(new Error('Another payment already uses this M-Pesa code.'), {
-          status: 409
-        });
+        throw Object.assign(
+          new Error(
+            isBinance
+              ? 'Another payment already uses this Binance transaction ID.'
+              : 'Another payment already uses this M-Pesa code.'
+          ),
+          { status: 409 }
+        );
       }
       payment.providerReference = code;
     }
@@ -476,7 +579,7 @@ async function approveManualPayment(paymentId, adminUser, options = {}, req = nu
       : payment.billingCycle === 'yearly'
         ? 365
         : SUBSCRIPTION_PERIOD_DAYS,
-    paymentSource: 'MANUAL_MPESA',
+    paymentSource: mapPaymentSource(method),
     notes: null,
     sendEmail: true,
     skipCommission: false
@@ -487,12 +590,15 @@ async function approveManualPayment(paymentId, adminUser, options = {}, req = nu
       action: 'manual_payment.approve',
       targetType: 'payment',
       targetId: String(payment._id),
-      summary: `Approved manual M-Pesa payment for ${result.user.email} (${result.user.subscription.tier})`,
+      summary: `Approved ${method} payment for ${result.user.email} (${result.user.subscription.tier})`,
       metadata: {
         paymentId: String(payment._id),
         userId: String(result.user._id),
         plan: result.user.subscription.tier,
-        mpesaCode: payment.providerReference,
+        paymentMethod: method,
+        paymentReference: payment.providerReference,
+        mpesaCode: isBinance ? null : payment.providerReference,
+        binanceTxId: isBinance ? payment.providerReference : null,
         amount: payment.amount,
         currency: payment.currency,
         startDate: result.user.subscription.startDate,
@@ -751,7 +857,12 @@ async function listManualPayments({
   limit = 25
 } = {}) {
   const filter = {
-    $or: [{ provider: 'manual_mpesa' }, { paymentMethod: 'manual_mpesa' }]
+    $or: [
+      { provider: 'manual_mpesa' },
+      { paymentMethod: 'manual_mpesa' },
+      { provider: 'manual_binance' },
+      { paymentMethod: 'manual_binance' }
+    ]
   };
 
   if (status === 'pending' || status === 'completed' || status === 'rejected' || status === 'cancelled') {
@@ -804,6 +915,8 @@ async function listManualPayments({
   const payments = rows.map(row => {
     const user = row.userId && typeof row.userId === 'object' ? row.userId : null;
     const sub = user?.subscription || {};
+    const method = row.paymentMethod || row.provider;
+    const isBinance = method === 'manual_binance';
     return {
       id: String(row._id),
       userId: user?._id ? String(user._id) : String(row.userId),
@@ -813,7 +926,9 @@ async function listManualPayments({
       plan: row.tier,
       tier: row.tier,
       phone: row.phoneNumber || user?.phone || null,
-      mpesaCode: row.providerReference,
+      mpesaCode: isBinance ? null : row.providerReference,
+      binanceTxId: isBinance ? row.providerReference : null,
+      paymentReference: row.providerReference,
       amount: row.amount,
       currency: row.currency,
       billingCycle: row.billingCycle,
@@ -821,7 +936,7 @@ async function listManualPayments({
       subscriptionStatus: sub.status || null,
       notes: row.notes || '',
       screenshotUrl: row.screenshotUrl || '',
-      paymentMethod: row.paymentMethod || row.provider,
+      paymentMethod: method,
       activatedBy: row.activatedBy?.email || null,
       activationDate: row.activationDate || null,
       createdAt: row.createdAt,
@@ -843,6 +958,9 @@ module.exports = {
   SUBSCRIPTION_PERIOD_DAYS,
   remainingDaysFrom,
   normalizeMpesaCode,
+  normalizeBinanceTxId,
+  normalizeManualMethod,
+  isManualPayment,
   mapPaymentSource,
   serializeSubscription,
   activateFromCompletedPayment,

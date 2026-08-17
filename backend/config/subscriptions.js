@@ -333,6 +333,11 @@ function getPublicPaymentMethods() {
       binanceId: '484947783',
       currency: 'USDT'
     },
+    manualBinance: {
+      binanceId: '484947783',
+      currency: 'USDT',
+      mode: 'manual_id'
+    },
     paypal: {
       currency: 'USD',
       mode: PAYMENT_CONFIG.paypal.mode || 'sandbox',

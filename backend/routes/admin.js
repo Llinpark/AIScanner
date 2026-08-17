@@ -775,7 +775,7 @@ function createAdminRouter({ io } = {}) {
     }
   });
 
-  // ── Manual M-Pesa activations (Super Admin only) ──────────────────────────
+  // ── Manual M-Pesa / Binance activations (Super Admin only) ────────────────
 
   router.get('/manual-activations', requireSuperAdmin, async (req, res) => {
     try {
@@ -807,6 +807,8 @@ function createAdminRouter({ io } = {}) {
         return res.status(404).json({ message: 'Payment not found.' });
       }
       const user = payment.userId && typeof payment.userId === 'object' ? payment.userId : null;
+      const method = payment.paymentMethod || payment.provider;
+      const isBinance = method === 'manual_binance';
       res.json({
         payment: {
           id: String(payment._id),
@@ -816,14 +818,16 @@ function createAdminRouter({ io } = {}) {
           plan: payment.tier,
           tier: payment.tier,
           phone: payment.phoneNumber || user?.phone || null,
-          mpesaCode: payment.providerReference,
+          mpesaCode: isBinance ? null : payment.providerReference,
+          binanceTxId: isBinance ? payment.providerReference : null,
+          paymentReference: payment.providerReference,
           amount: payment.amount,
           currency: payment.currency,
           billingCycle: payment.billingCycle,
           status: payment.status,
           notes: payment.notes || '',
           screenshotUrl: payment.screenshotUrl || '',
-          paymentMethod: payment.paymentMethod || payment.provider,
+          paymentMethod: method,
           activatedBy: payment.activatedBy?.email || null,
           activationDate: payment.activationDate || null,
           createdAt: payment.createdAt,
@@ -848,6 +852,8 @@ function createAdminRouter({ io } = {}) {
           amount: body.amount,
           phoneNumber: body.phoneNumber || body.phone,
           mpesaCode: body.mpesaCode,
+          binanceTxId: body.binanceTxId || body.binanceOrderId,
+          paymentReference: body.paymentReference,
           startDate: body.startDate,
           expiryDate: body.expiryDate,
           notes: body.notes,
@@ -856,13 +862,18 @@ function createAdminRouter({ io } = {}) {
         },
         req
       );
+      const method = result.payment.paymentMethod || result.payment.provider;
+      const isBinance = method === 'manual_binance';
       res.json({
         message: 'Payment approved and subscription activated.',
         user: sanitizeUser(result.user),
         payment: {
           id: String(result.payment._id),
           status: result.payment.status,
-          mpesaCode: result.payment.providerReference,
+          paymentMethod: method,
+          paymentReference: result.payment.providerReference,
+          mpesaCode: isBinance ? null : result.payment.providerReference,
+          binanceTxId: isBinance ? result.payment.providerReference : null,
           activationDate: result.payment.activationDate
         },
         subscription: result.subscription
