@@ -125,8 +125,22 @@ function looksLikeRawPayload(content) {
   return RAW_PAYLOAD_KEYS.some(key => text.includes(key));
 }
 
+/**
+ * Pine JSON cannot embed real newlines (invalid JSON), and Pine v5 "\n" is the
+ * letter n — not LF — so templates emit a two-char backslash-n. jsonEsc then
+ * preserves that as a literal "\n" after JSON.parse. That is not a trading
+ * field; convert it (and double-escaped \\n) to real line breaks.
+ */
+function decodeLiteralNewlines(raw) {
+  return String(raw == null ? '' : raw)
+    .replace(/\r\n/g, '\n')
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n');
+}
+
 function sanitizeSubscriberNotes(raw) {
-  const text = String(raw == null ? '' : raw).trim();
+  const text = decodeLiteralNewlines(raw).trim();
   if (!text) return KACHING_ALERT_NAMES.signal;
   if (looksLikeRawPayload(text)) return KACHING_ALERT_NAMES.signal;
   if (text.startsWith('{') || text.startsWith('[')) return KACHING_ALERT_NAMES.signal;
@@ -466,6 +480,7 @@ module.exports = {
   formatSubscriberPrice,
   decimalsForSymbol,
   looksLikeRawPayload,
+  decodeLiteralNewlines,
   sanitizeSubscriberNotes,
   assertSafeSubscriberContent,
   isStaleFreshEntry,

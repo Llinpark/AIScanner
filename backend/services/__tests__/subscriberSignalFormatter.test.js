@@ -418,6 +418,29 @@ describe('Ingest notes sanitization', () => {
     });
     assert.doesNotMatch(String(data.notes), /licenseToken|\{"symbol":/);
   });
+
+  it('converts literal backslash-n from Pine message into real newlines', () => {
+    const pineBlob = '🟦 Kaching BUY\\nEntry: 4641.695\\nSL: 4639.836\\nTP1: 4644.483\\nTP2: 4645.412\\nTP3: 4647.271';
+    const notes = Formatter.sanitizeSubscriberNotes(pineBlob);
+    assert.equal(notes.includes('\\n'), false);
+    assert.equal(
+      notes,
+      [
+        '🟦 Kaching BUY',
+        'Entry: 4641.695',
+        'SL: 4639.836',
+        'TP1: 4644.483',
+        'TP2: 4645.412',
+        'TP3: 4647.271'
+      ].join('\n')
+    );
+  });
+
+  it('leaves real newlines unchanged and still blocks raw JSON', () => {
+    const alreadyBroken = '🟦 Kaching BUY\nEntry: 1.17\nSL: 1.16';
+    assert.equal(Formatter.sanitizeSubscriberNotes(alreadyBroken), alreadyBroken);
+    assert.equal(Formatter.sanitizeSubscriberNotes(rawWebhookJson()), 'Kaching Signal');
+  });
 });
 
 describe('Lifecycle presentation names', () => {

@@ -19,6 +19,7 @@ import {
   hasAdminUnlimitedAccess
 } from '../utils/subscriptionDisplay';
 import { formatInstrumentPrice } from '../utils/pricePrecision';
+import { liveAlertNotesText } from '../utils/alertNotesDisplay';
 
 const TIER_LABELS = { basic: 'Basic', professional: 'Pro', premium: 'Premium' };
 
@@ -356,7 +357,7 @@ export default function SignalDashboard({ initialSignals, subscription, onNaviga
             const strategy = formatStrategyName(signal);
             const notesClean =
               signal.notes && !/pipeline\s*score|premium\s*smc\s*pipeline|threshold\s*\d+\s*%/i.test(String(signal.notes))
-                ? signal.notes
+                ? liveAlertNotesText(signal)
                 : null;
 
             return (

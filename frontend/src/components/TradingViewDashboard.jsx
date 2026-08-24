@@ -12,6 +12,7 @@ import {
   formatEntryHtfLine,
   getStrategyArchitecture
 } from '../constants/strategyArchitecture';
+import { liveAlertNotesText } from '../utils/alertNotesDisplay';
 
 const ALERT_LABELS = {
   entry: 'Kaching Entry',
@@ -29,6 +30,7 @@ function hasLiveAccess(subscription) {
 
 function AlertCard({ alert, showConfidence, showNewsFilter, showTradeManagement }) {
   const type = alert.alertType || 'signal';
+  const notesText = liveAlertNotesText(alert);
   return (
     <div className={`alert-card alert-${alert.direction} alert-type-${type}`}>
       <div className="alert-header">
@@ -53,7 +55,7 @@ function AlertCard({ alert, showConfidence, showNewsFilter, showTradeManagement 
           <DetailRow label="Management" value={alert.tradeManagement.message} />
         )}
       </div>
-      {(alert.message || alert.notes) && <p className="notes">{alert.message || alert.notes}</p>}
+      {notesText ? <p className="notes">{notesText}</p> : null}
     </div>
   );
 }
