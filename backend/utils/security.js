@@ -174,8 +174,8 @@ function assertProductionSecurityConfig() {
     if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret-change-in-production') {
       issues.push('JWT_SECRET must be set to a strong value in production.');
     }
-    if (!process.env.WEBHOOK_SIGNING_SECRET && !process.env.TRADINGVIEW_WEBHOOK_SECRET) {
-      issues.push('WEBHOOK_SIGNING_SECRET (or TRADINGVIEW_WEBHOOK_SECRET) must be set in production.');
+    if (!process.env.WEBHOOK_SIGNING_SECRET) {
+      issues.push('WEBHOOK_SIGNING_SECRET must be set in production (license tokens do not fall back to other secrets).');
     }
     if (process.env.PAYMENTS_MODE === 'mock' || process.env.ALLOW_MOCK_PAYMENTS === 'true') {
       issues.push('Mock payments must be disabled in production (set PAYMENTS_MODE=live and unset ALLOW_MOCK_PAYMENTS).');

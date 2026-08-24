@@ -53,6 +53,11 @@ const PaymentTransactionSchema = new mongoose.Schema({
   billingCycle: { type: String, enum: ['weekly', 'monthly', 'yearly'], default: 'monthly' },
   /** M-Pesa code / gateway reference — unique per provider when set. */
   providerReference: { type: String, index: true },
+  /**
+   * Lookalike-folded M-Pesa code (O/0 and I/L/1) used to block duplicate receipts
+   * submitted with visually similar characters.
+   */
+  providerReferenceCanonical: { type: String, index: true, default: undefined },
   merchantRequestId: { type: String },
   phoneNumber: { type: String, default: null },
   status: {
@@ -84,6 +89,18 @@ PaymentTransactionSchema.index(
     partialFilterExpression: {
       provider: 'manual_mpesa',
       providerReference: { $type: 'string' }
+    }
+  }
+);
+// Lookalike-folded M-Pesa codes (O/0, I/L/1) must also be unique.
+PaymentTransactionSchema.index(
+  { providerReferenceCanonical: 1 },
+  {
+    unique: true,
+    name: 'manual_mpesa_canonical_unique',
+    partialFilterExpression: {
+      provider: 'manual_mpesa',
+      providerReferenceCanonical: { $type: 'string' }
     }
   }
 );

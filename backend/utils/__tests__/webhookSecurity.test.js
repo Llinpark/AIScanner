@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 describe('verifyTradingViewWebhook', () => {
   let generateLicenseToken;
   let verifyTradingViewWebhook;
+  let diagnoseLicenseToken;
+  let verifyLicenseToken;
   let previousEnv;
 
   before(() => {
@@ -21,7 +23,7 @@ describe('verifyTradingViewWebhook', () => {
     // Re-require after env is set so getSigningSecret sees test values.
     delete require.cache[require.resolve('../webhookSecurity')];
     delete require.cache[require.resolve('../subscriptionAccess')];
-    ({ generateLicenseToken, verifyTradingViewWebhook } = require('../webhookSecurity'));
+    ({ generateLicenseToken, verifyTradingViewWebhook, diagnoseLicenseToken, verifyLicenseToken } = require('../webhookSecurity'));
   });
 
   after(() => {
@@ -145,6 +147,90 @@ describe('verifyTradingViewWebhook', () => {
 
     assert.equal(auth.ok, false);
     assert.equal(auth.reason, 'unauthorized');
+  });
+
+  it('a. production-generated token verifies successfully', () => {
+    const token = generateLicenseToken('64b0f0f0f0f0f0f0f0f0f0f3', 'prodtrader');
+    assert.equal(Boolean(verifyLicenseToken(token)), true);
+    const diag = diagnoseLicenseToken(token);
+    assert.equal(diag.prefix, 'kls_v2');
+    assert.equal(diag.tokenEnvironment, 'production');
+    assert.equal(diag.parts, 3);
+    assert.equal(diag.hmacMatch, 'webhook_signing_secret');
+    assert.equal(diag.hasCR, false);
+  });
+
+  it('b. token for user A cannot authenticate as user B', async () => {
+    const userA = '64b0f0f0f0f0f0f0f0f0f0a1';
+    const userB = '64b0f0f0f0f0f0f0f0f0f0b2';
+    const tvu = 'samechartuser';
+    const tokenA = generateLicenseToken(userA, tvu);
+    const auth = await verifyTradingViewWebhook(
+      reqWithBody({
+        symbol: 'XAUUSD',
+        alertType: 'entry',
+        userId: userB,
+        tradingviewUsername: tvu,
+        licenseToken: tokenA
+      }),
+      async id => ({
+        _id: id,
+        tradingviewUsername: tvu,
+        subscription: { status: 'active', tier: 'professional' }
+      })
+    );
+    assert.equal(auth.ok, false);
+    assert.equal(auth.reason, 'license_user_mismatch');
+  });
+
+  it('c. different signing secret is rejected', () => {
+    const token = generateLicenseToken('64b0f0f0f0f0f0f0f0f0f0c3', 'secrettrader');
+    const prev = process.env.WEBHOOK_SIGNING_SECRET;
+    process.env.WEBHOOK_SIGNING_SECRET = 'totally-different-signing-secret-xyz';
+    delete require.cache[require.resolve('../webhookSecurity')];
+    const { verifyLicenseToken: verifyOther, diagnoseLicenseToken: diagOther } = require('../webhookSecurity');
+    try {
+      assert.equal(verifyOther(token), null);
+      const diag = diagOther(token);
+      assert.equal(diag.reason, 'hmac_mismatch');
+      assert.equal(diag.hmacMatch, 'none');
+      assert.equal(diag.decodeOk, true);
+    } finally {
+      process.env.WEBHOOK_SIGNING_SECRET = prev;
+      delete require.cache[require.resolve('../webhookSecurity')];
+      ({ generateLicenseToken, verifyTradingViewWebhook, diagnoseLicenseToken, verifyLicenseToken } = require('../webhookSecurity'));
+    }
+  });
+
+  it('CR injected into an otherwise valid token fails HMAC (Pine jsonEsc regression)', () => {
+    const token = generateLicenseToken('64b0f0f0f0f0f0f0f0f0f0d4', 'faithkinyori2023');
+    assert.equal(Boolean(token && token.length > 20), true);
+    const corrupted = `${token.slice(0, 12)}\r${token.slice(12)}`;
+    assert.equal(corrupted.includes('\r'), true);
+    assert.equal(verifyLicenseToken(corrupted), null);
+    const diag = diagnoseLicenseToken(corrupted);
+    assert.equal(diag.hasCR, true);
+    assert.equal(diag.reason, 'hmac_mismatch');
+  });
+
+  it('d. smoke/dev token is rejected under production verifier', () => {
+    const prevEnv = process.env.NODE_ENV;
+    const prevSecret = process.env.WEBHOOK_SIGNING_SECRET;
+    const LicenseTokenService = require('../../services/LicenseTokenService');
+    process.env.NODE_ENV = 'test';
+    process.env.WEBHOOK_SIGNING_SECRET = 'smoke-test-license-signing-secret';
+    const smokeToken = LicenseTokenService.generateLicenseToken('smoke-optiona-local', 'smoke_optiona_tv');
+    process.env.NODE_ENV = 'production';
+    process.env.WEBHOOK_SIGNING_SECRET = 'test-signing-secret-abcdefghijklmnopqrstuvwxyz';
+    try {
+      const verified = LicenseTokenService.verifyLicenseTokenDetailed(smokeToken);
+      assert.equal(verified.ok, false);
+      assert.equal(verified.reason, 'non_production_license_token');
+      assert.equal(LicenseTokenService.verifyLicenseToken(smokeToken), null);
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+      process.env.WEBHOOK_SIGNING_SECRET = prevSecret;
+    }
   });
 });
 

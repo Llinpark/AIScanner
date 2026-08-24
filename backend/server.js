@@ -28,6 +28,21 @@ const requireMockPayments = require('./middleware/requireMockPayments');
 
 assertProductionSecurityConfig();
 
+const LicenseTokenService = require('./services/LicenseTokenService');
+const licenseTokenCrypto = LicenseTokenService.runCryptoSelfCheck();
+if (!licenseTokenCrypto.ok) {
+  console.error(
+    `[LicenseToken] Startup crypto check FAILED reason=${licenseTokenCrypto.reason || 'unknown'}`
+  );
+  if (process.env.NODE_ENV === 'production') {
+    process.exit(1);
+  }
+} else {
+  console.log(
+    `[LicenseToken] Startup crypto check PASS env=${licenseTokenCrypto.tokenEnvironment || 'n/a'} isolated=true`
+  );
+}
+
 // Fail fast if Strategy Configuration TF layouts are invalid (before Pine generation).
 try {
   const {
@@ -79,6 +94,7 @@ const {
 const ActivationService = require('./services/ActivationService');
 const TradingViewService = require('./services/TradingViewService');
 const TradingViewAlertService = require('./services/TradingViewAlertService');
+const SubscriberSignalFormatter = require('./services/SubscriberSignalFormatter');
 const ChartDataService = require('./services/ChartDataService');
 const {
   normalizeSignalLevels,
@@ -116,7 +132,7 @@ const {
   isWebhookInsightsSignal,
   legacySourceMongoExclusion
 } = require('./utils/insightsSignalFilter');
-const { verifyTradingViewWebhook } = require('./utils/webhookSecurity');
+const { verifyTradingViewWebhook, diagnoseLicenseToken } = require('./utils/webhookSecurity');
 const authRoutes = require('./routes/auth');
 const referralRoutes = require('./routes/referrals');
 const createAdminRouter = require('./routes/admin');
@@ -266,10 +282,49 @@ async function assertTradingViewWebhook(req, res) {
       timeframe: bodyMeta.timeframe,
       signalUuid: bodyMeta.signalUuid
     });
+    const licenseDiag =
+      auth.licenseDiagnostics ||
+      ((body.licenseToken || body.license_token)
+        ? diagnoseLicenseToken(body.licenseToken || body.license_token)
+        : {});
+    if (
+      authFailReason === 'invalid_license_token' ||
+      authFailReason === 'non_production_license_token' ||
+      authFailReason === 'license_user_mismatch' ||
+      authFailReason === 'license_tv_username_mismatch' ||
+      authFailReason === 'inactive_subscription'
+    ) {
+      logTvStage('TV WEBHOOK LICENSE DIAG', {
+        requestId,
+        present: licenseDiag.present,
+        length: licenseDiag.length,
+        parts: licenseDiag.parts,
+        prefix: licenseDiag.prefix,
+        prefixOk: licenseDiag.prefixOk,
+        tokenVersion: licenseDiag.tokenVersion || licenseDiag.prefix,
+        tokenEnvironment: licenseDiag.tokenEnvironment,
+        scriptGenerationId: licenseDiag.scriptGenerationId,
+        hasCR: licenseDiag.hasCR,
+        hasLF: licenseDiag.hasLF,
+        hasSpace: licenseDiag.hasSpace,
+        decodeOk: licenseDiag.decodeOk,
+        payloadVersion: licenseDiag.payloadVersion,
+        uidLen: licenseDiag.uidLen,
+        tvuMasked: licenseDiag.tvuMasked,
+        iat: licenseDiag.iat,
+        hmacMatch: licenseDiag.hmacMatch,
+        reason: licenseDiag.reason
+      });
+    }
     console.warn(`[WEBHOOK FAIL:AUTH] reason=${authFailReason}`);
     logPipeline('Auth', 'FAIL', {
       ...bodyMeta,
-      reason: `${authFailReason}; requestId=${requestId}`
+      reason: `${authFailReason}; requestId=${requestId}`,
+      requestId,
+      tokenVersion: licenseDiag.tokenVersion || licenseDiag.prefix || null,
+      tokenEnvironment: licenseDiag.tokenEnvironment || null,
+      scriptGenerationId: licenseDiag.scriptGenerationId || body.scriptGenerationId || null,
+      alertType: body.alertType || body.alert_type || body.type || null
     });
     res.status(401).json({
       message: 'Invalid webhook authentication',
@@ -323,7 +378,9 @@ function parseTradingViewPayload(body) {
   const direction = (parsed.direction || parsed.action || parsed.signal || parsed.trade || 'neutral').toString().toLowerCase();
   const levels = normalizeSignalLevels(parsed, direction);
   const confidence = parseFloat(parsed.confidence || parsed.confidence_score || parsed.data?.confidence || 0) || 0;
-  const notes = parsed.message || parsed.note || parsed.notes || JSON.stringify(parsed);
+  const notes = SubscriberSignalFormatter.sanitizeSubscriberNotes(
+    parsed.message || parsed.note || parsed.notes || ''
+  );
   const tradingviewUsername = TradingViewAlertService.normalizeTradingViewUsername(
     parsed.tradingviewUsername || parsed.username || parsed.user || parsed.trader || ''
   );
@@ -585,9 +642,16 @@ mongoose.connect(mongoUri, {
 
 // Public health: minimal body for Fly checks — no infra URL leakage.
 app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'backend'
+  const cryptoCheck =
+    LicenseTokenService.getCryptoSelfCheckResult() || LicenseTokenService.runCryptoSelfCheck();
+  const cryptoOk = Boolean(cryptoCheck?.ok);
+  const production = process.env.NODE_ENV === 'production';
+  const healthy = cryptoOk || !production;
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? 'ok' : 'degraded',
+    service: 'backend',
+    licenseTokenCrypto: cryptoOk ? 'ok' : 'fail',
+    licenseTokenCryptoReason: cryptoOk ? undefined : cryptoCheck?.reason || 'not_run'
   });
 });
 
@@ -2080,6 +2144,15 @@ app.get('/api/tradingview/pine-script', requireAuth, requireSubscription, (req, 
         message: error.message,
         code: error.code,
         requiresTradingViewUsername: true
+      });
+    }
+    if (error.code === 'license_token_self_check_failed' || error.code === 'unsafe_pine_generation') {
+      console.error(
+        `[PineScriptGenerator] refusing to return Pine code=${error.code} reason=${error.reason || error.message}`
+      );
+      return res.status(500).json({
+        message: 'Unable to generate a production-safe Pine script. Please retry or contact support.',
+        code: error.code
       });
     }
     console.error('Pine script error:', error);

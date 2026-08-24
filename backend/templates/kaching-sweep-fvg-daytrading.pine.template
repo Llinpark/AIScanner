@@ -137,9 +137,12 @@ kachingAlertLabel(string alertType) =>
      alertType == "cancelled" ? "Kaching Cancelled" :
      "Kaching Signal"
 
-// Escape string values for deterministic JSON (prevents WebhookParseError).
+// Escape " and \ for deterministic JSON (prevents WebhookParseError).
+// Pine v5: escape only backslash and quote. Do not replace CR/LF — string
+// literals "\r"/"\n" are the letters r/n (not CR/LF) and would corrupt licenseToken HMAC.
+// Server-controlled fields (licenseToken, symbol, usernames) contain no raw newlines.
 jsonEsc(string s) =>
-    str.replace_all(str.replace_all(str.replace_all(str.replace_all(s, "\\", "\\\\"), "\"", "\\\""), "\n", "\\n"), "\r", "\\r")
+    str.replace_all(str.replace_all(s, "\\", "\\\\"), "\"", "\\\"")
 
 // Human-readable alert body (stored in JSON message; webhook still receives full JSON)
 buildHumanMessage(string direction, float entry, float sl, float tp1, float tp2, float tp3) =>

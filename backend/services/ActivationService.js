@@ -60,6 +60,94 @@ function normalizeMpesaCode(code) {
     .replace(/\s+/g, '');
 }
 
+/**
+ * Fold visually ambiguous M-Pesa characters so "UHI2Q38OFV" and "UHI2Q380FV"
+ * (O vs 0) are treated as the same receipt.
+ */
+function canonicalizeMpesaCode(code) {
+  return normalizeMpesaCode(code)
+    .replace(/O/g, '0')
+    .replace(/[IL]/g, '1');
+}
+
+function mpesaCodesEquivalent(a, b) {
+  const left = canonicalizeMpesaCode(a);
+  const right = canonicalizeMpesaCode(b);
+  return Boolean(left) && left === right;
+}
+
+function mpesaLookalikeRegex(code) {
+  const canonical = canonicalizeMpesaCode(code);
+  if (!canonical || !/^[A-Z0-9]+$/.test(canonical)) return null;
+  const pattern = canonical.replace(/0/g, '[0O]').replace(/1/g, '[1IL]');
+  return new RegExp(`^${pattern}$`, 'i');
+}
+
+function duplicateManualReferenceError(isBinance, conflict) {
+  if (isBinance) {
+    return Object.assign(new Error('This Binance transaction ID has already been submitted.'), {
+      status: 409
+    });
+  }
+  const usedByActive =
+    conflict?.kind === 'active_subscription' ||
+    conflict?.payment?.status === 'completed' ||
+    Boolean(conflict?.payment?.activationDate);
+  return Object.assign(
+    new Error(
+      usedByActive
+        ? 'This M-Pesa code is already registered to an active subscription and cannot be reused.'
+        : 'This M-Pesa code has already been submitted.'
+    ),
+    { status: 409 }
+  );
+}
+
+async function findManualReferenceConflict({
+  provider,
+  code,
+  excludePaymentId = null
+} = {}) {
+  const isBinance = provider === 'manual_binance';
+  const normalized = isBinance ? normalizeBinanceTxId(code) : normalizeMpesaCode(code);
+  if (!normalized) return null;
+
+  const paymentQuery = { provider };
+  if (excludePaymentId) {
+    paymentQuery._id = { $ne: excludePaymentId };
+  }
+
+  if (isBinance) {
+    paymentQuery.providerReference = normalized;
+    const payment = await PaymentTransaction.findOne(paymentQuery).lean();
+    return payment ? { kind: 'payment', payment } : null;
+  }
+
+  const canonical = canonicalizeMpesaCode(normalized);
+  const lookalike = mpesaLookalikeRegex(normalized);
+  paymentQuery.$or = [{ providerReference: normalized }, { providerReferenceCanonical: canonical }];
+  if (lookalike) {
+    paymentQuery.$or.push({ providerReference: lookalike });
+  }
+
+  const payment = await PaymentTransaction.findOne(paymentQuery).lean();
+  if (payment) return { kind: 'payment', payment };
+
+  const userQuery = {
+    'subscription.status': 'active',
+    $or: [{ 'subscription.providerOrderId': normalized }]
+  };
+  if (lookalike) {
+    userQuery.$or.push({ 'subscription.providerOrderId': lookalike });
+  }
+  const user = await UserConfig.findOne(userQuery)
+    .select('email subscription.providerOrderId subscription.status')
+    .lean();
+  if (user) return { kind: 'active_subscription', user };
+
+  return null;
+}
+
 function normalizeBinanceTxId(code) {
   return String(code || '')
     .trim()
@@ -240,6 +328,19 @@ async function activateFromCompletedPayment(payment, options = {}) {
       lockedPayment.activationDate;
 
     if (!alreadyActiveSamePayment) {
+      const lockedMethod = normalizeManualMethod(
+        lockedPayment.paymentMethod || lockedPayment.provider
+      );
+      if (lockedMethod === 'manual_mpesa' && lockedPayment.providerReference) {
+        const conflict = await findManualReferenceConflict({
+          provider: 'manual_mpesa',
+          code: lockedPayment.providerReference,
+          excludePaymentId: lockedPayment._id
+        });
+        if (conflict) {
+          throw duplicateManualReferenceError(false, conflict);
+        }
+      }
       applyActiveSubscriptionFields(user, {
         tier: lockedPayment.tier,
         provider: lockedPayment.provider,
@@ -393,19 +494,12 @@ async function submitManualPaymentRequest({
     throw Object.assign(new Error('Database unavailable.'), { status: 503 });
   }
 
-  const existing = await PaymentTransaction.findOne({
-    providerReference: code,
-    provider: manualMethod
-  }).lean();
-  if (existing) {
-    throw Object.assign(
-      new Error(
-        isBinance
-          ? 'This Binance transaction ID has already been submitted.'
-          : 'This M-Pesa code has already been submitted.'
-      ),
-      { status: 409 }
-    );
+  const existingConflict = await findManualReferenceConflict({
+    provider: manualMethod,
+    code
+  });
+  if (existingConflict) {
+    throw duplicateManualReferenceError(isBinance, existingConflict);
   }
 
   const user = await UserConfig.findById(userId);
@@ -440,6 +534,7 @@ async function submitManualPaymentRequest({
       currency: isBinance ? pricing.currencyBinance || 'USDT' : pricing.currency || 'KES',
       billingCycle: cycle,
       providerReference: code,
+      providerReferenceCanonical: isBinance ? undefined : canonicalizeMpesaCode(code),
       phoneNumber: phone || null,
       status: 'pending',
       notes: String(notes || '').trim().slice(0, 2000),
@@ -461,14 +556,7 @@ async function submitManualPaymentRequest({
     return { payment, user, subscription: serializeSubscription(user.subscription) };
   } catch (error) {
     if (error?.code === 11000) {
-      throw Object.assign(
-        new Error(
-          isBinance
-            ? 'This Binance transaction ID has already been submitted.'
-            : 'This M-Pesa code has already been submitted.'
-        ),
-        { status: 409 }
-      );
+      throw duplicateManualReferenceError(isBinance, { kind: 'payment' });
     }
     throw error;
   }
@@ -538,24 +626,25 @@ async function approveManualPayment(paymentId, adminUser, options = {}, req = nu
     } else if (!/^[A-Z0-9]{8,15}$/.test(code)) {
       throw Object.assign(new Error('Invalid M-Pesa code.'), { status: 400 });
     }
-    if (code !== payment.providerReference) {
-      const clash = await PaymentTransaction.findOne({
-        providerReference: code,
-        provider: method,
-        _id: { $ne: payment._id }
-      }).lean();
-      if (clash) {
-        throw Object.assign(
-          new Error(
-            isBinance
-              ? 'Another payment already uses this Binance transaction ID.'
-              : 'Another payment already uses this M-Pesa code.'
-          ),
-          { status: 409 }
-        );
-      }
-      payment.providerReference = code;
+    payment.providerReference = code;
+    if (!isBinance) {
+      payment.providerReferenceCanonical = canonicalizeMpesaCode(code);
     }
+  } else if (!isBinance && payment.providerReference && !payment.providerReferenceCanonical) {
+    payment.providerReferenceCanonical = canonicalizeMpesaCode(payment.providerReference);
+  }
+
+  const clash = await findManualReferenceConflict({
+    provider: method,
+    code: payment.providerReference,
+    excludePaymentId: payment._id
+  });
+  if (clash) {
+    throw isBinance
+      ? Object.assign(new Error('Another payment already uses this Binance transaction ID.'), {
+          status: 409
+        })
+      : duplicateManualReferenceError(false, clash);
   }
   if (billingCycle) {
     payment.billingCycle = normalizeBillingCycle(billingCycle);
@@ -958,6 +1047,9 @@ module.exports = {
   SUBSCRIPTION_PERIOD_DAYS,
   remainingDaysFrom,
   normalizeMpesaCode,
+  canonicalizeMpesaCode,
+  mpesaCodesEquivalent,
+  mpesaLookalikeRegex,
   normalizeBinanceTxId,
   normalizeManualMethod,
   isManualPayment,

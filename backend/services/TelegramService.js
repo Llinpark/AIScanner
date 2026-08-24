@@ -10,10 +10,9 @@ const {
   isSubscriptionActive,
   hasTierFeature
 } = require('../utils/subscriptionAccess');
-const { formatKachingAlertMessage } = require('../utils/kachingSignalLevels');
 const { isEntryAlert } = require('../utils/signalOutcome');
-const { formatTvPrice } = require('../utils/priceFormat');
 const Mt5TradeCopierService = require('./Mt5TradeCopierService');
+const SubscriberSignalFormatter = require('./SubscriberSignalFormatter');
 const {
   isAlertsOnlyTelegram,
   resolveTelegramMode,
@@ -35,6 +34,7 @@ const TELEGRAM_STATUS = Object.freeze({
   SKIPPED_DISABLED: 'TELEGRAM_SKIPPED_DISABLED',
   SKIPPED_NOT_CONFIGURED: 'TELEGRAM_SKIPPED_NOT_CONFIGURED',
   SKIPPED_SELF_TEST: 'TELEGRAM_SKIPPED_SELF_TEST',
+  SKIPPED_STALE: 'TELEGRAM_SKIPPED_STALE',
   SEND_STARTED: 'TELEGRAM_SEND_STARTED',
   SEND_SUCCESS: 'TELEGRAM_SEND_SUCCESS',
   SEND_FAILED: 'TELEGRAM_SEND_FAILED'
@@ -416,47 +416,21 @@ function formatSignalMessage(signal, subscriber = null, options = {}) {
   const includeExecuteButton = Boolean(options.includeExecuteButton);
   const alertOnly = resolveAlertOnlyOption(subscriber, options);
   const alertType = signal.alertType || 'signal';
+  const formatted = SubscriberSignalFormatter.formatTelegram(signal, { channel: 'telegram' });
+  const body =
+    formatted?.ok && formatted.telegramText
+      ? formatted.telegramText
+      : formatted?.fallbackText || SubscriberSignalFormatter.FORMATTING_FALLBACK;
 
   if (alertOnly && isEntryAlert(alertType)) {
-    return formatAlertsOnlyMessage(signal, subscriber);
+    return body;
   }
 
-  const title = escapeHtml(formatKachingAlertMessage(signal).split('|')[0]?.trim() || 'Kaching Alert');
-  const sl = signal.stop_loss_1 ?? signal.stop_loss;
-  const lines = [
-    `<b>${title}</b>`,
-    `<b>Symbol:</b> ${escapeHtml(signal.symbol)}`,
-    `<b>Direction:</b> ${escapeHtml(String(signal.direction || '').toUpperCase())}`,
-    `<b>Kaching Entry:</b> ${formatTvPrice(signal.entry)}`,
-    `<b>Kaching SL:</b> ${formatTvPrice(sl)}`,
-    `<b>Kaching TP1:</b> ${formatTvPrice(signal.take_profit_1)}`,
-    `<b>Kaching TP2:</b> ${formatTvPrice(signal.take_profit_2)}`,
-    `<b>Kaching TP3:</b> ${formatTvPrice(signal.take_profit_3)}`
-  ];
+  const lines = [body];
 
-  if (subscriber && userHasTierFeature(subscriber, 'autoLotSizing')) {
-    const lotSize = Mt5TradeCopierService.computeLotSize(signal, subscriber);
-    if (lotSize) {
-      lines.push(`<b>Auto Lot Size:</b> ${Number(lotSize).toFixed(2)}`);
-    }
-  }
-
-  if (subscriber && userHasTierFeature(subscriber, 'showConfidence') && signal.confidence != null) {
-    lines.push(`<b>Confidence:</b> ${Math.round(Number(signal.confidence) * 100)}%`);
-  }
-
-  if (subscriber && userHasTierFeature(subscriber, 'aiTradeExplanation') && signal.tradeExplanation) {
-    lines.push(`\n<i>${escapeHtml(signal.tradeExplanation)}</i>`);
-  }
-
-  if (subscriber && userHasTierFeature(subscriber, 'tradeManagementAlerts') && signal.tradeManagement?.message) {
-    lines.push(`\n<b>Management:</b> <i>${escapeHtml(signal.tradeManagement.message)}</i>`);
-  }
-
-  if (includeExecuteButton && isEntryAlert(alertType)) {
+  if (includeExecuteButton && isEntryAlert(alertType) && formatted?.ok) {
     const secs = Number(options.confirmSeconds) || 180;
     const windowLabel = secs % 60 === 0 ? `${secs / 60} min` : `${secs}s`;
-    // Telegram HTML does not allow nested tags — keep bold/italic as siblings only.
     lines.push(
       `\n<i>Pro Manual Confirmation — tap</i> <b>Execute Trade</b> <i>within ${windowLabel} to queue MT5. ` +
         `After expiry this signal is marked Expired and will not execute. Tap</i> <b>Ignore Trade</b> <i>to discard. ` +
@@ -472,38 +446,10 @@ function formatSignalMessage(signal, subscriber = null, options = {}) {
  * Subscriber executes manually on any platform.
  */
 function formatAlertsOnlyMessage(signal, subscriber = null) {
-  const direction = String(signal.direction || '').toLowerCase();
-  const isBuy = direction === 'long' || direction === 'buy';
-  const side = isBuy ? 'BUY' : direction === 'short' || direction === 'sell' ? 'SELL' : String(signal.direction || '').toUpperCase();
-  const emoji = isBuy ? '🟢' : side === 'SELL' ? '🔴' : '⚪';
-  const sl = signal.stop_loss_1 ?? signal.stop_loss;
-  const signalId = signal.signalUuid || signal.signalId || signal._id || signal.id || '—';
-  const conf =
-    signal.confidence != null
-      ? `${Math.round(Number(signal.confidence) <= 1 ? Number(signal.confidence) * 100 : Number(signal.confidence))}%`
-      : null;
-
-  const lines = [
-    `${emoji} <b>Kaching AI ${escapeHtml(side)}</b>`,
-    '',
-    `<b>${escapeHtml(signal.symbol)}</b>`,
-    signal.timeframe ? `<b>Timeframe:</b> ${escapeHtml(signal.timeframe)}` : null,
-    `<b>Entry:</b> ${formatTvPrice(signal.entry)}`,
-    `<b>Stop Loss:</b> ${formatTvPrice(sl)}`,
-    `<b>TP1:</b> ${formatTvPrice(signal.take_profit_1)}`,
-    `<b>TP2:</b> ${formatTvPrice(signal.take_profit_2)}`,
-    `<b>TP3:</b> ${formatTvPrice(signal.take_profit_3)}`
-  ];
-
-  if (conf != null && (!subscriber || userHasTierFeature(subscriber, 'showConfidence'))) {
-    lines.push(`<b>Confidence:</b> ${conf}`);
-  }
-
-  lines.push(`<b>Signal ID:</b> <code>${escapeHtml(String(signalId))}</code>`);
-  lines.push('');
-  lines.push('<i>Manual Trading — open your preferred trading platform to place this trade.</i>');
-
-  return lines.filter(line => line != null).join('\n');
+  void subscriber;
+  const formatted = SubscriberSignalFormatter.formatTelegram(signal, { channel: 'telegram' });
+  if (formatted?.ok && formatted.telegramText) return formatted.telegramText;
+  return formatted?.fallbackText || SubscriberSignalFormatter.FORMATTING_FALLBACK;
 }
 
 function buildExecuteCallbackData(signalId) {
@@ -683,16 +629,88 @@ async function notifySubscriber(subscriber, signalDoc, options = {}) {
   const includeExecuteButton = Boolean(options.includeExecuteButton);
   const alertOnly = resolveAlertOnlyOption(subscriber, options);
   const signal = signalDoc?.toObject ? signalDoc.toObject() : signalDoc;
-  const text = formatSignalMessage(signal, subscriber, { ...options, alertOnly, includeExecuteButton });
-  const replyMarkup = buildSignalReplyMarkup(signal, subscriber, {
-    includeExecuteButton: includeExecuteButton && !alertOnly,
-    alertOnly
+  const formatted = SubscriberSignalFormatter.formatTelegram(signal, { channel: 'telegram' });
+
+  if (formatted?.stale) {
+    return {
+      ok: false,
+      status: TELEGRAM_STATUS.SKIPPED_STALE,
+      reason: 'stale_entry',
+      tier,
+      telegramEnabled: true,
+      chatIdPresent: true
+    };
+  }
+
+  let text;
+  if (formatted?.ok) {
+    text = formatSignalMessage(signal, subscriber, { ...options, alertOnly, includeExecuteButton });
+  } else {
+    text = formatted?.fallbackText || SubscriberSignalFormatter.FORMATTING_FALLBACK;
+  }
+
+  const contentGuard = SubscriberSignalFormatter.assertSafeSubscriberContent(text, {
+    channel: 'telegram',
+    symbol: formatted?.symbol || signal.symbol,
+    alertType: formatted?.alertType || signal.alertType,
+    safeId: formatted?.safeId
   });
+  if (contentGuard.blocked) {
+    const fallback = SubscriberSignalFormatter.FORMATTING_FALLBACK;
+    const fallbackGuard = SubscriberSignalFormatter.assertSafeSubscriberContent(fallback, {
+      channel: 'telegram',
+      symbol: formatted?.symbol || signal.symbol,
+      alertType: formatted?.alertType || signal.alertType,
+      safeId: formatted?.safeId
+    });
+    if (fallbackGuard.blocked) {
+      return {
+        ok: false,
+        status: TELEGRAM_STATUS.SEND_FAILED,
+        reason: 'blocked_raw_payload',
+        tier,
+        telegramEnabled: true,
+        chatIdPresent: true
+      };
+    }
+    text = fallback;
+  }
+
+  const replyMarkup = formatted?.ok
+    ? buildSignalReplyMarkup(signal, subscriber, {
+        includeExecuteButton: includeExecuteButton && !alertOnly,
+        alertOnly
+      })
+    : null;
   const sendResult = await sendMessage(telegram.chatId, text, {
     replyMarkup,
     withStatus: true,
     diag: { ...signalDiag, subscriber: subLabel }
   });
+  if (!formatted?.ok) {
+    return {
+      ...sendResult,
+      ok: false,
+      status: TELEGRAM_STATUS.SEND_FAILED,
+      reason: formatted?.reason || 'formatting_failed',
+      sentFallback: Boolean(sendResult?.ok),
+      tier,
+      telegramEnabled: true,
+      chatIdPresent: true
+    };
+  }
+  if (contentGuard.blocked) {
+    return {
+      ...sendResult,
+      ok: false,
+      status: TELEGRAM_STATUS.SEND_FAILED,
+      reason: 'blocked_raw_payload',
+      sentFallback: Boolean(sendResult?.ok),
+      tier,
+      telegramEnabled: true,
+      chatIdPresent: true
+    };
+  }
 
   return {
     ...sendResult,

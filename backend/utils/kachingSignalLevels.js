@@ -25,10 +25,18 @@ function parseOptionalNumber(value) {
  */
 function normalizeSignalLevels(body = {}) {
   const entry = parseOptionalNumber(body.entry ?? body.price);
-  const stop_loss = parseOptionalNumber(body.stop_loss ?? body.stop_loss_1 ?? body.sl);
-  const take_profit_1 = parseOptionalNumber(body.take_profit_1 ?? body.tp1);
-  const take_profit_2 = parseOptionalNumber(body.take_profit_2 ?? body.tp2);
-  const take_profit_3 = parseOptionalNumber(body.take_profit_3 ?? body.tp3);
+  const stop_loss = parseOptionalNumber(
+    body.stop_loss ?? body.stopLoss ?? body.stop_loss_1 ?? body.stopLoss1 ?? body.sl
+  );
+  const take_profit_1 = parseOptionalNumber(
+    body.take_profit_1 ?? body.takeProfit1 ?? body.take_profit1 ?? body.tp1
+  );
+  const take_profit_2 = parseOptionalNumber(
+    body.take_profit_2 ?? body.takeProfit2 ?? body.take_profit2 ?? body.tp2
+  );
+  const take_profit_3 = parseOptionalNumber(
+    body.take_profit_3 ?? body.takeProfit3 ?? body.take_profit3 ?? body.tp3
+  );
 
   return {
     entry: entry ?? undefined,

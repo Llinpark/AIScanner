@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 const { FRONTEND_URL } = require('../config/appUrls');
-const { formatTvPrice } = require('./priceFormat');
+const SubscriberSignalFormatter = require('../services/SubscriberSignalFormatter');
 
 const APP_NAME = process.env.EMAIL_APP_NAME || 'KachingScanner';
 const EMAIL_FROM = process.env.EMAIL_FROM || `${APP_NAME} <noreply@kachingscanner.com>`;
@@ -163,49 +163,66 @@ async function sendPasswordResetEmail({ to, token, displayName }) {
   });
 }
 
-async function sendTradeAlertEmail({ to, displayName, signal }) {
-  if (!to || !signal) return null;
+async function sendTradeAlertEmail({ to, displayName, signal, presentation } = {}) {
+  if (!to || !signal) return { ok: false, reason: 'missing_to_or_signal' };
 
-  const name = displayName || String(to).split('@')[0];
-  const direction = String(signal.direction || '').toUpperCase();
-  const sl = signal.stop_loss_1 ?? signal.stop_loss;
-  const title = `${signal.symbol || 'Signal'} ${direction}`.trim();
-  const subject = `${APP_NAME} alert: ${title}`;
+  const formatted =
+    presentation && typeof presentation === 'object'
+      ? presentation
+      : SubscriberSignalFormatter.formatEmail(signal);
 
-  const lines = [
-    `Hi ${name},`,
-    '',
-    `New ${APP_NAME} trade alert`,
-    `Symbol: ${signal.symbol || '—'}`,
-    `Direction: ${direction || '—'}`,
-    `Entry: ${formatTvPrice(signal.entry)}`,
-    `SL: ${formatTvPrice(sl)}`,
-    `TP1: ${formatTvPrice(signal.take_profit_1)}`,
-    `TP2: ${formatTvPrice(signal.take_profit_2)}`,
-    `TP3: ${formatTvPrice(signal.take_profit_3)}`,
-    '',
-    `Open your dashboard: ${FRONTEND_URL.replace(/\/$/, '')}`
-  ];
+  if (formatted?.stale) {
+    return { ok: false, reason: 'stale_entry' };
+  }
 
-  return sendMail({
-    to,
-    subject,
-    text: lines.join('\n'),
-    html: `
-      <p>Hi ${name},</p>
-      <p><strong>New ${APP_NAME} trade alert</strong></p>
-      <ul>
-        <li><strong>Symbol:</strong> ${signal.symbol || '—'}</li>
-        <li><strong>Direction:</strong> ${direction || '—'}</li>
-        <li><strong>Entry:</strong> ${formatTvPrice(signal.entry)}</li>
-        <li><strong>SL:</strong> ${formatTvPrice(sl)}</li>
-        <li><strong>TP1:</strong> ${formatTvPrice(signal.take_profit_1)}</li>
-        <li><strong>TP2:</strong> ${formatTvPrice(signal.take_profit_2)}</li>
-        <li><strong>TP3:</strong> ${formatTvPrice(signal.take_profit_3)}</li>
-      </ul>
-      <p><a href="${FRONTEND_URL.replace(/\/$/, '')}">Open your dashboard</a></p>
-    `
+  if (!formatted?.ok) {
+    const fallback = formatted?.fallbackText || SubscriberSignalFormatter.FORMATTING_FALLBACK;
+    const guard = SubscriberSignalFormatter.assertSafeSubscriberContent(fallback, {
+      channel: 'email',
+      symbol: formatted?.symbol || signal.symbol,
+      alertType: formatted?.alertType || signal.alertType,
+      safeId: formatted?.safeId
+    });
+    if (guard.blocked) {
+      return { ok: false, reason: 'blocked_raw_payload' };
+    }
+    try {
+      await sendMail({
+        to,
+        subject: 'Kaching trading alert',
+        text: fallback,
+        html: `<p>${fallback}</p>`
+      });
+    } catch (err) {
+      console.warn('[mailer] trade-alert fallback email failed:', err.message);
+    }
+    return { ok: false, reason: formatted?.reason || 'formatting_failed', sentFallback: true };
+  }
+
+  const subjectGuard = SubscriberSignalFormatter.assertSafeSubscriberContent(formatted.subject, {
+    channel: 'email',
+    symbol: formatted.symbol,
+    alertType: formatted.alertType,
+    safeId: formatted.safeId
   });
+  const bodyGuard = SubscriberSignalFormatter.assertSafeSubscriberContent(formatted.text, {
+    channel: 'email',
+    symbol: formatted.symbol,
+    alertType: formatted.alertType,
+    safeId: formatted.safeId
+  });
+  if (subjectGuard.blocked || bodyGuard.blocked) {
+    return { ok: false, reason: 'blocked_raw_payload' };
+  }
+
+  void displayName;
+  const info = await sendMail({
+    to,
+    subject: formatted.subject,
+    text: formatted.text,
+    html: formatted.html || `<pre>${formatted.text}</pre>`
+  });
+  return { ok: true, ...info, presentation: formatted };
 }
 
 async function sendSubscriptionActivatedEmail({

@@ -51,7 +51,10 @@ function extractPipelineMeta(body = {}) {
   return {
     symbol: body.symbol || body.ticker || body.instrument || body.market,
     timeframe: body.timeframe || body.interval || body.tf,
-    signalUuid: body.signalUuid || body.signalId || body.signal_id || body.signalGroupId
+    signalUuid: body.signalUuid || body.signalId || body.signal_id || body.signalGroupId,
+    alertType: body.alertType || body.alert_type || body.type || undefined,
+    scriptGenerationId: body.scriptGenerationId || undefined,
+    selfTest: body.selfTest === true || body.self_test === true || undefined
   };
 }
 

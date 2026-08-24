@@ -19,6 +19,22 @@ describe('ActivationService helpers', () => {
     assert.equal(normalizeMpesaCode(' qh7x 2k9m1a '), 'QH7X2K9M1A');
   });
 
+  it('treats O/0 and I/1/L lookalike M-Pesa receipts as the same code', () => {
+    const {
+      canonicalizeMpesaCode,
+      mpesaCodesEquivalent,
+      mpesaLookalikeRegex
+    } = require('../../services/ActivationService');
+    assert.equal(canonicalizeMpesaCode('UHI2Q38OFV'), canonicalizeMpesaCode('UHI2Q380FV'));
+    assert.equal(mpesaCodesEquivalent('UHI2Q38OFV', 'UHI2Q380FV'), true);
+    assert.equal(mpesaCodesEquivalent('UHI2Q38OFV', 'QH7X2K9M1A'), false);
+    const re = mpesaLookalikeRegex('UHI2Q38OFV');
+    assert.ok(re.test('UHI2Q38OFV'));
+    assert.ok(re.test('UHI2Q380FV'));
+    assert.ok(re.test('uh12q380fv'));
+    assert.equal(re.test('UHI2Q38OFX'), false);
+  });
+
   it('maps payment methods to paymentSource constants', () => {
     assert.equal(mapPaymentSource('manual_mpesa'), 'MANUAL_MPESA');
     assert.equal(mapPaymentSource('manual_binance'), 'MANUAL_BINANCE');

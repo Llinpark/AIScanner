@@ -85,7 +85,8 @@ async function computeDeliveryStatistics() {
   const month = daysAgo(30);
 
   const entryFilter = {
-    alertType: { $in: ['entry', 'signal'] }
+    alertType: { $in: ['entry', 'signal'] },
+    selfTest: { $ne: true }
   };
 
   const monthEntry = { ...entryFilter, createdAt: { $gte: month } };
@@ -104,7 +105,7 @@ async function computeDeliveryStatistics() {
     failed,
     partial,
     telegramSentMonth,
-    telegramTotalMonth,
+    telegramAttemptedMonth,
     mt5SentMonth,
     mt5AttemptedMonth
   ] = await Promise.all([
@@ -115,15 +116,19 @@ async function computeDeliveryStatistics() {
     Signal.countDocuments({ ...monthEntry, deliveryStatus: 'failed' }),
     Signal.countDocuments({ ...monthEntry, deliveryStatus: 'partial' }),
     Signal.countDocuments({ ...monthEntry, telegramSent: true }),
-    Signal.countDocuments(monthEntry),
+    Signal.countDocuments({
+      ...monthEntry,
+      $or: [{ telegramAttempted: true }, { telegramSent: true }, { telegramAlertSent: true }]
+    }),
     Signal.countDocuments({ ...monthEntry, mt5Sent: true }),
     Signal.countDocuments(mt5AttemptedFilter)
   ]);
 
-  // Webhook success % from live ring (include parse/rate-limit failures).
+  // Webhook success % = Auth PASS / (Auth + parse/rate-limit failures).
+  // Do not count WebhookReceived PASS as success — intake can succeed while Auth fails.
   const live = await PipelineStatusService.getLivePipeline(100);
   const webhookEvents = (live.events || []).filter(e =>
-    /WebhookReceived|Auth|WebhookParseError|WebhookRateLimited/i.test(e.type || '')
+    e.type === 'Auth' || /WebhookParseError|WebhookRateLimited/i.test(e.type || '')
   );
   const webhookPass = webhookEvents.filter(e => e.status === 'PASS').length;
   const webhookSuccessPct = percent(webhookPass, webhookEvents.length);
@@ -136,7 +141,7 @@ async function computeDeliveryStatistics() {
     delivered,
     failed,
     partial,
-    telegramSuccessPct: percent(telegramSentMonth, telegramTotalMonth),
+    telegramSuccessPct: percent(telegramSentMonth, telegramAttemptedMonth),
     // null when no MT5 attempts in window → Admin shows "—" (N/A), not 0% failure.
     mt5SuccessPct: percent(mt5SentMonth, mt5AttemptedMonth),
     webhookSuccessPct,

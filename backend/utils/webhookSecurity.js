@@ -1,77 +1,20 @@
 const crypto = require('crypto');
 const { getEffectiveSubscription, isSubscriptionActive } = require('./subscriptionAccess');
+const LicenseTokenService = require('../services/LicenseTokenService');
 
-const LICENSE_PREFIX = 'kls_v1';
+const {
+  generateLicenseToken,
+  verifyLicenseToken,
+  verifyLicenseTokenDetailed,
+  diagnoseLicenseToken,
+  getLicenseSigningSecret,
+  isSmokeOrDevSigningSecret,
+  normalizeTradingViewUsername,
+  timingSafeEqualString
+} = LicenseTokenService;
 
 function getSigningSecret() {
-  const secret = process.env.WEBHOOK_SIGNING_SECRET || process.env.TRADINGVIEW_WEBHOOK_SECRET || '';
-  if (secret) return secret;
-  if (process.env.NODE_ENV === 'production') return '';
-  return process.env.JWT_SECRET || '';
-}
-
-function timingSafeEqualString(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string') return false;
-  const bufA = Buffer.from(a);
-  const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
-}
-
-function normalizeTradingViewUsername(value) {
-  return String(value || '')
-    .trim()
-    .replace(/^@/, '')
-    .toLowerCase();
-}
-
-/**
- * @param {string} userId
- * @param {string} tradingviewUsername Required — bound into the HMAC payload (tvu).
- */
-function generateLicenseToken(userId, tradingviewUsername) {
-  const signingSecret = getSigningSecret();
-  const tvu = normalizeTradingViewUsername(tradingviewUsername);
-  if (!signingSecret || !userId) {
-    throw new Error('Cannot generate license token without signing secret and user id');
-  }
-  if (!tvu) {
-    throw new Error('Cannot generate license token without TradingView username');
-  }
-
-  const payload = {
-    uid: String(userId),
-    tvu,
-    v: 2,
-    iat: Math.floor(Date.now() / 1000)
-  };
-
-  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const signature = crypto.createHmac('sha256', signingSecret).update(encoded).digest('base64url');
-  return `${LICENSE_PREFIX}.${encoded}.${signature}`;
-}
-
-function verifyLicenseToken(token) {
-  const signingSecret = getSigningSecret();
-  if (!signingSecret || !token) return null;
-
-  const parts = String(token).split('.');
-  if (parts.length !== 3 || parts[0] !== LICENSE_PREFIX) return null;
-
-  const [, encoded, signature] = parts;
-  const expected = crypto.createHmac('sha256', signingSecret).update(encoded).digest('base64url');
-  if (!timingSafeEqualString(signature, expected)) return null;
-
-  try {
-    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-    if (!payload?.uid) return null;
-    if (payload.tvu) {
-      payload.tvu = normalizeTradingViewUsername(payload.tvu);
-    }
-    return payload;
-  } catch {
-    return null;
-  }
+  return getLicenseSigningSecret();
 }
 
 function signRequestBody(rawBody) {
@@ -183,12 +126,12 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
   /**
    * Auth order (harden server-side without mass-breaking Pine scripts):
    * 1) HMAC body signature (x-kaching-signature) — preferred for server-to-server
-   * 2) Per-user licenseToken (kls_v1.*) — preferred for TradingView alert JSON
+   * 2) Per-user licenseToken (kls_v2.* / legacy kls_v1.*) — preferred for TradingView alert JSON
    * 3) Legacy global TRADINGVIEW_WEBHOOK_SECRET — anonymous use disabled in production
    *    unless ALLOW_LEGACY_WEBHOOK_SECRET=true; Pine scripts that embed both a
    *    licenseToken and secret may fall back to the secret when the token is stale
    *
-   * License tokens (v2) bind uid + TradingView username (tvu). Payload must include
+   * License tokens bind uid + TradingView username (tvu) + env. Payload must include
    * the same tradingviewUsername, and the subscriber account must still store that
    * username with an active (or admin-effective) subscription.
    *
@@ -227,32 +170,34 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
 
   const licenseToken = body.licenseToken || body.license_token;
   if (licenseToken) {
-    const claims = verifyLicenseToken(licenseToken);
+    const verified = verifyLicenseTokenDetailed(licenseToken);
+    const claims = verified.ok ? verified.claims : null;
     if (claims) {
+      const licenseDiagnostics = verified.diagnostics || diagnoseLicenseToken(licenseToken);
       if (bodyUserId && String(bodyUserId) !== String(claims.uid)) {
-        return { ok: false, reason: 'license_user_mismatch', body };
+        return { ok: false, reason: 'license_user_mismatch', licenseDiagnostics, body };
       }
 
       // v2+ tokens bind TradingView username; reject legacy tokens and mismatches.
       if (!claims.tvu) {
-        return { ok: false, reason: 'license_requires_tv_username', body };
+        return { ok: false, reason: 'license_requires_tv_username', licenseDiagnostics, body };
       }
       if (!bodyTvUsername || bodyTvUsername !== claims.tvu) {
-        return { ok: false, reason: 'license_tv_username_mismatch', body };
+        return { ok: false, reason: 'license_tv_username_mismatch', licenseDiagnostics, body };
       }
 
       if (resolveUserById) {
         const user = await resolveUserById(claims.uid);
         // Admins get an effective active premium sub — never check raw DB subscription alone.
         if (!user || !isSubscriptionActive(getEffectiveSubscription(user))) {
-          return { ok: false, reason: 'inactive_subscription', body };
+          return { ok: false, reason: 'inactive_subscription', licenseDiagnostics, body };
         }
 
         const storedTv = normalizeTradingViewUsername(
           user.tradingviewUsername || user.preferences?.tradingviewUsername || ''
         );
         if (!storedTv || storedTv !== claims.tvu) {
-          return { ok: false, reason: 'stored_tv_username_mismatch', body };
+          return { ok: false, reason: 'stored_tv_username_mismatch', licenseDiagnostics, body };
         }
       }
 
@@ -279,7 +224,12 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
       };
     }
 
-    return { ok: false, reason: 'invalid_license_token', body };
+    return {
+      ok: false,
+      reason: verified.reason || 'invalid_license_token',
+      licenseDiagnostics: verified.diagnostics || null,
+      body
+    };
   }
 
   if (bodyUserId) {
@@ -296,6 +246,10 @@ async function verifyTradingViewWebhook(req, resolveUserById) {
 module.exports = {
   generateLicenseToken,
   verifyLicenseToken,
+  verifyLicenseTokenDetailed,
+  diagnoseLicenseToken,
+  getSigningSecret,
+  isSmokeOrDevSigningSecret,
   signRequestBody,
   verifyRequestSignature,
   verifyTradingViewWebhook,

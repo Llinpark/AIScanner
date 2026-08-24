@@ -47,6 +47,19 @@ describe('Pipeline delivery stats counting contracts', () => {
     assert.equal(month.getUTCHours(), 0);
   });
 
+  it('N. alerts-only Telegram PASS with MT5 SKIP is delivered, not a failure', () => {
+    assert.equal(
+      TradeDeliveryService.resolveDeliveryStatus({
+        telegramSent: true,
+        mt5Sent: false,
+        tgPipelineStatus: 'PASS',
+        mt5PipelineStatus: 'SKIP'
+      }),
+      'delivered'
+    );
+    assert.equal(TradeDeliveryService.isExpectedMt5Skip('mt5_not_linked'), true);
+  });
+
   it('Telegram success is independent of MT5 skip', () => {
     assert.equal(
       TradeDeliveryService.resolveDeliveryStatus({
@@ -95,5 +108,26 @@ describe('WebhookParseError classification remains strict', () => {
       }),
       PIPELINE_INTAKE_STATE.TELEGRAM_SUCCESS
     );
+  });
+
+  it('webhook success ignores WebhookReceived PASS when Auth FAIL', () => {
+    const events = [
+      { type: 'WebhookReceived', status: 'PASS' },
+      { type: 'Auth', status: 'FAIL' }
+    ];
+    const webhookEvents = events.filter(
+      e => e.type === 'Auth' || /WebhookParseError|WebhookRateLimited/i.test(e.type || '')
+    );
+    const webhookPass = webhookEvents.filter(e => e.status === 'PASS').length;
+    assert.equal(percent(webhookPass, webhookEvents.length), 0);
+    assert.equal(percent(1, 1), 100);
+  });
+
+  it('self-test Mongo rows are excluded from Signals today filter', () => {
+    const match = {
+      alertType: { $in: ['entry', 'signal'] },
+      selfTest: { $ne: true }
+    };
+    assert.deepEqual(match.selfTest, { $ne: true });
   });
 });

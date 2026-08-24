@@ -16,8 +16,13 @@ const {
 } = require('../strategies/config/strategyArchitecture');
 const {
   generateLicenseToken,
-  normalizeTradingViewUsername
-} = require('../utils/webhookSecurity');
+  assertGeneratedToken,
+  isSmokeOrDevSigningSecret,
+  isSmokeOrDevIdentity,
+  isInternalProbeIdentity,
+  normalizeTradingViewUsername,
+  resolveTokenEnvironment
+} = require('./LicenseTokenService');
 const { getTierDisplayName, getEffectiveSubscription } = require('../utils/subscriptionAccess');
 const {
   PINE_CLIENT_VERSION,
@@ -268,6 +273,42 @@ function buildSweepVariables(base, config, title, shortTitle, strategyKey) {
   };
 }
 
+function assertProductionSafePineMint({ userId, webhookUrl, licenseToken, tradingviewUsername }) {
+  if (isSmokeOrDevIdentity(userId, tradingviewUsername) || isInternalProbeIdentity(userId, tradingviewUsername)) {
+    if (process.env.NODE_ENV === 'production') {
+      const err = new Error('Refusing to mint production Pine for a smoke/dev user.');
+      err.code = 'unsafe_pine_generation';
+      throw err;
+    }
+  }
+
+  if (licenseToken) {
+    assertGeneratedToken(licenseToken, {
+      userId,
+      tradingviewUsername,
+      env: resolveTokenEnvironment()
+    });
+  }
+
+  if (process.env.NODE_ENV !== 'production') return;
+
+  if (/localhost|127\.0\.0\.1/i.test(String(webhookUrl || ''))) {
+    const err = new Error('Refusing to mint production Pine with a localhost webhook URL.');
+    err.code = 'unsafe_pine_generation';
+    throw err;
+  }
+  if (!process.env.WEBHOOK_SIGNING_SECRET) {
+    const err = new Error('Cannot generate production Pine without WEBHOOK_SIGNING_SECRET.');
+    err.code = 'unsafe_pine_generation';
+    throw err;
+  }
+  if (isSmokeOrDevSigningSecret(process.env.WEBHOOK_SIGNING_SECRET)) {
+    const err = new Error('Refusing to mint production Pine with a smoke/dev signing secret.');
+    err.code = 'unsafe_pine_generation';
+    throw err;
+  }
+}
+
 function generateForUser(user, options = {}) {
   const userId = user._id?.toString() || user.id || '';
   const subscription = getEffectiveSubscription(user);
@@ -291,7 +332,23 @@ function generateForUser(user, options = {}) {
   const pineCapabilities = [...CURRENT_PINE_CAPABILITIES];
   const tierLabel = getTierDisplayName(tier);
   const subscriberLabel = user.email || user.displayName || userId || 'subscriber';
-  const licenseToken = userId ? generateLicenseToken(userId, tvUsername) : '';
+  const licenseToken = userId
+    ? generateLicenseToken(userId, tvUsername, { scriptGenerationId })
+    : '';
+  try {
+    assertProductionSafePineMint({
+      userId,
+      webhookUrl,
+      licenseToken,
+      tradingviewUsername: tvUsername
+    });
+  } catch (err) {
+    console.error(
+      `[PineScriptGenerator] mint self-check failed code=${err.code || 'unknown'} ` +
+        `reason=${err.reason || err.message} uidLen=${String(userId || '').length}`
+    );
+    throw err;
+  }
 
   const base = {
     SUBSCRIBER_LABEL: escapePineString(subscriberLabel),
@@ -371,6 +428,11 @@ function generateForUser(user, options = {}) {
     EVENT_ARM,
     DRAWING_RUNTIME
   });
+  if (/\bkls_v1\b/.test(script) || String(licenseToken || '').startsWith('kls_v1')) {
+    const err = new Error('Generated Pine still contains a stale kls_v1 license token.');
+    err.code = 'unsafe_pine_generation';
+    throw err;
+  }
 
   const versionMeta = {
     pineClientVersion,
@@ -429,9 +491,10 @@ function generateForUser(user, options = {}) {
       `3) Create ONE alert on this chart for this script. Condition: Kaching indicator → Any alert() function call. Enable Webhook URL and paste exactly: ${webhookUrl}`,
       '4) Message: type exactly {{alert_message}} so TradingView substitutes the Pine alert() JSON. Never {{strategy.order.alert_message}} — that strategy() placeholder arrives as a literal {{…}} string and fails JSON parse.',
       '5) Never type custom JSON into the Message field. Never wrap, edit, or replace the payload from alert().',
+      'Leave TradingView Email / SMS / popup-as-email OFF. Kaching already emails and Telegrams a formatted trade alert. Enabling TV Email would send the raw JSON webhook payload to subscribers.',
       'Alert frequency: Once Per Bar Close (script already uses alert.freq_all on confirmed bars). Expiration: Open-ended / no expire — do not let the alert expire or webhooks stop.',
       'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',
-      '6) After regenerating Pine: delete the old alert and create a new one (stale Message / strategy placeholders break webhooks).',
+      '6) After regenerating Pine: remove the old indicator, paste this new script, delete the old TradingView alert, then create a new alert. Condition: Kaching indicator → Any alert() function call. Webhook: the URL above. Message: exactly {{alert_message}}. Local/test/smoke scripts will fail production auth — only use Pine generated from this production account.',
       'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs ([PIPELINE] DEBUG STATE / ALERT NOT FIRED / DRAWING CREATED / ALERT FIRING) for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, bar unconfirmed, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
       'Entry/SL/TP drawings arm with the same confirmed fireLong/fireShort event as alert(). DRAWING CREATED always precedes ALERT FIRING in Pine Logs. TradingView ignores alert() on historical bars.',
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
@@ -445,6 +508,7 @@ function generateForUser(user, options = {}) {
 
 module.exports = {
   generateForUser,
+  assertProductionSafePineMint,
   escapePineString,
   buildScriptId,
   buildScriptGenerationId,

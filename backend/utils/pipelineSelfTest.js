@@ -7,7 +7,7 @@
 
 const http = require('http');
 const { randomUUID } = require('crypto');
-const { generateLicenseToken } = require('./webhookSecurity');
+const { generateLicenseToken } = require('../services/LicenseTokenService');
 const { logPipeline } = require('./pipelineLog');
 const { WEBHOOK_TRADINGVIEW_URL } = require('../config/appUrls');
 

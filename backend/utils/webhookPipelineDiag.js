@@ -66,7 +66,7 @@ function redactRawPreview(raw, maxLen = 160) {
   const scrubbed = text
     .replace(/"(licenseToken|license_token)"\s*:\s*"[^"]*"/gi, '"$1":"[REDACTED]"')
     .replace(/"(secret|password|token)"\s*:\s*"[^"]*"/gi, '"$1":"[REDACTED]"')
-    .replace(/kls_v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, 'kls_v1.[REDACTED]');
+    .replace(/kls_v[12]\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, 'kls_v*.[REDACTED]');
   if (scrubbed.length <= maxLen) return scrubbed;
   return `${scrubbed.slice(0, maxLen)}…[truncated]`;
 }

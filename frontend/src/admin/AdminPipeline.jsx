@@ -260,11 +260,48 @@ export default function AdminPipeline() {
           <div className="admin-meta-item">
             <dt>Last Auth PASS/FAIL</dt>
             <dd>
-              {status?.lastFailureStage === 'Auth'
-                ? `FAIL — ${status.lastFailureReason || 'unauthorized'}`
-                : status?.lastAuthPassed
-                  ? `PASS — ${formatDate(status.lastAuthPassed.at)}`
-                  : '—'}
+              {(() => {
+                const failed = status?.lastAuthFailed;
+                const passed = status?.lastAuthPassed;
+                const failIsLatest =
+                  Boolean(failed?.at) &&
+                  (!passed?.at || new Date(failed.at).getTime() >= new Date(passed.at).getTime());
+                if (failIsLatest || status?.lastFailureStage === 'Auth') {
+                  const reason =
+                    (failIsLatest ? failed?.reason : null) ||
+                    status?.lastFailureReason ||
+                    'unauthorized';
+                  return `FAIL — ${reason}`;
+                }
+                if (passed) return `PASS — ${formatDate(passed.at)}`;
+                return '—';
+              })()}
+              {status?.lastAuthDiagnostics && (
+                <div className="admin-muted" style={{ marginTop: 4, fontSize: '0.85em' }}>
+                  {[
+                    status.lastAuthDiagnostics.requestId
+                      ? `requestId=${status.lastAuthDiagnostics.requestId}`
+                      : null,
+                    status.lastAuthDiagnostics.tokenVersion
+                      ? `tokenVersion=${status.lastAuthDiagnostics.tokenVersion}`
+                      : null,
+                    status.lastAuthDiagnostics.tokenEnvironment
+                      ? `tokenEnv=${status.lastAuthDiagnostics.tokenEnvironment}`
+                      : null,
+                    status.lastAuthDiagnostics.scriptGenerationId
+                      ? `scriptGenerationId=${status.lastAuthDiagnostics.scriptGenerationId}`
+                      : null,
+                    status.lastAuthDiagnostics.symbol
+                      ? `symbol=${status.lastAuthDiagnostics.symbol}`
+                      : null,
+                    status.lastAuthDiagnostics.alertType
+                      ? `alertType=${status.lastAuthDiagnostics.alertType}`
+                      : null
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </div>
+              )}
             </dd>
           </div>
           <div className="admin-meta-item">
@@ -279,7 +316,19 @@ export default function AdminPipeline() {
           </div>
           <div className="admin-meta-item">
             <dt>Last Mongo Save</dt>
-            <dd>{formatDate(status?.lastMongoSave?.at)}</dd>
+            <dd>
+              {formatDate(status?.lastMongoSave?.at)}
+              {status?.lastMongoSaveDurable === false ||
+              status?.lastMongoSaveIsInMemoryFallback ||
+              status?.lastMongoSaveIsSelfTest ? (
+                <div className="admin-muted" style={{ marginTop: 4, fontSize: '0.85em' }}>
+                  {status?.lastMongoSaveNote ||
+                    (status?.lastMongoSaveIsSelfTest
+                      ? 'Self-test / non-production telemetry — not a durable production Signal'
+                      : 'In-memory fallback — not a durable Mongo Signal')}
+                </div>
+              ) : null}
+            </dd>
           </div>
           <div className="admin-meta-item">
             <dt>Last Telegram Delivery</dt>

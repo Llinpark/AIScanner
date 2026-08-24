@@ -178,10 +178,11 @@ describe('Telegram Alerts Only message format', () => {
     };
     const subscriber = proUser({ telegram: { telegramMode: 'alerts_only' } });
     const text = TelegramService.formatAlertsOnlyMessage(signal, subscriber);
-    assert.match(text, /Kaching AI BUY/);
-    assert.match(text, /Manual Trading/);
+    assert.match(text, /KACHING BUY/);
+    assert.match(text, /EURUSD/);
     assert.doesNotMatch(text, /Execute Trade/);
     assert.doesNotMatch(text, /Ignore Trade/);
+    assert.doesNotMatch(text, /licenseToken|signalUuid|canonicalSignalKey/);
 
     const markup = TelegramService.buildSignalReplyMarkup(signal, subscriber, {
       alertOnly: true,
@@ -252,7 +253,7 @@ describe('Telegram Alerts Only message format', () => {
       includeExecuteButton: false
     });
     assert.doesNotMatch(text, /Manual Trading — open your preferred trading platform/);
-    assert.match(text, /Kaching Entry|Symbol/i);
+    assert.match(text, /KACHING BUY/);
 
     // Premium auto path: no Execute buttons (includeExecuteButton false / alertOnly false).
     const markup = TelegramService.buildSignalReplyMarkup(signal, subscriber, {

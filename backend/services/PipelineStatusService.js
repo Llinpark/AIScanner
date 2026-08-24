@@ -1,6 +1,11 @@
 /**
  * Lightweight pipeline diagnostics store (in-memory + optional Redis).
  * Updated by log hooks only — no strategy behaviour changes.
+ *
+ * Production Redis isolation:
+ * - Self-test / NODE_ENV=test / STEST* / selftest_* telemetry updates local memory only.
+ * - Those events must NOT write kaching:pipeline:* on shared Upstash Redis.
+ * - Opt-in escape hatch: ALLOW_PIPELINE_TEST_REDIS=true
  */
 
 const { getRedisClient } = require('../utils/redisClient');
@@ -15,6 +20,7 @@ const {
 
 const REDIS_KEY = 'kaching:pipeline:status';
 const REDIS_EVENTS_KEY = 'kaching:pipeline:events';
+const REDIS_KEY_PREFIX = 'kaching:pipeline:';
 const REDIS_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 const RING_MAX = 100;
 
@@ -23,6 +29,7 @@ const EMPTY = () => ({
   lastAlertFired: null,
   lastWebhookReceived: null,
   lastAuthPassed: null,
+  lastAuthFailed: null,
   lastValidation: null,
   lastMongoSave: null,
   lastPublished: null,
@@ -54,7 +61,46 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+/**
+ * True when pipeline telemetry must stay off shared production Redis.
+ * Local/unit/self-test may still update in-process memory for assertions.
+ */
+function isNonProductionPipelineTelemetry(meta = {}) {
+  if (allowPipelineTestRedis()) {
+    return false;
+  }
+  if (process.env.NODE_ENV === 'test') return true;
+  if (String(process.env.PIPELINE_SELF_TEST_ACTIVE || '').trim() === 'true') return true;
+  if (meta.selfTest === true || meta.self_test === true) return true;
+  const symbol = String(meta.symbol || '').trim().toUpperCase();
+  if (symbol.startsWith('STEST')) return true;
+  const uuid = String(meta.signalUuid || meta.signalId || meta.uuid || '').trim();
+  if (/^selftest_/i.test(uuid)) return true;
+  return false;
+}
+
+function isInMemoryFallbackStamp(entry) {
+  return /in_memory_fallback/i.test(String(entry?.reason || ''));
+}
+
+function isSelfTestStamp(entry) {
+  if (!entry) return false;
+  if (entry.selfTest === true || entry.telemetrySource === 'non_production') return true;
+  const symbol = String(entry.symbol || '').toUpperCase();
+  if (symbol.startsWith('STEST')) return true;
+  const uuid = String(entry.signalUuid || '').trim();
+  return /^selftest_/i.test(uuid);
+}
+
+function isDurableMongoSaveStamp(entry) {
+  if (!entry) return false;
+  if (isSelfTestStamp(entry)) return false;
+  if (isInMemoryFallbackStamp(entry)) return false;
+  return true;
+}
+
 function stamp(meta = {}) {
+  const nonProd = isNonProductionPipelineTelemetry(meta);
   return {
     at: nowIso(),
     symbol: meta.symbol || null,
@@ -62,7 +108,14 @@ function stamp(meta = {}) {
     signalUuid: meta.signalUuid || meta.signalId || meta.uuid || null,
     reason: meta.reason || meta.message || null,
     userId: meta.userId || meta.subscriberId || null,
-    latencyMs: meta.latencyMs != null ? Number(meta.latencyMs) : null
+    latencyMs: meta.latencyMs != null ? Number(meta.latencyMs) : null,
+    requestId: meta.requestId || null,
+    tokenVersion: meta.tokenVersion || null,
+    tokenEnvironment: meta.tokenEnvironment || null,
+    scriptGenerationId: meta.scriptGenerationId || null,
+    alertType: meta.alertType || null,
+    selfTest: Boolean(meta.selfTest || meta.self_test || nonProd),
+    telemetrySource: nonProd ? 'non_production' : 'production'
   };
 }
 
@@ -72,18 +125,39 @@ function pushLatency(bucket, value, max = 200) {
   if (bucket.length > max) bucket.splice(0, bucket.length - max);
 }
 
-function pushEvent(event) {
+function pushEvent(event, { persist = true } = {}) {
   ring.push(event);
   if (ring.length > RING_MAX) {
     ring.splice(0, ring.length - RING_MAX);
   }
-  void persistEventsRedis();
+  if (persist) {
+    void persistEventsRedis();
+  }
+}
+
+function productionRingEvents() {
+  return ring.filter(e => !isSelfTestStamp(e) && e?.telemetrySource !== 'non_production');
+}
+
+function allowPipelineTestRedis() {
+  return String(process.env.ALLOW_PIPELINE_TEST_REDIS || '').trim().toLowerCase() === 'true';
 }
 
 async function persistRedis() {
   try {
     const redis = await getRedisClient();
     if (!redis) return;
+    // Never clobber shared Redis with self-test / in-memory-fallback snapshots
+    // unless explicitly opted in via ALLOW_PIPELINE_TEST_REDIS.
+    if (!allowPipelineTestRedis()) {
+      if (
+        isSelfTestStamp(memory.lastWebhookReceived) ||
+        isSelfTestStamp(memory.lastMongoSave) ||
+        isInMemoryFallbackStamp(memory.lastMongoSave)
+      ) {
+        return;
+      }
+    }
     await redis.setEx(REDIS_KEY, REDIS_TTL_SECONDS, JSON.stringify(memory));
   } catch {
     // Diagnostics must never break the webhook path.
@@ -94,7 +168,10 @@ async function persistEventsRedis() {
   try {
     const redis = await getRedisClient();
     if (!redis) return;
-    await redis.setEx(REDIS_EVENTS_KEY, REDIS_TTL_SECONDS, JSON.stringify(ring.slice(-RING_MAX)));
+    const durable = allowPipelineTestRedis()
+      ? ring.slice(-RING_MAX)
+      : productionRingEvents().slice(-RING_MAX);
+    await redis.setEx(REDIS_EVENTS_KEY, REDIS_TTL_SECONDS, JSON.stringify(durable));
   } catch {
     // ignore
   }
@@ -118,7 +195,7 @@ async function hydrateFromRedis() {
     if (eventsRaw) {
       const parsedEvents = JSON.parse(eventsRaw);
       if (Array.isArray(parsedEvents)) {
-        ring = parsedEvents.slice(-RING_MAX);
+        ring = parsedEvents.filter(e => !isSelfTestStamp(e)).slice(-RING_MAX);
       }
     }
   } catch {
@@ -185,23 +262,36 @@ function record(stage, status, meta = {}) {
   // Expected channel skips (e.g. MT5 not linked while Telegram-only is valid).
   // Must not pollute lastFailure* / deliveryFailures / intake classification.
   const skip = statusUpper === 'SKIP' || statusUpper === 'N/A';
+  const nonProd = isNonProductionPipelineTelemetry(meta);
   const entry = stamp(meta);
   memory.updatedAt = entry.at;
   memory.currentPipelineStage = s || memory.currentPipelineStage;
 
-  pushEvent({
-    type: s,
-    status: ok ? 'PASS' : skip ? statusUpper : statusUpper || 'FAIL',
-    at: entry.at,
-    symbol: entry.symbol,
-    timeframe: entry.timeframe,
-    signalUuid: entry.signalUuid,
-    userId: entry.userId,
-    reason: entry.reason,
-    latencyMs: entry.latencyMs
-  });
+  pushEvent(
+    {
+      type: s,
+      status: ok ? 'PASS' : skip ? statusUpper : statusUpper || 'FAIL',
+      at: entry.at,
+      symbol: entry.symbol,
+      timeframe: entry.timeframe,
+      signalUuid: entry.signalUuid,
+      userId: entry.userId,
+      reason: entry.reason,
+      latencyMs: entry.latencyMs,
+      requestId: entry.requestId,
+      tokenVersion: entry.tokenVersion,
+      tokenEnvironment: entry.tokenEnvironment,
+      scriptGenerationId: entry.scriptGenerationId,
+      alertType: entry.alertType,
+      selfTest: entry.selfTest,
+      telemetrySource: entry.telemetrySource
+    },
+    { persist: !nonProd }
+  );
 
-  trackInflight(s, ok, entry);
+  if (!nonProd) {
+    trackInflight(stage, ok, entry);
+  }
 
   if (/^WebhookReceived$/i.test(s)) {
     memory.lastWebhookReceived = entry;
@@ -213,6 +303,7 @@ function record(stage, status, meta = {}) {
   } else if (/^Auth$/i.test(s)) {
     if (ok) memory.lastAuthPassed = entry;
     else if (!skip) {
+      memory.lastAuthFailed = entry;
       memory.authFailures += 1;
       memory.webhookFailures += 1;
     }
@@ -245,7 +336,9 @@ function record(stage, status, meta = {}) {
     memory.lastFailureReason = entry.reason || 'failed';
   }
 
-  void persistRedis();
+  if (!nonProd) {
+    void persistRedis();
+  }
   return memory;
 }
 
@@ -280,11 +373,9 @@ function isPipelineHealthy(memoryState, opts = {}) {
     memoryState.lastWebhookReceived?.at ||
     memoryState.lastAuthPassed?.at;
   if (memoryState.lastFailureStage && lastFailAt && lastOk) {
-    // Unhealthy only if last update was a failure and no later success fields are newer — simplified:
-    // if current stage failed recently without a subsequent mongo/webhook success.
+    // simplified health heuristic retained
   }
   if (opts.forceUnhealthy) return false;
-  // Soft health: no recent auth storm / no last failure without later webhook success.
   if (!memoryState.lastFailureStage) return true;
   const failStage = memoryState.lastFailureStage;
   const webhookAt = memoryState.lastWebhookReceived?.at
@@ -292,13 +383,10 @@ function isPipelineHealthy(memoryState, opts = {}) {
     : 0;
   const failIsAuthOrValidation = /auth|validation|webhook/i.test(failStage);
   if (!failIsAuthOrValidation) {
-    // Delivery failures do not mark whole pipeline unhealthy.
     return Boolean(memoryState.lastWebhookReceived);
   }
-  // If we have a webhook after the failure timestamp, recover.
   const updated = memoryState.updatedAt ? new Date(memoryState.updatedAt).getTime() : 0;
   if (webhookAt && webhookAt >= updated - 1000) return true;
-  // Stale failure without activity → still "healthy" for waiting TV (yellow UI elsewhere).
   return true;
 }
 
@@ -310,14 +398,22 @@ async function getStatus(extra = {}) {
     strategy: extra.activeStrategy || process.env.PINE_DEFAULT_STRATEGY || 'daytrading'
   });
 
+  const authFailIsLatest =
+    Boolean(memory.lastAuthFailed?.at) &&
+    (!memory.lastAuthPassed?.at ||
+      new Date(memory.lastAuthFailed.at).getTime() >= new Date(memory.lastAuthPassed.at).getTime());
+
   const timeline = buildPipelineTimeline({
     pineGeneratedAt: extra.pineGeneratedAt || null,
     lastWebhookAt: memory.lastWebhookReceived?.at || null,
     lastAlertFiredAt: memory.lastAlertFired?.at || null,
-    lastAuthAt: memory.lastAuthPassed?.at || null,
-    lastAuthFail: memory.lastFailureStage === 'Auth',
-    lastAuthFailReason:
-      memory.lastFailureStage === 'Auth' ? memory.lastFailureReason : null,
+    lastAuthAt: authFailIsLatest ? memory.lastAuthFailed?.at : memory.lastAuthPassed?.at || null,
+    lastAuthFail: authFailIsLatest || memory.lastFailureStage === 'Auth',
+    lastAuthFailReason: authFailIsLatest
+      ? memory.lastAuthFailed?.reason || memory.lastFailureReason
+      : memory.lastFailureStage === 'Auth'
+        ? memory.lastFailureReason
+        : null,
     lastValidationAt: memory.lastValidation?.at || null,
     lastValidationFail: memory.lastFailureStage === 'Validation',
     lastValidationFailReason:
@@ -344,10 +440,12 @@ async function getStatus(extra = {}) {
     intakeState = memory.lastWebhookReceived ? 'PIPELINE_ACTIVE' : 'NO_WEBHOOK_RECEIVED';
   }
 
+  const mongoDurable = isDurableMongoSaveStamp(memory.lastMongoSave);
+  const webhookIsSelfTest = isSelfTestStamp(memory.lastWebhookReceived);
+
   return {
     intakeState,
     ...memory,
-    // Keep arrays out of default JSON if huge — expose summaries instead.
     pipelineLatenciesMs: undefined,
     webhookToMongoMs: undefined,
     mongoToTelegramMs: undefined,
@@ -362,11 +460,40 @@ async function getStatus(extra = {}) {
       registeredAt: t.registeredAt || t.createdAt || null
     })),
     currentOpenTradesCount: openFromRegistry.length,
-    // Extended admin fields (task 7)
     pipelineHealthy,
     lastWebhook: memory.lastWebhookReceived,
+    lastAuthFailed: memory.lastAuthFailed,
+    lastAuthDiagnostics: (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed)
+      ? {
+          requestId: (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).requestId || null,
+          tokenVersion:
+            (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).tokenVersion || null,
+          tokenEnvironment:
+            (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).tokenEnvironment ||
+            null,
+          scriptGenerationId:
+            (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).scriptGenerationId ||
+            null,
+          symbol: (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).symbol || null,
+          alertType: (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).alertType || null,
+          timestamp: (authFailIsLatest ? memory.lastAuthFailed : memory.lastAuthPassed).at || null
+        }
+      : null,
     lastPublishedSignal: memory.lastPublished || memory.lastMongoSave,
     lastMongoSave: memory.lastMongoSave,
+    lastMongoSaveDurable: mongoDurable,
+    lastMongoSaveIsSelfTest: isSelfTestStamp(memory.lastMongoSave),
+    lastMongoSaveIsInMemoryFallback: isInMemoryFallbackStamp(memory.lastMongoSave),
+    lastWebhookIsSelfTest: webhookIsSelfTest,
+    lastMongoSaveNote: !memory.lastMongoSave
+      ? null
+      : mongoDurable
+        ? 'Durable Mongo Signal persist'
+        : isSelfTestStamp(memory.lastMongoSave)
+          ? 'Non-production self-test telemetry — not a real TradingView Mongo Signal'
+          : isInMemoryFallbackStamp(memory.lastMongoSave)
+            ? 'In-memory fallback — not a durable Mongo Signal document'
+            : 'Non-durable pipeline telemetry',
     lastTelegram: memory.lastTelegramDelivery,
     lastSocket: memory.lastSocketDelivery,
     lastMT5: memory.lastMT5Delivery,
@@ -400,6 +527,25 @@ async function getLivePipeline(limit = RING_MAX) {
   };
 }
 
+/**
+ * One-time maintenance helper: delete only PipelineStatus Redis keys.
+ * Does not touch sessions, rate limits, auth, or unrelated caches.
+ */
+async function clearPipelineStatusRedisKeys() {
+  const redis = await getRedisClient();
+  if (!redis) {
+    return { ok: false, reason: 'redis_unavailable', deleted: [] };
+  }
+  const keys = [REDIS_KEY, REDIS_EVENTS_KEY];
+  const deleted = [];
+  for (const key of keys) {
+    const n = await redis.del(key);
+    if (n) deleted.push(key);
+  }
+  resetForTests();
+  return { ok: true, deleted, prefix: REDIS_KEY_PREFIX };
+}
+
 module.exports = {
   record,
   getStatus,
@@ -408,7 +554,14 @@ module.exports = {
   getLatencySummary,
   computeAveragePipelineLatency,
   resetForTests,
+  isNonProductionPipelineTelemetry,
+  isDurableMongoSaveStamp,
+  isSelfTestStamp,
+  isInMemoryFallbackStamp,
+  clearPipelineStatusRedisKeys,
   REDIS_KEY,
+  REDIS_EVENTS_KEY,
+  REDIS_KEY_PREFIX,
   RING_MAX,
   percent
 };

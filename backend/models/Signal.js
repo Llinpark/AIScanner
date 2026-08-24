@@ -56,6 +56,8 @@ const SignalSchema = new mongoose.Schema({
   signalSource: { type: String, default: 'tradingview' },
   /** Permanent trade id from Pine / webhook — never overwritten after confirm. */
   signalUuid: { type: String, index: true },
+  /** Non-secret Pine generation id from the webhook body (diagnostics). */
+  scriptGenerationId: { type: String },
   /** Alias kept for clients that send signalId. */
   signalId: { type: String, index: true },
   strategyName: { type: String },
@@ -114,8 +116,11 @@ const SignalSchema = new mongoose.Schema({
   },
   mt5ConfirmExpiresAt: { type: Date },
   telegramSent: { type: Boolean, default: false },
+  telegramAttempted: { type: Boolean, default: false },
   mt5Sent: { type: Boolean, default: false },
   emailSent: { type: Boolean, default: false },
+  /** Dev/self-test marker — excluded from production Admin signal counts. */
+  selfTest: { type: Boolean, default: false },
   /**
    * How this signal was routed for execution (additive analytics / journal).
    * telegram_alert = Pro Alerts Only (no MT5 queue).

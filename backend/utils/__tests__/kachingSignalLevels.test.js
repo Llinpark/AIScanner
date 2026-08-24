@@ -19,6 +19,20 @@ describe('normalizeSignalLevels — never invent prices', () => {
     assert.equal(levels.take_profit_3, 1.13);
   });
 
+  it('aliases camelCase / tpN / stopLoss fields without inventing prices', () => {
+    const levels = normalizeSignalLevels({
+      entry: 1.1754,
+      stopLoss: 1.1745,
+      takeProfit1: 1.1762,
+      takeProfit2: 1.177,
+      tp3: 1.1782
+    });
+    assert.equal(levels.stop_loss, 1.1745);
+    assert.equal(levels.take_profit_1, 1.1762);
+    assert.equal(levels.take_profit_2, 1.177);
+    assert.equal(levels.take_profit_3, 1.1782);
+  });
+
   it('does not invent SL/TP when missing', () => {
     const levels = normalizeSignalLevels({ entry: 100, direction: 'long' });
     assert.equal(levels.entry, 100);

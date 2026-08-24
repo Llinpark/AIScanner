@@ -22,6 +22,7 @@ const { logPipeline, extractPipelineMeta } = require('../utils/pipelineLog');
 const { extractPineClientMeta } = require('../utils/PineClientVersion');
 const { attachOptionalContext } = require('../utils/PineWebhookContext');
 const PineClientDecisionFramework = require('./PineClientDecisionFramework');
+const SubscriberSignalFormatter = require('./SubscriberSignalFormatter');
 
 function isDbConnected() {
   return mongoose.connection.readyState === 1;
@@ -446,7 +447,14 @@ async function broadcastToSubscribers(io, signalData, inMemorySignals = [], opti
 
 function emitLifecycleSocket(io, signalDoc, alertType) {
   if (!io || !signalDoc) return;
-  const payload = signalDoc.toObject ? signalDoc.toObject() : signalDoc;
+  const payload = { ...(signalDoc.toObject ? signalDoc.toObject() : signalDoc) };
+  payload.notes = SubscriberSignalFormatter.sanitizeSubscriberNotes(payload.notes);
+  if (
+    typeof payload.message === 'string' &&
+    SubscriberSignalFormatter.looksLikeRawPayload(payload.message)
+  ) {
+    payload.message = payload.notes;
+  }
   const type = String(alertType || payload.alertType || '').toLowerCase();
   const TradeLifecycle = require('./TradeLifecycleService');
 
@@ -499,7 +507,9 @@ function buildSignalData(body) {
     direction,
     ...levels,
     confidence: Math.min(Math.max(parseFloat(body.confidence || 0) || 0, 0), 1),
-    notes: body.message || body.note || body.notes || KACHING_ALERT_NAMES.signal,
+    notes: SubscriberSignalFormatter.sanitizeSubscriberNotes(
+      body.message || body.note || body.notes || KACHING_ALERT_NAMES.signal
+    ),
     alertType: normalizeAlertType(body.alertType || body.alert_type || body.type),
     pattern: body.pattern || null,
     patternLabel: body.patternLabel || body.pattern_label || null,

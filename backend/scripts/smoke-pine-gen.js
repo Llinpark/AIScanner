@@ -1,3 +1,12 @@
+if (process.env.NODE_ENV === 'production') {
+  console.error('smoke-pine-gen is test-only and cannot run when NODE_ENV=production.');
+  process.exit(1);
+}
+if (process.env.NODE_ENV !== 'test' && process.env.KACHING_TEST_ONLY !== '1') {
+  console.error('smoke-pine-gen requires NODE_ENV=test or KACHING_TEST_ONLY=1.');
+  process.exit(1);
+}
+
 process.env.TRADINGVIEW_WEBHOOK_SECRET =
   process.env.TRADINGVIEW_WEBHOOK_SECRET || 'smoke-test-tv-webhook-secret';
 process.env.WEBHOOK_SIGNING_SECRET =
@@ -293,6 +302,8 @@ for (const [label, g] of [
   assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);
   assert(g.script.includes('alert.freq_all'), `${label}: lifecycle alerts must use freq_all`);
   assert(g.script.includes('licenseToken'), `${label}: missing licenseToken auth`);
+  assert(!g.script.includes('kls_v1'), `${label}: generated Pine must not embed kls_v1`);
+  assert(String(g.licenseToken || '').startsWith('kls_v2.'), `${label}: licenseToken must be kls_v2`);
   assert(!g.script.includes('"secret":'), `${label}: must not embed global webhook secret in payload`);
   assert(!g.script.includes('WEBHOOK_SECRET = "'), `${label}: must not bake WEBHOOK_SECRET into Pine`);
   assert(

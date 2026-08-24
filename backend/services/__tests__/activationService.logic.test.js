@@ -11,6 +11,9 @@ process.env.RESEND_API_KEY = '';
 
 const {
   normalizeMpesaCode,
+  canonicalizeMpesaCode,
+  mpesaCodesEquivalent,
+  mpesaLookalikeRegex,
   normalizeBinanceTxId,
   normalizeManualMethod,
   mapPaymentSource,
@@ -107,6 +110,15 @@ describe('Duplicate reference contract', () => {
   it('normalized codes collide case-insensitively', () => {
     assert.equal(normalizeMpesaCode('qh7x2k9m1abc'), normalizeMpesaCode('QH7X2K9M1ABC'));
     assert.equal(normalizeBinanceTxId(' ab-12cd '), normalizeBinanceTxId('AB-12CD'));
+  });
+
+  it('canonicalizes O/0 lookalike M-Pesa codes used by duplicate subscribers', () => {
+    assert.equal(canonicalizeMpesaCode('UHI2Q38OFV'), 'UH12Q380FV');
+    assert.equal(canonicalizeMpesaCode('UHI2Q380FV'), 'UH12Q380FV');
+    assert.equal(mpesaCodesEquivalent('UHI2Q38OFV', 'UHI2Q380FV'), true);
+    const re = mpesaLookalikeRegex('UHI2Q38OFV');
+    assert.ok(re.test('UHI2Q380FV'));
+    assert.equal(re.test('UHI2Q38AAA'), false);
   });
 
   it('normalizes method aliases to manual providers', () => {
