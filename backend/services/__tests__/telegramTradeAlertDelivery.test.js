@@ -9,11 +9,14 @@ const assert = require('node:assert/strict');
 const TelegramService = require('../TelegramService');
 const TradeDeliveryService = require('../TradeDeliveryService');
 const { subscriberAllowsSignal } = require('../TradingViewAlertService');
+const deliveryIdempotency = require('../../utils/deliveryIdempotency');
 
+let signalSeq = 0;
 function entrySignal(overrides = {}) {
+  signalSeq += 1;
   return {
-    _id: 'sig_tg_1',
-    signalUuid: 'uuid-tg-1',
+    _id: `sig_tg_${signalSeq}`,
+    signalUuid: `uuid-tg-${signalSeq}`,
     alertType: 'entry',
     symbol: 'EURUSD',
     direction: 'long',
@@ -59,6 +62,7 @@ describe('Telegram trade-alert delivery gates', () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
+    deliveryIdempotency.resetForTests();
     process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token-not-real';
   });
 

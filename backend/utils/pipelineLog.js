@@ -53,8 +53,25 @@ function extractPipelineMeta(body = {}) {
     timeframe: body.timeframe || body.interval || body.tf,
     signalUuid: body.signalUuid || body.signalId || body.signal_id || body.signalGroupId,
     alertType: body.alertType || body.alert_type || body.type || undefined,
+    eventTimestamp: body.eventTimestamp || body.signalTime || body.timestamp || body.barTime || undefined,
     scriptGenerationId: body.scriptGenerationId || undefined,
-    selfTest: body.selfTest === true || body.self_test === true || undefined
+    selfTest: body.selfTest === true || body.self_test === true || undefined,
+    requestId: body.pipelineRequestId || body.requestId || undefined,
+    eventId: body.eventId || body.event_id || undefined,
+    canonicalTradeId: body.canonicalTradeId || body.canonical_trade_id || undefined,
+    eventType: body.eventType || body.event_type || undefined,
+    eventSequence: body.eventSequence || body.event_sequence || undefined,
+    pineClientVersion: body.pineClientVersion || body.pine_client_version || undefined,
+    detectedPineVersion: body.detectedPineVersion || body.pineClientVersion || body.pine_client_version || undefined,
+    compatibilityAdapter: body.compatibilityAdapter || undefined,
+    compatibilityMode: body.compatibilityMode || undefined,
+    compatibilityLabel: body.compatibilityLabel || undefined,
+    legacy: body.legacy === true || body.legacyAdapted === true || undefined,
+    isRealtimeState: body.isRealtimeState || undefined,
+    staleDecision: body.staleDecision || undefined,
+    duplicateDecision: body.duplicateDecision || undefined,
+    tokenVersion: body.tokenVersion || undefined,
+    barTime: body.barTime || body.bar_time || undefined
   };
 }
 

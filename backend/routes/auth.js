@@ -6,7 +6,7 @@ const { hashPassword, comparePassword, signToken, sanitizeUser } = require('../u
 const { setAuthCookie, clearAuthCookie } = require('../utils/sessionCookies');
 const { isAdmin } = require('../utils/adminAccess');
 const { generateToken, hashToken, verificationExpiry, resetExpiry } = require('../utils/emailTokens');
-const { sendVerificationEmail, sendPasswordResetEmail } = require('../utils/mailer');
+const { sendVerificationEmail, sendPasswordResetEmail, isQuotaError } = require('../utils/mailer');
 const { isBetaMode, getBetaSubscription } = require('../utils/betaMode');
 const requireAuth = require('../middleware/requireAuth');
 const validateRequest = require('../middleware/validate');
@@ -187,8 +187,9 @@ router.post('/register', authAttemptLimiter, registerValidators, validateRequest
       } catch (mailError) {
         console.error('[auth] verification email failed:', mailError.message, mailError.body || '');
         return res.status(201).json({
-          message:
-            'Account created, but the verification email could not be sent. Tap Resend verification email, or contact support.',
+          message: isQuotaError(mailError)
+            ? 'Account created, but verification email is delayed because the mail provider hit its daily sending limit. Try Resend in a few hours, or contact support.'
+            : 'Account created, but the verification email could not be sent. Tap Resend verification email, or contact support.',
           requiresVerification: true,
           email,
           emailDeliveryFailed: true
@@ -377,7 +378,9 @@ router.post('/resend-verification', authEmailLimiter, resendVerificationValidato
     } catch (mailError) {
       console.error('[auth] resend verification email failed:', mailError.message, mailError.body || '');
       return res.status(502).json({
-        message: 'Unable to send verification email right now. Please try again in a moment.'
+        message: isQuotaError(mailError)
+          ? 'Verification email is delayed because the mail provider hit its daily sending limit. Please try again in a few hours.'
+          : 'Unable to send verification email right now. Please try again in a moment.'
       });
     }
 

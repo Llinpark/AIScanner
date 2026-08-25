@@ -61,7 +61,11 @@ export default function Checkout({
     periodLabel: billingCycle === 'yearly' ? 'year' : 'month'
   };
   const periodLabel = pricing.periodLabel || (billingCycle === 'yearly' ? 'year' : 'month');
-  const binanceAmount = pricing.priceCents ? (pricing.priceCents / 100).toFixed(2) : '0.00';
+  const binanceAmount = pricing.priceCents
+    ? (pricing.priceCents / 100).toFixed(2)
+    : pricing.price
+      ? (Number(pricing.price) / 130).toFixed(2)
+      : '0.00';
   const binanceMerchantId = paymentMethods?.binance?.merchantId;
 
   useEffect(() => {

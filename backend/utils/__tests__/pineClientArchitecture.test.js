@@ -61,8 +61,8 @@ const LEGACY_ENTRY = {
 };
 
 describe('PineClientVersion', () => {
-  it('stamps current version and 1.2.1 capability set', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.2.1');
+  it('stamps current version and 1.2.x capability set', () => {
+    assert.equal(PINE_CLIENT_VERSION, '1.3.0');
     assert.deepEqual(CURRENT_PINE_CAPABILITIES, [
       'v1_payload',
       'sl_risk_v1',

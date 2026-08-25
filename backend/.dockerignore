@@ -13,6 +13,13 @@ deploy-out*.txt
 scripts/_tmp_*
 scripts/tmp_*
 scripts/_run_prod_*
+scripts/_run_audit_*
 scripts/_sftp_*
 tmp-optiona-smoke-pine
+tmp-*
+tmp_*
+**/__tests__
+**/*.test.js
+*.cmd
+*.hex
 dev-users.json

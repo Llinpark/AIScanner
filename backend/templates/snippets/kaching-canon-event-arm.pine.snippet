@@ -20,6 +20,93 @@ fireLong = setupLong
 fireShort = setupShort
 confirmedSignal = bridgeEventCount > 0 and licenseOk and isAllowedDisplayTf and barstate.isconfirmed
 
+// Exactly-once emission state — SEPARATE from drawings/lifecycle arrays.
+// cleanupActiveTradeDrawings() MUST NOT receive or reset these.
+varip array<string> kachingEmitIds = array.new_string()
+varip array<string> kachingEmitTrade = array.new_string(1, "")
+varip array<int> kachingEmitMachine = array.new_int(4, -1)
+
+kachingIdEmitted(array<string> ids, string eventId) =>
+    found = false
+    n = array.size(ids)
+    if n > 0
+        for i = 0 to n - 1
+            if array.get(ids, i) == eventId
+                found := true
+    found
+
+// Sole alert() gateway. Marks eventId first (incl. historical), then alert() only if realtime.
+emitKachingEvent(string alertType, string canonicalTradeId, string payload, array<string> ids, array<string> tradeSlot, array<int> machine) =>
+    evType = kachingEventType(alertType)
+    evSeq = kachingEventSequence(alertType)
+    eventId = makeKachingEventId(canonicalTradeId, evType)
+    already = kachingIdEmitted(ids, eventId)
+    curTrade = array.size(tradeSlot) > 0 ? array.get(tradeSlot, 0) : ""
+    maxSeq = array.size(machine) > 0 ? array.get(machine, 0) : -1
+    terminal = array.size(machine) > 1 ? array.get(machine, 1) : 0
+    hitTp3 = array.size(machine) > 2 ? array.get(machine, 2) : 0
+    hitSl = array.size(machine) > 3 ? array.get(machine, 3) : 0
+    sameTrade = str.length(canonicalTradeId) > 0 and curTrade == canonicalTradeId
+    isNewTrade = str.length(canonicalTradeId) > 0 and curTrade != canonicalTradeId
+    isEntry = evType == "ENTRY"
+    isCancel = evType == "CANCELLED"
+    isTp3 = evType == "TP3"
+    isSl = evType == "SL"
+    isTerm = evSeq >= 3
+    allow = not already and str.length(canonicalTradeId) > 0
+    if allow and sameTrade and terminal == 1
+        allow := false
+    if allow and sameTrade and evSeq < maxSeq
+        allow := false
+    if allow and sameTrade and evSeq == maxSeq and maxSeq >= 0
+        allow := false
+    if allow and isTp3 and hitSl == 1
+        allow := false
+    if allow and isSl and hitTp3 == 1
+        allow := false
+    if allow and isNewTrade and not isEntry and not isCancel
+        allow := false
+    fired = false
+    if allow
+        if array.size(ids) >= 48
+            array.remove(ids, 0)
+        array.push(ids, eventId)
+        if array.size(tradeSlot) == 0
+            array.push(tradeSlot, canonicalTradeId)
+        else
+            array.set(tradeSlot, 0, canonicalTradeId)
+        if array.size(machine) < 4
+            array.push(machine, -1)
+            array.push(machine, 0)
+            array.push(machine, 0)
+            array.push(machine, 0)
+        if isEntry
+            array.set(machine, 0, 0)
+            array.set(machine, 1, 0)
+            array.set(machine, 2, 0)
+            array.set(machine, 3, 0)
+        else
+            array.set(machine, 0, evSeq)
+            if isTerm
+                array.set(machine, 1, 1)
+            if isTp3
+                array.set(machine, 2, 1)
+            if isSl
+                array.set(machine, 3, 1)
+        if barstate.isrealtime
+            alert(payload, alert.freq_all)
+            fired := true
+        if DEBUG_MODE
+            log.info("[PIPELINE] ALERT GATE | fired=" + str.tostring(fired) + " | eventId=" + eventId + " | eventType=" + evType + " | canonicalTradeId=" + canonicalTradeId + " | realtime=" + str.tostring(barstate.isrealtime) + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period)
+    else if DEBUG_MODE
+        log.info("[PIPELINE] ALERT DUP SKIP | eventId=" + eventId + " | eventType=" + evType + " | canonicalTradeId=" + canonicalTradeId + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period)
+    fired
+
+if array.get(kachingEmitMachine, 1) < 0
+    array.set(kachingEmitMachine, 1, 0)
+    array.set(kachingEmitMachine, 2, 0)
+    array.set(kachingEmitMachine, 3, 0)
+
 if DEBUG_MODE and barstate.islast
     dbgTradeActive = tradeIsActive()
     dbgReason = pineAlertBlockReason(dbgTradeActive)
@@ -82,29 +169,15 @@ if barstate.isconfirmed
                     slKind = array.get(evSlKind, ei)
                     dirStr = isLongEv ? "long" : "short"
                     sigId = makeCanonicalSignalId(stEv, dirStr)
+                    if kachingIdEmitted(kachingEmitIds, makeKachingEventId(sigId, "ENTRY"))
+                        array.set(evArmedFlags, ei, 1)
+                        continue
                     if tradeIsActive() and str.length(tradeSignalId()) > 0
                         replMsg = buildPayload("cancelled", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "new_confirmed_setup")
                         if DEBUG_MODE
                             log.info("[PIPELINE] ALERT FIRING | alertType=cancelled | reason=new_confirmed_setup | oldUuid=" + tradeSignalId() + " | newUuid=" + sigId + " | symbol=" + syminfo.ticker + " | chartTf=" + timeframe.period)
-                        alert(replMsg, alert.freq_all)
-                    if array.size(tradeLevelLines) > 0
-                        for i = 0 to array.size(tradeLevelLines) - 1
-                            line.delete(array.get(tradeLevelLines, i))
-                    if array.size(tradeLeaderLines) > 0
-                        for i = 0 to array.size(tradeLeaderLines) - 1
-                            line.delete(array.get(tradeLeaderLines, i))
-                    if array.size(tradeLevelLabels) > 0
-                        for i = 0 to array.size(tradeLevelLabels) - 1
-                            label.delete(array.get(tradeLevelLabels, i))
-                    array.clear(tradeLevelLines)
-                    array.clear(tradeLeaderLines)
-                    array.clear(tradeLevelLabels)
-                    if array.size(tradeBadgeHold) > 0
-                        label.delete(array.get(tradeBadgeHold, 0))
-                        array.clear(tradeBadgeHold)
-                    if array.size(tradeFvgHold) > 0
-                        box.delete(array.get(tradeFvgHold, 0))
-                        array.clear(tradeFvgHold)
+                        emitKachingEvent("cancelled", tradeSignalId(), replMsg, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
+                    cleanupActiveTradeDrawings(tradeLevelLines, tradeLeaderLines, tradeLevelLabels, tradeBadgeHold, tradeFvgHold, tradeFloats, tradeLabelYs, tradeStrings, tradeFlags, tradeCanonMeta, tradeLayoutSide, tradeLayoutStep)
                     msg = buildPayload("entry", dirStr, ee, ssl, t1, t2, t3, fvgTop, fvgBot, conf, sigId, "")
                     if isLongEv
                         buyBadge = label.new(bar_index, ee, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small)
@@ -149,7 +222,7 @@ if barstate.isconfirmed
                     if DEBUG_MODE
                         log.info("[PIPELINE] DRAWING CREATED | direction=" + dirStr + " | slKind=" + str.tostring(slKind) + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + sigId + " | price=" + formatPrice(ee) + " | timestamp=" + str.tostring(timenow) + " | bridgeEventIndex=" + str.tostring(ei))
                         log.info("[PIPELINE] ALERT FIRING | direction=" + dirStr + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + sigId + " | timestamp=" + str.tostring(timenow) + " | confidence=" + str.tostring(conf, "#.##"))
-                    alert(msg, alert.freq_all)
+                    emitKachingEvent("entry", sigId, msg, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
 
             // --- Canonical lifecycle tick for this OHLC bar ---
             if tradeIsActive()
@@ -175,51 +248,14 @@ if barstate.isconfirmed
                             closeMsg = buildPayload(closeAlertType, tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), closeReason)
                             if DEBUG_MODE
                                 log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=" + closeAlertType + " | reason=" + closeReason)
-                            alert(closeMsg, alert.freq_all)
-                        if array.size(tradeLevelLines) > 0
-                            for i = 0 to array.size(tradeLevelLines) - 1
-                                line.delete(array.get(tradeLevelLines, i))
-                        if array.size(tradeLeaderLines) > 0
-                            for i = 0 to array.size(tradeLeaderLines) - 1
-                                line.delete(array.get(tradeLeaderLines, i))
-                        if array.size(tradeLevelLabels) > 0
-                            for i = 0 to array.size(tradeLevelLabels) - 1
-                                label.delete(array.get(tradeLevelLabels, i))
-                        array.clear(tradeLevelLines)
-                        array.clear(tradeLeaderLines)
-                        array.clear(tradeLevelLabels)
-                        if array.size(tradeBadgeHold) > 0
-                            label.delete(array.get(tradeBadgeHold, 0))
-                            array.clear(tradeBadgeHold)
-                        if array.size(tradeFvgHold) > 0
-                            box.delete(array.get(tradeFvgHold, 0))
-                            array.clear(tradeFvgHold)
-                        array.set(tradeFloats, 0, na)
-                        array.set(tradeFloats, 1, na)
-                        array.set(tradeFloats, 2, na)
-                        array.set(tradeFloats, 3, na)
-                        array.set(tradeFloats, 4, na)
-                        array.set(tradeFloats, 5, na)
-                        array.set(tradeFloats, 6, na)
-                        for i = 0 to 4
-                            array.set(tradeLabelYs, i, na)
-                            array.set(tradeLayoutSide, i, 1)
-                            array.set(tradeLayoutStep, i, 0)
-                        array.set(tradeStrings, 0, "")
-                        array.set(tradeStrings, 1, "")
-                        array.set(tradeFlags, 0, 0)
-                        array.set(tradeFlags, 1, 0)
-                        array.set(tradeFlags, 2, 0)
-                        array.set(tradeFlags, 3, 0)
-                        array.set(tradeCanonMeta, 0, 0)
-                        array.set(tradeCanonMeta, 1, 0)
-                        array.set(tradeCanonMeta, 2, 0)
+                            emitKachingEvent(closeAlertType, tradeSignalId(), closeMsg, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
+                        cleanupActiveTradeDrawings(tradeLevelLines, tradeLeaderLines, tradeLevelLabels, tradeBadgeHold, tradeFvgHold, tradeFloats, tradeLabelYs, tradeStrings, tradeFlags, tradeCanonMeta, tradeLayoutSide, tradeLayoutStep)
                     else
                         if hitTp1 and not tradeTp1Alerted()
                             msgTp1 = buildPayload("take_profit_1", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp1")
                             if DEBUG_MODE
                                 log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_1")
-                            alert(msgTp1, alert.freq_all)
+                            emitKachingEvent("take_profit_1", tradeSignalId(), msgTp1, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
                             array.set(tradeFlags, 2, 1)
                             if array.size(tradeLevelLabels) > 2
                                 label.set_color(array.get(tradeLevelLabels, 2), color.new(colTpNear, 0))
@@ -227,7 +263,7 @@ if barstate.isconfirmed
                             msgTp2 = buildPayload("take_profit_2", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "tp2")
                             if DEBUG_MODE
                                 log.info("[PIPELINE] ALERT FIRING | direction=" + tradeDirection() + " | symbol=" + syminfo.ticker + " | tf=" + CANONICAL_SIGNAL_TF + " | chartTf=" + timeframe.period + " | signalUuid=" + tradeSignalId() + " | timestamp=" + str.tostring(timenow) + " | alertType=take_profit_2")
-                            alert(msgTp2, alert.freq_all)
+                            emitKachingEvent("take_profit_2", tradeSignalId(), msgTp2, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
                             array.set(tradeFlags, 3, 1)
                             if array.size(tradeLevelLabels) > 3
                                 label.set_color(array.get(tradeLevelLabels, 3), color.new(colTpNear, 0))
@@ -252,27 +288,14 @@ if barstate.isconfirmed
             stEv2 = array.get(evSignalTime, ei2)
             dirStr2 = isLongEv2 ? "long" : "short"
             sigId2 = makeCanonicalSignalId(stEv2, dirStr2)
+            if kachingIdEmitted(kachingEmitIds, makeKachingEventId(sigId2, "ENTRY"))
+                if array.size(evArmedFlags) > ei2
+                    array.set(evArmedFlags, ei2, 1)
+                continue
             if tradeIsActive() and str.length(tradeSignalId()) > 0
                 replMsg2 = buildPayload("cancelled", tradeDirection(), tradeEntry(), tradeSl(), tradeTp1(), tradeTp2(), tradeTp3(), nz(tradeGapTop(), tradeEntry()), nz(tradeGapBot(), tradeEntry()), 0.0, tradeSignalId(), "new_confirmed_setup")
-                alert(replMsg2, alert.freq_all)
-            if array.size(tradeLevelLines) > 0
-                for i = 0 to array.size(tradeLevelLines) - 1
-                    line.delete(array.get(tradeLevelLines, i))
-            if array.size(tradeLeaderLines) > 0
-                for i = 0 to array.size(tradeLeaderLines) - 1
-                    line.delete(array.get(tradeLeaderLines, i))
-            if array.size(tradeLevelLabels) > 0
-                for i = 0 to array.size(tradeLevelLabels) - 1
-                    label.delete(array.get(tradeLevelLabels, i))
-            array.clear(tradeLevelLines)
-            array.clear(tradeLeaderLines)
-            array.clear(tradeLevelLabels)
-            if array.size(tradeBadgeHold) > 0
-                label.delete(array.get(tradeBadgeHold, 0))
-                array.clear(tradeBadgeHold)
-            if array.size(tradeFvgHold) > 0
-                box.delete(array.get(tradeFvgHold, 0))
-                array.clear(tradeFvgHold)
+                emitKachingEvent("cancelled", tradeSignalId(), replMsg2, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
+            cleanupActiveTradeDrawings(tradeLevelLines, tradeLeaderLines, tradeLevelLabels, tradeBadgeHold, tradeFvgHold, tradeFloats, tradeLabelYs, tradeStrings, tradeFlags, tradeCanonMeta, tradeLayoutSide, tradeLayoutStep)
             msg2 = buildPayload("entry", dirStr2, ee2, ssl2, t12, t22, t32, fvgTop2, fvgBot2, conf2, sigId2, "")
             if isLongEv2
                 buyBadge2 = label.new(bar_index, ee2, "Kaching Buy", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, color=colBuy, textcolor=color.white, size=size.small)
@@ -309,4 +332,4 @@ if barstate.isconfirmed
             lastArmedDir := isLongEv2 ? 1 : -1
             if array.size(evArmedFlags) > ei2
                 array.set(evArmedFlags, ei2, 1)
-            alert(msg2, alert.freq_all)
+            emitKachingEvent("entry", sigId2, msg2, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)

@@ -9,11 +9,18 @@ const { ALL_CURRENCY_PAIRS } = require('./symbols');
 
 const ALL_TIMEFRAMES = ['1M', '1W', '1D', '4h', '1h', '30m', '15m', '5m', '3m', '1m'];
 
+// 1 USD/USDT = 130 KES. USDT (Binance) and USD (PayPal) amounts are derived from KES.
+const KES_PER_USD = 130;
+
+function kesToUsdCents(kesAmount) {
+  return Math.round((Number(kesAmount || 0) / KES_PER_USD) * 100);
+}
+
 const TIERS = {
   basic: {
     name: 'Basic',
     monthlyPrice: 5000,
-    priceCents: 5500,
+    priceCents: kesToUsdCents(5000),
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
@@ -33,7 +40,7 @@ const TIERS = {
   professional: {
     name: 'Pro',
     monthlyPrice: 12000,
-    priceCents: 13882,
+    priceCents: kesToUsdCents(12000),
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
@@ -58,7 +65,7 @@ const TIERS = {
   premium: {
     name: 'Premium',
     monthlyPrice: 25000,
-    priceCents: 31250,
+    priceCents: kesToUsdCents(25000),
     currency: 'KES',
     currencyPayPal: 'USD',
     currencyBinance: 'USDT',
@@ -259,9 +266,10 @@ function getTierPricing(tierKey, billingCycle = 'monthly') {
 
   const cycle = normalizeBillingCycle(billingCycle);
   if (cycle === 'yearly') {
+    const price = applyYearlyDiscount(tier.monthlyPrice);
     return {
-      price: applyYearlyDiscount(tier.monthlyPrice),
-      priceCents: applyYearlyDiscount(tier.priceCents),
+      price,
+      priceCents: kesToUsdCents(price),
       currency: tier.currency,
       currencyPayPal: tier.currencyPayPal,
       currencyBinance: tier.currencyBinance,
@@ -273,7 +281,7 @@ function getTierPricing(tierKey, billingCycle = 'monthly') {
 
   return {
     price: tier.monthlyPrice,
-    priceCents: tier.priceCents,
+    priceCents: kesToUsdCents(tier.monthlyPrice),
     currency: tier.currency,
     currencyPayPal: tier.currencyPayPal,
     currencyBinance: tier.currencyBinance,
@@ -364,6 +372,8 @@ module.exports = {
   ALL_TIMEFRAMES,
   PAYMENT_CONFIG,
   YEARLY_DISCOUNT,
+  KES_PER_USD,
+  kesToUsdCents,
   normalizeBillingCycle,
   applyYearlyDiscount,
   getTierPricing,

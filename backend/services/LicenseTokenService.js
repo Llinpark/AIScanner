@@ -140,8 +140,18 @@ function decodePayload(encoded) {
   return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
 }
 
+/**
+ * Transport-only token cleanup: outer whitespace / CR / LF / BOM.
+ * Does not mutate token contents internally (no inner character rewrite).
+ */
+function normalizeLicenseTokenTransport(token) {
+  if (token == null) return '';
+  return String(token).replace(/^\uFEFF/, '').replace(/^[\s\r\n]+|[\s\r\n]+$/g, '');
+}
+
 function inspectToken(token) {
-  const raw = String(token || '');
+  const original = String(token || '');
+  const raw = normalizeLicenseTokenTransport(token);
   const parts = raw.split('.');
   const info = {
     ...emptyDiagnostics(),
@@ -151,9 +161,9 @@ function inspectToken(token) {
     prefix: parts[0] ? String(parts[0]).slice(0, 16) : '',
     prefixOk: ALLOWED_PREFIXES.has(parts[0]),
     tokenVersion: parts[0] || null,
-    hasCR: /\r/.test(raw),
-    hasLF: /\n/.test(raw),
-    hasSpace: /\s/.test(raw),
+    hasCR: /\r/.test(original),
+    hasLF: /\n/.test(original),
+    hasSpace: /\s/.test(original),
     payload: null
   };
 
@@ -252,9 +262,10 @@ function failVerify(reason, info) {
 function verifyLicenseTokenDetailed(token, options = {}) {
   const runtimeEnv = options.runtimeEnv || process.env.NODE_ENV || 'development';
   const productionRuntime = isProductionRuntime(runtimeEnv);
+  const normalized = normalizeLicenseTokenTransport(token);
   const info = inspectToken(token);
 
-  if (!token) return failVerify('licenseToken_absent', info);
+  if (!token || !normalized) return failVerify('licenseToken_absent', info);
   if (!getLicenseSigningSecret()) return failVerify('missing_signing_secret', info);
   if (!info.present) return failVerify('licenseToken_absent', info);
   if (info.parts !== 3 || !info.prefixOk || info.reason === 'decode_fail') {
@@ -266,7 +277,7 @@ function verifyLicenseTokenDetailed(token, options = {}) {
   }
 
   const signingSecret = getLicenseSigningSecret();
-  const parts = String(token).split('.');
+  const parts = normalized.split('.');
   const encoded = parts[1];
   const signature = parts[2];
   const expected = hmacFor(encoded, signingSecret);
@@ -515,6 +526,7 @@ module.exports = {
   isSmokeOrDevIdentity,
   isInternalProbeIdentity,
   normalizeTradingViewUsername,
+  normalizeLicenseTokenTransport,
   resolveTokenEnvironment,
   runCryptoSelfCheck,
   getCryptoSelfCheckResult,

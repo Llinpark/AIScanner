@@ -32,11 +32,14 @@ const EMPTY = () => ({
   lastAuthFailed: null,
   lastValidation: null,
   lastMongoSave: null,
+  lastAccepted: null,
   lastPublished: null,
   lastTelegramDelivery: null,
   lastMT5Delivery: null,
   lastSocketDelivery: null,
   lastEmailDelivery: null,
+  lastDurableDelivery: null,
+  durableDeliveryState: null,
   lastFailureStage: null,
   lastFailureReason: null,
   currentPipelineStage: null,
@@ -46,6 +49,7 @@ const EMPTY = () => ({
   validationFailures: 0,
   pipelineLatenciesMs: [],
   webhookToMongoMs: [],
+  webhookToAcceptedMs: [],
   mongoToTelegramMs: [],
   updatedAt: null
 });
@@ -115,7 +119,20 @@ function stamp(meta = {}) {
     scriptGenerationId: meta.scriptGenerationId || null,
     alertType: meta.alertType || null,
     selfTest: Boolean(meta.selfTest || meta.self_test || nonProd),
-    telemetrySource: nonProd ? 'non_production' : 'production'
+    telemetrySource: nonProd ? 'non_production' : 'production',
+    detectedPineVersion: meta.detectedPineVersion || meta.pineClientVersion || null,
+    compatibilityAdapter: meta.compatibilityAdapter || null,
+    compatibilityMode: meta.compatibilityMode || null,
+    compatibilityLabel: meta.compatibilityLabel || null,
+    legacy: meta.legacy === true,
+    eventId: meta.eventId || null,
+    canonicalTradeId: meta.canonicalTradeId || null,
+    eventType: meta.eventType || null,
+    eventSequence: meta.eventSequence != null ? meta.eventSequence : null,
+    isRealtimeState: meta.isRealtimeState || null,
+    staleDecision: meta.staleDecision || null,
+    duplicateDecision: meta.duplicateDecision || null,
+    deliveryJobState: meta.deliveryJobState || null
   };
 }
 
@@ -188,6 +205,7 @@ async function hydrateFromRedis() {
         memory = { ...EMPTY(), ...parsed };
         if (!Array.isArray(memory.pipelineLatenciesMs)) memory.pipelineLatenciesMs = [];
         if (!Array.isArray(memory.webhookToMongoMs)) memory.webhookToMongoMs = [];
+        if (!Array.isArray(memory.webhookToAcceptedMs)) memory.webhookToAcceptedMs = [];
         if (!Array.isArray(memory.mongoToTelegramMs)) memory.mongoToTelegramMs = [];
       }
     }
@@ -214,7 +232,7 @@ function trackInflight(stage, ok, entry) {
   const uuid = entry.signalUuid || `${entry.symbol || 'unk'}:${entry.at}`;
   let row = inflight.get(uuid);
   if (!row) {
-    row = { startedAt: Date.now(), webhookAt: null, mongoAt: null, telegramAt: null };
+    row = { startedAt: Date.now(), webhookAt: null, mongoAt: null, acceptedAt: null, telegramAt: null };
     inflight.set(uuid, row);
   }
   if (/^WebhookReceived$/i.test(stage) && ok) {
@@ -225,6 +243,12 @@ function trackInflight(stage, ok, entry) {
     row.mongoAt = Date.now();
     if (row.webhookAt) {
       pushLatency(memory.webhookToMongoMs, row.mongoAt - row.webhookAt);
+    }
+  }
+  if (/^Accepted$/i.test(stage) && ok) {
+    row.acceptedAt = Date.now();
+    if (row.webhookAt) {
+      pushLatency(memory.webhookToAcceptedMs, row.acceptedAt - row.webhookAt);
     }
   }
   if (/^DeliveryTelegram$/i.test(stage) && ok) {
@@ -259,9 +283,8 @@ function record(stage, status, meta = {}) {
   const s = String(stage || '');
   const statusUpper = String(status || 'FAIL').toUpperCase();
   const ok = statusUpper === 'PASS';
-  // Expected channel skips (e.g. MT5 not linked while Telegram-only is valid).
-  // Must not pollute lastFailure* / deliveryFailures / intake classification.
-  const skip = statusUpper === 'SKIP' || statusUpper === 'N/A';
+  // Expected skips / non-failures: must not pollute lastFailure* counters.
+  const skip = ['SKIP', 'N/A', 'ORPHANED', 'DUPLICATE', 'PENDING'].includes(statusUpper);
   const nonProd = isNonProductionPipelineTelemetry(meta);
   const entry = stamp(meta);
   memory.updatedAt = entry.at;
@@ -284,7 +307,19 @@ function record(stage, status, meta = {}) {
       scriptGenerationId: entry.scriptGenerationId,
       alertType: entry.alertType,
       selfTest: entry.selfTest,
-      telemetrySource: entry.telemetrySource
+      telemetrySource: entry.telemetrySource,
+      detectedPineVersion: entry.detectedPineVersion,
+      compatibilityAdapter: entry.compatibilityAdapter,
+      compatibilityMode: entry.compatibilityMode,
+      compatibilityLabel: entry.compatibilityLabel,
+      legacy: entry.legacy,
+      eventId: entry.eventId,
+      canonicalTradeId: entry.canonicalTradeId,
+      eventType: entry.eventType,
+      eventSequence: entry.eventSequence,
+      isRealtimeState: entry.isRealtimeState,
+      staleDecision: entry.staleDecision,
+      duplicateDecision: entry.duplicateDecision
     },
     { persist: !nonProd }
   );
@@ -312,6 +347,8 @@ function record(stage, status, meta = {}) {
     if (!ok && !skip) memory.validationFailures += 1;
   } else if (/^MongoSave$/i.test(s)) {
     if (ok) memory.lastMongoSave = entry;
+  } else if (/^Accepted$/i.test(s)) {
+    if (ok) memory.lastAccepted = entry;
   } else if (/^Publish$/i.test(s)) {
     if (ok) memory.lastPublished = entry;
   } else if (/^DeliveryTelegram$/i.test(s)) {
@@ -323,15 +360,28 @@ function record(stage, status, meta = {}) {
   } else if (/^DeliverySocket$/i.test(s)) {
     if (ok) memory.lastSocketDelivery = entry;
     else if (!skip) memory.deliveryFailures += 1;
-  } else if (/^DeliveryEmail$/i.test(s) && ok) {
-    memory.lastEmailDelivery = entry;
+  } else if (/^DeliveryEmail$/i.test(s)) {
+    if (ok) memory.lastEmailDelivery = entry;
+    else if (!skip) memory.deliveryFailures += 1;
+  } else if (/^EntryOrdered$/i.test(s) && ok) {
+    memory.lastPublished = memory.lastPublished || entry;
+  } else if (/^OutcomeOrdered$/i.test(s) && ok) {
+    memory.lastPublished = memory.lastPublished || entry;
+  } else if (/^DeliverySequence$/i.test(s)) {
+    // ENTRY-first wait/release — PENDING must not count as delivery failure.
+  } else if (/^DurableDelivery$/i.test(s)) {
+    memory.lastDurableDelivery = entry;
+    const fromMeta = entry.deliveryJobState || meta.deliveryJobState;
+    const fromReason = String(entry.reason || '').match(/state=([a-z_]+)/);
+    memory.durableDeliveryState = fromMeta || (fromReason ? fromReason[1] : memory.durableDeliveryState);
+    // Overlay diagnostics — do not steal lastFailureStage from Broadcast/Delivery*.
   } else if (/^AlertEvaluated$/i.test(s)) {
     memory.lastAlertEvaluated = entry;
   } else if (/^AlertFired$/i.test(s) && ok) {
     memory.lastAlertFired = entry;
   }
 
-  if (!ok && !skip) {
+  if (!ok && !skip && !/^DurableDelivery$/i.test(s) && !/^DeliverySequence$/i.test(s)) {
     memory.lastFailureStage = s || 'unknown';
     memory.lastFailureReason = entry.reason || 'failed';
   }
@@ -362,6 +412,7 @@ function getLatencySummary() {
   return {
     pipeline: summarizeLatencies(memory.pipelineLatenciesMs),
     webhookToMongo: summarizeLatencies(memory.webhookToMongoMs),
+    webhookToAccepted: summarizeLatencies(memory.webhookToAcceptedMs),
     mongoToTelegram: summarizeLatencies(memory.mongoToTelegramMs)
   };
 }
@@ -420,18 +471,35 @@ async function getStatus(extra = {}) {
       memory.lastFailureStage === 'Validation' ? memory.lastFailureReason : null,
     lastMongoSaveAt: memory.lastMongoSave?.at || null,
     lastMongoFail: memory.lastFailureStage === 'MongoSave',
+    lastAcceptedAt: memory.lastAccepted?.at || null,
     lastPublishedAt: memory.lastPublished?.at || null,
     lastPublishFail: memory.lastFailureStage === 'Publish',
     lastSocketAt: memory.lastSocketDelivery?.at || null,
     lastSocketFail: memory.lastFailureStage === 'DeliverySocket',
     lastTelegramAt: memory.lastTelegramDelivery?.at || null,
     lastTelegramFail: memory.lastFailureStage === 'DeliveryTelegram',
+    lastEmailAt: memory.lastEmailDelivery?.at || null,
+    lastEmailFail: memory.lastFailureStage === 'DeliveryEmail',
     lastMT5At: memory.lastMT5Delivery?.at || null,
     lastMT5Fail: memory.lastFailureStage === 'DeliveryMT5',
     lastWebhookFail: false
   });
 
   const pipelineHealthy = isPipelineHealthy(memory);
+  let durableDeliveryCounts = null;
+  let durableDeliveryWorker = null;
+  try {
+    const DurableDelivery = require('../utils/durableDelivery');
+    durableDeliveryCounts = await DurableDelivery.getCounts();
+    const worker = DurableDelivery.getWorkerHealth();
+    durableDeliveryWorker = {
+      lastError: worker.lastError,
+      lastTickAt: worker.lastTickAt
+    };
+  } catch {
+    durableDeliveryCounts = null;
+    durableDeliveryWorker = null;
+  }
   let intakeState = 'NO_WEBHOOK_RECEIVED';
   try {
     const { resolveIntakeState } = require('../utils/webhookPipelineDiag');
@@ -448,6 +516,7 @@ async function getStatus(extra = {}) {
     ...memory,
     pipelineLatenciesMs: undefined,
     webhookToMongoMs: undefined,
+    webhookToAcceptedMs: undefined,
     mongoToTelegramMs: undefined,
     lastAlertEvaluatedNote:
       'Pine-only: enable DEBUG_MODE and check Pine Logs for [PIPELINE] ALERT NOT FIRED / DEBUG STATE. Server cannot observe chart evaluation.',
@@ -481,10 +550,35 @@ async function getStatus(extra = {}) {
       : null,
     lastPublishedSignal: memory.lastPublished || memory.lastMongoSave,
     lastMongoSave: memory.lastMongoSave,
+    lastAccepted: memory.lastAccepted,
     lastMongoSaveDurable: mongoDurable,
     lastMongoSaveIsSelfTest: isSelfTestStamp(memory.lastMongoSave),
     lastMongoSaveIsInMemoryFallback: isInMemoryFallbackStamp(memory.lastMongoSave),
     lastWebhookIsSelfTest: webhookIsSelfTest,
+    pineCompatibility: {
+      pineVersion:
+        memory.lastWebhookReceived?.detectedPineVersion ||
+        memory.lastAccepted?.detectedPineVersion ||
+        null,
+      compatibilityAdapter:
+        memory.lastWebhookReceived?.compatibilityAdapter ||
+        memory.lastAccepted?.compatibilityAdapter ||
+        null,
+      compatibilityLabel:
+        memory.lastWebhookReceived?.compatibilityLabel ||
+        memory.lastAccepted?.compatibilityLabel ||
+        null,
+      eventId: memory.lastWebhookReceived?.eventId || memory.lastAccepted?.eventId || null,
+      canonicalTradeId:
+        memory.lastWebhookReceived?.canonicalTradeId ||
+        memory.lastAccepted?.canonicalTradeId ||
+        null,
+      eventType: memory.lastWebhookReceived?.eventType || memory.lastAccepted?.eventType || null,
+      isRealtimeState:
+        memory.lastWebhookReceived?.isRealtimeState ||
+        memory.lastAccepted?.isRealtimeState ||
+        null
+    },
     lastMongoSaveNote: !memory.lastMongoSave
       ? null
       : mongoDurable
@@ -497,6 +591,10 @@ async function getStatus(extra = {}) {
     lastTelegram: memory.lastTelegramDelivery,
     lastSocket: memory.lastSocketDelivery,
     lastMT5: memory.lastMT5Delivery,
+    lastDurableDelivery: memory.lastDurableDelivery,
+    durableDeliveryState: memory.durableDeliveryState,
+    durableDeliveryCounts,
+    durableDeliveryWorker,
     averagePipelineLatency: latency.pipeline.avgMs,
     latency,
     webhookAge: globalAge,

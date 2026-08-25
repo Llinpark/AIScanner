@@ -22,6 +22,12 @@ const {
   computeExpiresAt
 } = require('../utils/signalOutcome');
 const SignalOutcomeService = require('./SignalOutcomeService');
+const { isTerminalEntry } = require('../utils/signalOutcome');
+const {
+  resolveCanonicalTradeId,
+  hashIdentity,
+  evaluateEntryFreshness
+} = require('../utils/tradeEventIdentity');
 
 const STAGES = Object.freeze({
   DETECTED: 'DETECTED',
@@ -124,7 +130,10 @@ function attachExpiryFields(signalData) {
     const parsed = new Date(signalData.expiresAt || signalData.expires_at);
     if (!Number.isNaN(parsed.getTime())) expiresAt = parsed;
   } else if (enableTradeExpiry && expiryBars != null) {
-    expiresAt = computeExpiresAt(signalData.timeframe, expiryBars);
+    const eventAt = signalData.eventTimestamp ? new Date(signalData.eventTimestamp) : null;
+    const from =
+      eventAt && !Number.isNaN(eventAt.getTime()) ? eventAt : new Date();
+    expiresAt = computeExpiresAt(signalData.timeframe, expiryBars, from);
   }
 
   return {
@@ -141,31 +150,75 @@ function attachExpiryFields(signalData) {
  * Different UUID while active → REPLACE: close/clear old slot, allow new entry.
  * Different timeframes never block each other.
  */
-async function assertCanOpenEntry(signalData) {
-  let active = await ActiveSignalRegistry.getActive(signalData);
-  if (!active) {
+async function assertCanOpenEntry(signalData, inMemorySignals = []) {
+  const incomingUuid = resolveCanonicalTradeId(signalData);
+
+  // Canonical identity first — never "latest open for symbol+tf" as primary.
+  if (incomingUuid) {
     try {
-      const openEntry = await SignalOutcomeService.findOpenEntryInDb(
-        signalData.symbol,
-        signalData.timeframe
-      );
-      if (openEntry) {
-        active = await ActiveSignalRegistry.registerActive(openEntry);
-        logLifecycleEvent('registry_hydrate', {
-          symbol: openEntry.symbol,
-          timeframe: openEntry.timeframe,
-          signalUuid: openEntry.signalUuid || openEntry.signalId,
-          lifecycleStage: openEntry.lifecycleStage || 'ACTIVE',
-          reason: 'hydrated_from_db'
+      let existing = await SignalOutcomeService.findEntryByUuidInDb(incomingUuid);
+      if (!existing && Array.isArray(inMemorySignals)) {
+        const { findEntryBySignalUuid } = require('../utils/signalOutcome');
+        existing = findEntryBySignalUuid(inMemorySignals, incomingUuid);
+      }
+      if (existing && isTerminalEntry(existing)) {
+        logLifecycleEvent('terminal_reopen_rejected', {
+          symbol: signalData.symbol,
+          timeframe: signalData.timeframe,
+          signalUuid: incomingUuid,
+          alertType: signalData.alertType,
+          stage: existing.lifecycleStage,
+          reason: 'already_terminal'
         });
+        return {
+          allowed: false,
+          active: existing,
+          reason: 'already_terminal',
+          message: `Canonical trade ${incomingUuid} is terminal; entry replay ignored.`
+        };
+      }
+      if (existing && !isTerminalEntry(existing)) {
+        logLifecycleEvent('duplicate_webhook_replay', {
+          symbol: signalData.symbol,
+          timeframe: signalData.timeframe,
+          signalUuid: incomingUuid,
+          alertType: signalData.alertType,
+          stage: existing.lifecycleStage || 'ACTIVE',
+          reason: 'same_uuid_existing_open'
+        });
+        return {
+          allowed: false,
+          active: existing,
+          reason: 'duplicate_webhook_replay',
+          message: `Duplicate webhook for active signalUuid ${incomingUuid}; ignored.`,
+          detail: 'same_uuid_existing_open'
+        };
       }
     } catch (err) {
-      console.warn('[TradeLifecycle] active-trade DB lookup failed:', err.message);
+      console.warn('[TradeLifecycle] canonical UUID lookup failed:', err.message);
     }
   }
 
+  const freshness = evaluateEntryFreshness(signalData, { isDuplicate: false });
+  if (freshness.stale) {
+    logLifecycleEvent('stale_entry_rejected', {
+      symbol: signalData.symbol,
+      timeframe: signalData.timeframe,
+      signalUuid: incomingUuid,
+      alertType: signalData.alertType,
+      reason: 'stale_entry'
+    });
+    return {
+      allowed: false,
+      reason: 'stale_entry',
+      message: 'Stale entry replay rejected.',
+      freshness
+    };
+  }
+
+  let active = await ActiveSignalRegistry.getActive(signalData);
+
   if (active) {
-    const incomingUuid = signalData.signalUuid || signalData.signalId || signalData.signalGroupId;
     if (incomingUuid && active.signalUuid && String(incomingUuid) === String(active.signalUuid)) {
       // Option A: same canonical UUID from another allowed chartTf is still idempotent replay.
       const chartTf = signalData.chartTf || null;
@@ -402,7 +455,7 @@ async function processIncomingTradeAlert(baseData, inMemorySignals = [], options
   const alertType = signalInput.alertType || 'signal';
 
   if (isEntryAlert(alertType)) {
-    const gate = await assertCanOpenEntry(signalInput);
+    const gate = await assertCanOpenEntry(signalInput, inMemorySignals);
     if (!gate.allowed) {
       return {
         rejected: true,
@@ -410,7 +463,8 @@ async function processIncomingTradeAlert(baseData, inMemorySignals = [], options
         message: gate.message,
         activeSignal: gate.active,
         signalData: signalInput,
-        updatedEntry: null
+        updatedEntry: null,
+        freshness: gate.freshness
       };
     }
   }
@@ -421,6 +475,41 @@ async function processIncomingTradeAlert(baseData, inMemorySignals = [], options
       skipMarketData: true,
       ...options
     });
+
+  if (isOutcomeAlert(alertType) && !outcomeLinked) {
+    const canonicalId = resolveCanonicalTradeId(signalData) || resolveCanonicalTradeId(signalInput);
+    logLifecycleEvent('orphaned_outcome', {
+      symbol: signalData.symbol || signalInput.symbol,
+      timeframe: signalData.timeframe || signalInput.timeframe,
+      signalUuid: canonicalId,
+      alertType,
+      reason: 'orphaned_outcome'
+    });
+    console.warn(
+      `[TradeLifecycle] orphaned_outcome requestId=${signalInput.pipelineRequestId || 'n/a'} ` +
+        `identityHash=${hashIdentity(canonicalId)} alert=${alertType}`
+    );
+    return {
+      rejected: true,
+      reason: 'orphaned_outcome',
+      message: 'Outcome has no durable parent Entry; quarantined.',
+      signalData,
+      updatedEntry: null,
+      outcomeLinked: false
+    };
+  }
+
+  if (isOutcomeAlert(alertType) && updatedEntry?._outcomeIgnored) {
+    return {
+      rejected: false,
+      skipped: true,
+      reason: updatedEntry._outcomeIgnoreReason || 'outcome_ignored',
+      signalData,
+      updatedEntry,
+      outcomeLinked: true,
+      stage: updatedEntry.lifecycleStage
+    };
+  }
 
   // Ensure entry path always carries permanent UUID + expiry fields.
   if (isEntryAlert(alertType)) {

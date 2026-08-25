@@ -152,13 +152,14 @@ describe('Option A backend identity / dedupe', () => {
     assert.equal(gate.detail, 'CROSS_TF_CANONICAL_DUPLICATE');
   });
 
-  it('Pine 1.2.1 stamp remains major-family CURRENT with 1.0/1.1/1.2', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.2.1');
+  it('Pine 1.3.0 stamp remains major-family CURRENT with 1.0/1.1/1.2/1.3', () => {
+    assert.equal(PINE_CLIENT_VERSION, '1.3.0');
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('canonical_tf_v1'));
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('event_bridge_v1'));
     assert.equal(resolveCompatibilityMode('1.0.0').mode, COMPAT_MODE.CURRENT);
     assert.equal(resolveCompatibilityMode('1.1.0').mode, COMPAT_MODE.CURRENT);
     assert.equal(resolveCompatibilityMode('1.2.0').mode, COMPAT_MODE.CURRENT);
-    assert.equal(resolveCompatibilityMode('1.2.1').mode, COMPAT_MODE.CURRENT);
+    assert.equal(resolveCompatibilityMode('1.2.2').mode, COMPAT_MODE.CURRENT);
+    assert.equal(resolveCompatibilityMode('1.3.0').mode, COMPAT_MODE.CURRENT);
   });
 });

@@ -18,6 +18,7 @@ function isDbConnected() {
 
 /**
  * Outcome linking is UUID-only (spec). Never match by symbol/timeframe/latest.
+ * findOpenEntryInDb is NOT used on the outcome path.
  */
 async function findEntryByUuidInDb(signalUuid) {
   const id = String(signalUuid || '').trim();
@@ -28,8 +29,9 @@ async function findEntryByUuidInDb(signalUuid) {
   }).lean();
 }
 
-/** @deprecated Prefer findEntryByUuidInDb — kept for registry hydrate only. */
+/** @deprecated Slot hydrate only — NEVER use for outcome linking. Prefer findEntryByUuidInDb. */
 async function findOpenEntryInDb(symbol, timeframe) {
+  if (!isDbConnected()) return null;
   const { normalizeSymbol } = require('../utils/signalOutcome');
   const { normalizeTimeframe } = require('../utils/activeSignalRegistry');
   const normalized = normalizeSymbol(symbol);

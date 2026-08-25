@@ -6,7 +6,7 @@
  *
  * Compatibility modes (major-family contract):
  * - LEGACY  — missing / unparseable / older major than PINE_CLIENT_VERSION
- * - CURRENT — same major as PINE_CLIENT_VERSION (e.g. 1.0.0–1.2.0 when stamp is 1.2.0)
+ * - CURRENT — same major as PINE_CLIENT_VERSION (e.g. 1.0.0–1.3.0 when stamp is 1.3.0)
  * - FUTURE  — higher major than stamp (accepted; new gates stay off until flagged)
  *
  * CURRENT clients still use the Pine-authoritative decision path today
@@ -15,8 +15,15 @@
 
 'use strict';
 
-/** Semver stamped into newly generated Pine + webhook payloads. */
-const PINE_CLIENT_VERSION = '1.2.1';
+/** Semver stamped into newly generated Pine + webhook payloads.
+ *  1.3.0: (1) terminal trades DELETE all chart objects (no completed-trade
+ *  retention); (2) exactly-once alert() via emitKachingEvent + eventId.
+ *  Users must regenerate Pine and delete ALL old TradingView alerts.
+ */
+const PINE_CLIENT_VERSION = '1.3.0';
+
+/** Public contract id. 1.3.0 payloads already match; inferred when schemaVersion is absent. */
+const STABLE_PINE_SCHEMA_VERSION = 'stable-v1';
 
 /**
  * Capabilities actually supported by CURRENT generated Pine today.
@@ -186,7 +193,7 @@ function resolveCompatibilityMode(version) {
     };
   }
 
-  // Same major family as the generator stamp (1.x while stamp is 1.2.0).
+  // Same major family as the generator stamp (1.x while stamp is 1.3.0).
   return {
     mode: COMPAT_MODE.CURRENT,
     pineClientVersion: normalized,
@@ -240,6 +247,7 @@ function capabilitiesJsonLiteral(caps = CURRENT_PINE_CAPABILITIES) {
 
 module.exports = {
   PINE_CLIENT_VERSION,
+  STABLE_PINE_SCHEMA_VERSION,
   CURRENT_PINE_CAPABILITIES,
   KNOWN_CAPABILITIES,
   COMPAT_MODE,

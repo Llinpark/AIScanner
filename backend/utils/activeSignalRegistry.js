@@ -159,6 +159,10 @@ async function redisDel(key) {
   }
 }
 
+/**
+ * Slot occupancy only (one open trade per symbol:timeframe).
+ * NEVER use this for outcome linking — outcomes are UUID-only.
+ */
 async function hydrateFromMongo(symbol, timeframe) {
   try {
     const mongoose = require('mongoose');

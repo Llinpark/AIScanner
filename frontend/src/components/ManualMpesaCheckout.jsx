@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 const TILL_NUMBER = '5337170';
 const BUSINESS_NAME = 'KachingFx Official';
 const BINANCE_ID = '484947783';
+const KES_PER_USDT = 130;
 
 function normalizeBillingCycle(cycle) {
   return cycle === 'yearly' ? 'yearly' : 'monthly';
@@ -22,6 +23,10 @@ function fileToDataUrl(file) {
 function usdtAmountFromPricing(pricing) {
   if (pricing?.priceCents != null && Number.isFinite(Number(pricing.priceCents))) {
     return Number((Number(pricing.priceCents) / 100).toFixed(2));
+  }
+  const kes = Number(pricing?.price);
+  if (Number.isFinite(kes) && kes > 0) {
+    return Number((kes / KES_PER_USDT).toFixed(2));
   }
   return null;
 }
@@ -49,7 +54,7 @@ export default function ManualMpesaCheckout({
     periodLabel: billingCycle === 'yearly' ? 'year' : 'month'
   };
   const kesAmount = pricing.price || 0;
-  const usdtAmount = usdtAmountFromPricing(pricing) ?? Number((kesAmount / 100).toFixed(2));
+  const usdtAmount = usdtAmountFromPricing(pricing) ?? 0;
   const periodLabel = pricing.periodLabel || (billingCycle === 'yearly' ? 'year' : 'month');
   const planName = tierData?.name || tier;
 

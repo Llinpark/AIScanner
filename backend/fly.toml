@@ -16,7 +16,9 @@ primary_region = 'ams'
   # Auto-scan timer ON by default (internal/admin). Production signals still come from TradingView webhooks.
   SCALPING_STRATEGY_ENABLED = 'true'
   DAYTRADING_SWEEP_FVG_ENABLED = 'true'
-  SCANNER_AUTO_ENABLED = 'true'
+  # Trade-alert emails for entitled Pro/Premium subscribers. The mailer 429
+  # circuit-breaker still pauses bulk sends if Resend quota is hit again.
+  EMAIL_TRADE_ALERTS_ENABLED = 'true'
 
 [http_service]
   internal_port = 8080

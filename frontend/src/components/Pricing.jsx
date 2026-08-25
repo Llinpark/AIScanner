@@ -165,6 +165,12 @@ export default function Pricing({
                         vs KES {(tier.pricing.monthly.price * 12).toLocaleString()}/year billed monthly
                       </p>
                     ) : null}
+                    {pricing.priceCents ? (
+                      <p className="tier-meta">
+                        USDT {(pricing.priceCents / 100).toFixed(2)}
+                        {periodSuffix} via Binance
+                      </p>
+                    ) : null}
                     {limits.currencyPairs ? (
                       <p className="tier-meta">
                         {limits.currencyPairs.length} supported markets

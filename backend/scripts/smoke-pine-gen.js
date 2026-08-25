@@ -301,6 +301,31 @@ for (const [label, g] of [
   assert(g.script.includes('max_labels_count=500'), `${label}: max_labels_count should be 500`);
   assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);
   assert(g.script.includes('alert.freq_all'), `${label}: lifecycle alerts must use freq_all`);
+  assert(g.script.includes('emitKachingEvent'), `${label}: live alerts must go through emitKachingEvent`);
+  assert(g.script.includes('cleanupActiveTradeDrawings'), `${label}: missing cleanupActiveTradeDrawings`);
+  assert(!g.script.includes('MAX_COMPLETED_TRADES'), `${label}: must not retain completed-trade drawings`);
+  assert(!/\bdone(LevelLines|LeaderLines|LevelLabels|Badges|Fvgs|Markers|LevelCounts|FvgCounts)\b/.test(g.script), `${label}: must not keep done* drawing arrays`);
+  assert(!g.script.includes('"TP3 HIT"'), `${label}: must not leave TP3 HIT markers on chart`);
+  assert(!g.script.includes('"STOP LOSS"'), `${label}: must not leave STOP LOSS markers on chart`);
+  assert(!g.script.includes('"REPLACED"'), `${label}: must not leave REPLACED markers on chart`);
+  assert(g.script.includes('"isRealtime":'), `${label}: payload must include isRealtime`);
+  assert(
+    /if barstate\.isrealtime[\s\S]{0,80}alert\(payload, alert\.freq_all\)/.test(g.script),
+    `${label}: emitKachingEvent must gate alert() on barstate.isrealtime`
+  );
+  assert(g.script.includes('"eventId":'), `${label}: payload must include eventId`);
+  assert(g.script.includes('"canonicalTradeId":'), `${label}: payload must include canonicalTradeId`);
+  assert(g.script.includes('"eventType":'), `${label}: payload must include eventType`);
+  assert(g.script.includes('"eventSequence":'), `${label}: payload must include eventSequence`);
+  {
+    const code = g.script
+      .split(/\r?\n/)
+      .filter((line) => !line.trimStart().startsWith('//'))
+      .join('\n');
+    const alerts = code.match(/\balert\s*\(/g) || [];
+    assert(alerts.length === 1, `${label}: generated Pine must call alert() exactly once (got ${alerts.length})`);
+  }
+  assert(!/cleanupActiveTradeDrawings\([^)]*kachingEmit/.test(g.script), `${label}: drawing cleanup must not reset emit flags`);
   assert(g.script.includes('licenseToken'), `${label}: missing licenseToken auth`);
   assert(!g.script.includes('kls_v1'), `${label}: generated Pine must not embed kls_v1`);
   assert(String(g.licenseToken || '').startsWith('kls_v2.'), `${label}: licenseToken must be kls_v2`);
@@ -323,9 +348,9 @@ for (const [label, g] of [
     g.script.includes(
       '"capabilities":["v1_payload","sl_risk_v1","replace_active_v1","json_esc_v1","canonical_tf_v1","event_bridge_v1"]'
     ),
-    `${label}: capabilities must stamp current 1.2.1 set`
+    `${label}: capabilities must stamp current 1.2.x set`
   );
-  assert(g.pineClientVersion === '1.2.1', `${label}: generator pineClientVersion must be 1.2.1`);
+  assert(g.pineClientVersion === '1.3.0', `${label}: generator pineClientVersion must be 1.3.0`);
   assert(
     Array.isArray(g.capabilities) &&
       g.capabilities.length === 6 &&
@@ -436,7 +461,7 @@ console.log(
       strategyArchitectureDriven: 'passed',
       violations: 0,
       daytrading: {
-        hasPersistence: true,
+        activeTradeDrawingsOnly: true,
         expiryDefault: 80,
         enableTradeExpiry: true,
         compileSafeDrawingEngine: true,
@@ -446,7 +471,7 @@ console.log(
         webhookUrl: day.webhookUrl
       },
       scalping: {
-        hasPersistence: true,
+        activeTradeDrawingsOnly: true,
         expiryDefault: 60,
         enableTradeExpiry: true,
         compileSafeDrawingEngine: true,

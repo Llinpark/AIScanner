@@ -157,7 +157,7 @@ describe('LicenseTokenService canonical contract', () => {
     try {
       const token = LicenseTokenService.generateLicenseToken('64b0f0f0f0f0f0f0f0f0aa14', 'tampertrader');
       const parts = token.split('.');
-      const tampered = `${parts[0]}.${parts[1]}.${parts[2].replace(/[A-Za-z]/, 'x')}`;
+      const tampered = `${parts[0]}.${parts[1]}.${parts[2]}x`;
       const verified = LicenseTokenService.verifyLicenseTokenDetailed(tampered);
       assert.equal(verified.ok, false);
       assert.equal(verified.reason, 'invalid_license_token');
@@ -318,6 +318,52 @@ describe('LicenseTokenService canonical contract', () => {
       const verified = LicenseTokenService.verifyLicenseTokenDetailed(legacy);
       assert.equal(verified.ok, true);
       assert.equal(verified.claims.uid, payload.uid);
+
+      const withCR = `${legacy}\r`;
+      const crOk = LicenseTokenService.verifyLicenseTokenDetailed(withCR);
+      assert.equal(crOk.ok, true, 'kls_v1 with trailing CR (transport artifact) must verify');
+      assert.equal(crOk.diagnostics.hasCR, true);
+      assert.equal(crOk.claims.uid, payload.uid);
+    } finally {
+      process.env.NODE_ENV = prev;
+    }
+  });
+
+  it('kls_v2 with outer CR/LF/whitespace verifies; tampered and non-production reject', () => {
+    const prev = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      const token = LicenseTokenService.generateLicenseToken(
+        '64b0f0f0f0f0f0f0f0f0aa11',
+        'crtrader'
+      );
+      const padded = `\r\n  ${token}  \r`;
+      const ok = LicenseTokenService.verifyLicenseTokenDetailed(padded);
+      assert.equal(ok.ok, true);
+      assert.equal(ok.claims.tvu, 'crtrader');
+
+      const tampered = `${token.slice(0, -2)}xx`;
+      const bad = LicenseTokenService.verifyLicenseTokenDetailed(tampered);
+      assert.equal(bad.ok, false);
+      assert.equal(bad.reason, 'invalid_license_token');
+
+      const devPayload = {
+        v: 2,
+        env: 'development',
+        uid: '64b0f0f0f0f0f0f0f0f0aa11',
+        tvu: 'crtrader',
+        iat: Math.floor(Date.now() / 1000),
+        issuer: 'kaching-license'
+      };
+      const encoded = Buffer.from(JSON.stringify(devPayload)).toString('base64url');
+      const signature = require('crypto')
+        .createHmac('sha256', SIGNING)
+        .update(encoded)
+        .digest('base64url');
+      const nonProd = `kls_v2.${encoded}.${signature}`;
+      const rejected = LicenseTokenService.verifyLicenseTokenDetailed(nonProd);
+      assert.equal(rejected.ok, false);
+      assert.equal(rejected.reason, 'non_production_license_token');
     } finally {
       process.env.NODE_ENV = prev;
     }

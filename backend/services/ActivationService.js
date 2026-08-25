@@ -472,6 +472,12 @@ async function submitManualPaymentRequest({
   if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
     throw Object.assign(new Error('Amount must be a positive number.'), { status: 400 });
   }
+  if (isBinance && Math.abs(paidAmount - defaultAmount) > 0.01) {
+    throw Object.assign(
+      new Error(`Binance amount must be USDT ${defaultAmount.toFixed(2)} for this plan.`),
+      { status: 400 }
+    );
+  }
 
   const phone = String(phoneNumber || '').trim();
   if (manualMethod === 'manual_mpesa') {

@@ -58,6 +58,7 @@ try {
 
 const Signal = require('./models/Signal');
 const UserConfig = require('./models/User');
+require('./models/DeliveryJob');
 
 const { TIERS, PAYMENT_CONFIG, getPublicTiers, getTierPricing, FEATURE_MATRIX, getPublicPaymentMethods } = require('./config/subscriptions');
 
@@ -825,36 +826,69 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
       reason: `alertType=${normalizedAlertType}; structuredEntry=${isStructuredEntry}; requestId=${requestId}`
     });
 
-    const result = await MarketScannerService.publishTradingViewAlert(
+    const timings = {
+      webhookReceivedAt: t0,
+      authCompletedAt: Date.now(),
+      validationCompletedAt: Date.now()
+    };
+    const accept = await TradingViewAlertService.acceptTradingViewWebhook(
       io,
       parsed,
-      inMemorySignals
+      inMemorySignals,
+      { timings }
     );
 
-    const latencyMs = Date.now() - t0;
-    if (result?.rejected) {
+    if (accept?.rejected) {
       logPipeline('Publish', 'FAIL', {
         ...meta,
-        signalUuid: result.signalUuid || meta.signalUuid,
-        reason: `${result.reason || 'rejected'}; requestId=${requestId}`
+        signalUuid: accept.signalUuid || meta.signalUuid,
+        reason: `${accept.reason || 'rejected'}; requestId=${requestId}`
       });
-    } else {
-      logTvStage('TV WEBHOOK SIGNAL PERSISTED', {
-        requestId,
-        symbol: meta.symbol,
-        timeframe: meta.timeframe,
-        signalUuid: result.signalUuid || meta.signalUuid,
-        delivered: result.delivered ?? 0,
-        skippedByEntitlement: result.skippedByEntitlement ?? 0
-      });
-      logPipeline('Publish', 'PASS', {
-        ...meta,
-        signalUuid: result.signalUuid || meta.signalUuid,
-        reason: `mode=${result.mode || 'broadcast'}; delivered=${result.delivered ?? 0}; latencyMs=${latencyMs}; requestId=${requestId}`
+      const status = accept.httpStatus || TradingViewAlertService.rejectedWebhookHttpStatus(accept.reason);
+      return res.status(status).json({
+        ok: false,
+        accepted: false,
+        rejected: true,
+        reason: accept.reason,
+        message: accept.message,
+        requestId
       });
     }
 
-    return res.status(201).json({ success: true, latencyMs, requestId, ...result });
+    const latencyMs = Date.now() - t0;
+    timings.httpReturnedAt = Date.now();
+    logTvStage('TV WEBHOOK SIGNAL PERSISTED', {
+      requestId,
+      symbol: meta.symbol,
+      timeframe: meta.timeframe,
+      signalUuid: accept.signalUuid || meta.signalUuid,
+      duplicate: Boolean(accept.duplicate)
+    });
+    logPipeline('Accepted', 'PASS', {
+      ...meta,
+      signalUuid: accept.signalUuid || meta.signalUuid,
+      latencyMs,
+      reason: accept.duplicate
+        ? `idempotent; latencyMs=${latencyMs}; requestId=${requestId}`
+        : `durable_ack; latencyMs=${latencyMs}; requestId=${requestId}`
+    });
+
+    if (!accept.duplicate && !accept.skippedFanout) {
+      TradingViewAlertService.scheduleAcceptedTradingViewSignal(io, accept, inMemorySignals);
+    }
+
+    return res.status(202).json({
+      ok: true,
+      accepted: true,
+      success: true,
+      publishOnly: true,
+      requestId,
+      signalUuid: accept.signalUuid || meta.signalUuid,
+      latencyMs,
+      duplicate: Boolean(accept.duplicate),
+      mode: accept.mode || 'broadcast',
+      deferredFanout: !accept.duplicate && !accept.skippedFanout
+    });
   } catch (error) {
     const rejectedFields =
       error?.rejectedFields ||
@@ -879,8 +913,19 @@ app.post('/api/webhook/tradingview', webhookLimiter, async (req, res) => {
     );
     console.error(`[WEBHOOK FAIL:VALIDATION] reason=${validationReason}`);
     console.error('TradingView webhook error:', error);
-    return res.status(500).json({
-      message: 'TradingView webhook processing failed',
+    const httpStatus = isPersistFail ? 500 : 400;
+    if (isPersistFail) {
+      logPipeline('MongoSave', 'FAIL', {
+        ...earlyMeta,
+        reason: `${validationReason}; requestId=${requestId}`
+      });
+    }
+    return res.status(httpStatus).json({
+      ok: false,
+      accepted: false,
+      message: isPersistFail
+        ? 'TradingView webhook persistence failed'
+        : 'TradingView webhook processing failed',
       error: error.message,
       rejectedFields: rejectedFields || undefined,
       requestId
@@ -2793,6 +2838,15 @@ server.on('listening', () => {
     TradeDeliveryService.startManualConfirmExpiryJob();
   } catch (err) {
     console.error('[TradeDelivery] Failed to start manual confirm expiry job:', err.message);
+  }
+  // Durable delivery recovery: reclaim expired leases / retry RETRY_PENDING across Fly machines.
+  try {
+    const DurableDelivery = require('./utils/durableDelivery');
+    if (String(process.env.NODE_ENV || '').toLowerCase() !== 'test') {
+      DurableDelivery.startRecoveryWorker({ io, inMemorySignals });
+    }
+  } catch (err) {
+    console.error('[DurableDelivery] Failed to start recovery worker:', err.message);
   }
   // Hourly: revoke access when subscription.current_period_end (expiryDate) has passed.
   try {

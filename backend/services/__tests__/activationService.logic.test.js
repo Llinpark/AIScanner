@@ -49,6 +49,20 @@ describe('Manual payment request validation (no DB)', () => {
     );
   });
 
+  it('rejects Binance amounts that do not match the plan USDT price', async () => {
+    await assert.rejects(
+      () =>
+        submitManualPaymentRequest({
+          userId: '64b0f0f0f0f0f0f0f0f0f0aa',
+          tier: 'basic',
+          method: 'manual_binance',
+          binanceTxId: '123456789012345678',
+          amount: 55
+        }),
+      err => err.status === 400 && /USDT/i.test(err.message)
+    );
+  });
+
   it('rejects invalid phone numbers for M-Pesa', async () => {
     await assert.rejects(
       () =>
@@ -71,7 +85,7 @@ describe('Manual payment request validation (no DB)', () => {
           tier: 'professional',
           method: 'binance',
           binanceTxId: '123456789012345678',
-          amount: 138.82
+          amount: 92.31
         }),
       err => err.status === 503
     );

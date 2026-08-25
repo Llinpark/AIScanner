@@ -56,6 +56,20 @@ const SignalSchema = new mongoose.Schema({
   signalSource: { type: String, default: 'tradingview' },
   /** Permanent trade id from Pine / webhook — never overwritten after confirm. */
   signalUuid: { type: String, index: true },
+  /** Option A canonical key (same trade across chart TFs). Not unique — prod may have dupes. */
+  canonicalSignalKey: { type: String },
+  /** Event time from Pine (signalTime / timestamp), not HTTP receipt. */
+  eventTimestamp: { type: Date },
+  /** HTTP webhook correlation id (not a secret). Survives toObject() for async fan-out logs. */
+  pipelineRequestId: { type: String },
+  /** Same-bar ordering hint from the event bridge. */
+  bridgeEventIndex: { type: Number },
+  /**
+   * Exactly-once delivery keys: `${eventType}:${channel}:${subscriberId}`.
+   * Not a unique index — membership is checked per document.
+   */
+  deliveredKeys: { type: [String], default: [] },
+  entryAcceptedAt: { type: Date },
   /** Non-secret Pine generation id from the webhook body (diagnostics). */
   scriptGenerationId: { type: String },
   /** Alias kept for clients that send signalId. */

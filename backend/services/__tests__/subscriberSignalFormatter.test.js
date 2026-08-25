@@ -12,6 +12,7 @@ const { sendTradeAlertEmail } = require('../../utils/mailer');
 const TelegramService = require('../TelegramService');
 const TradeDeliveryService = require('../TradeDeliveryService');
 const { buildSignalData } = require('../TradingViewAlertService');
+const deliveryIdempotency = require('../../utils/deliveryIdempotency');
 
 function eurusdBuy(overrides = {}) {
   return {
@@ -302,14 +303,22 @@ describe('7. Stale ENTRY is not sent as a fresh alert', () => {
     );
   });
 
-  it('email and telegram skip stale entries (mocked, no real send)', async () => {
-    const stale = eurusdBuy({ tradeStatus: 'expired', outcome: 'expired', closedAt: new Date() });
+  it('email and telegram skip stale/terminal entries (mocked, no real send)', async () => {
+    const stale = eurusdBuy({ expiresAt: new Date(Date.now() - 60_000) });
     const email = await TradeDeliveryService.deliverEmail(proSubscriber(), stale);
     assert.equal(email.ok, false);
     assert.equal(email.reason, 'stale_entry');
     const tg = await TradeDeliveryService.deliverTelegram(proSubscriber(), stale);
     assert.equal(tg.ok, false);
     assert.equal(tg.reason, 'stale_entry');
+
+    const closed = eurusdBuy({ tradeStatus: 'won', outcome: 'tp3', closedAt: new Date() });
+    const emailClosed = await TradeDeliveryService.deliverEmail(proSubscriber(), closed);
+    assert.equal(emailClosed.ok, false);
+    assert.equal(emailClosed.reason, 'terminal_before_entry_delivery');
+    const tgClosed = await TradeDeliveryService.deliverTelegram(proSubscriber(), closed);
+    assert.equal(tgClosed.ok, false);
+    assert.equal(tgClosed.reason, 'terminal_before_entry_delivery');
   });
 });
 
@@ -344,6 +353,7 @@ describe('10. Plan delivery regression (mocked channels)', () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
+    deliveryIdempotency.resetForTests();
     process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token-not-real';
     process.env.RESEND_API_KEY = 'test-not-real';
     delete process.env.SMTP_HOST;
@@ -385,6 +395,7 @@ describe('10. Plan delivery regression (mocked channels)', () => {
 
     const alertsOnly = await TradeDeliveryService.deliverTelegram(
       proSubscriber({
+        id: 'pro_fmt_alerts_only',
         telegram: { chatId: '111001', enabled: true, telegramMode: 'alerts_only' }
       }),
       signal,

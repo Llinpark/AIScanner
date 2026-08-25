@@ -21,6 +21,60 @@ function isMailConfigured() {
   return Boolean(getResendApiKey() || isSmtpConfigured());
 }
 
+/** Trade-alert fan-out. Production sets EMAIL_TRADE_ALERTS_ENABLED in fly.toml. */
+function tradeAlertsEnabled() {
+  const raw = String(process.env.EMAIL_TRADE_ALERTS_ENABLED || 'true').toLowerCase();
+  return raw !== 'false' && raw !== '0' && raw !== 'off';
+}
+
+let bulkPausedUntilMs = 0;
+
+function msUntilNextUtcMidnight() {
+  const now = Date.now();
+  const next = Date.UTC(
+    new Date(now).getUTCFullYear(),
+    new Date(now).getUTCMonth(),
+    new Date(now).getUTCDate() + 1
+  );
+  return Math.max(60_000, next - now);
+}
+
+function retryAfterMsFrom(response, body) {
+  const header = response?.headers?.get?.('retry-after');
+  if (header) {
+    const sec = parseInt(header, 10);
+    if (Number.isFinite(sec) && sec > 0) return sec * 1000;
+  }
+  const retryAfter = body?.retryAfter || body?.retry_after;
+  if (Number.isFinite(Number(retryAfter)) && Number(retryAfter) > 0) {
+    return Number(retryAfter) * 1000;
+  }
+  return msUntilNextUtcMidnight();
+}
+
+function pauseBulkUntil(ms) {
+  const until = Date.now() + Math.max(60_000, ms || msUntilNextUtcMidnight());
+  if (until > bulkPausedUntilMs) {
+    bulkPausedUntilMs = until;
+    console.warn('[mailer] pausing bulk email until', new Date(bulkPausedUntilMs).toISOString());
+  }
+}
+
+function isBulkPaused() {
+  return Date.now() < bulkPausedUntilMs;
+}
+
+function isQuotaError(err) {
+  if (!err) return false;
+  if (err.status === 429) return true;
+  return /quota|daily_quota|rate.?limit/i.test(String(err.message || ''));
+}
+
+function resetMailerStateForTests() {
+  bulkPausedUntilMs = 0;
+  transportPromise = null;
+}
+
 function createTransport() {
   if (!isSmtpConfigured()) return null;
 
@@ -72,6 +126,9 @@ async function sendViaResendApi({ to, subject, text, html }) {
     const err = new Error(`Resend API ${response.status}: ${detail}`);
     err.status = response.status;
     err.body = body;
+    if (response.status === 429 || isQuotaError(err)) {
+      pauseBulkUntil(retryAfterMsFrom(response, body));
+    }
     throw err;
   }
 
@@ -79,8 +136,45 @@ async function sendViaResendApi({ to, subject, text, html }) {
   return { provider: 'resend_api', id: body.id };
 }
 
-async function sendMail({ to, subject, text, html }) {
+function isPermanentEmailFailure(err) {
+  const status = Number(err?.status || err?.httpStatus || 0);
+  if (status === 400 || status === 403 || status === 404 || status === 422) return true;
+  return /invalid.+email|not a valid|suppressed|bounce|blocked|unsubscribed/i.test(
+    String(err?.message || err?.reason || '')
+  );
+}
+
+function backoffMs(attempt) {
+  return Math.min(8000, 200 * 2 ** (attempt - 1));
+}
+
+async function sendMailWithRetry(payload, { maxAttempts = 3 } = {}) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await sendMail(payload);
+    } catch (err) {
+      lastErr = err;
+      if (isQuotaError(err) || isPermanentEmailFailure(err) || attempt >= maxAttempts) {
+        throw err;
+      }
+      await new Promise(r => setTimeout(r, backoffMs(attempt)));
+    }
+  }
+  throw lastErr;
+}
+
+async function sendMail({ to, subject, text, html, priority = 'transactional' }) {
   const payload = { from: EMAIL_FROM, to, subject, text, html };
+  const isBulk = priority === 'bulk';
+
+  if (isBulk && !tradeAlertsEnabled()) {
+    return { skipped: true, reason: 'trade_alerts_disabled' };
+  }
+  if (isBulk && isBulkPaused()) {
+    console.warn('[mailer] bulk email skipped (quota circuit open)', { to, subject });
+    return { skipped: true, reason: 'quota_circuit_open' };
+  }
 
   // Prefer Resend HTTPS API — Fly.io often blocks outbound SMTP ports.
   if (getResendApiKey()) {
@@ -165,6 +259,8 @@ async function sendPasswordResetEmail({ to, token, displayName }) {
 
 async function sendTradeAlertEmail({ to, displayName, signal, presentation } = {}) {
   if (!to || !signal) return { ok: false, reason: 'missing_to_or_signal' };
+  if (!tradeAlertsEnabled()) return { ok: false, reason: 'trade_alerts_disabled' };
+  if (isBulkPaused()) return { ok: false, reason: 'quota_circuit_open' };
 
   const formatted =
     presentation && typeof presentation === 'object'
@@ -191,9 +287,11 @@ async function sendTradeAlertEmail({ to, displayName, signal, presentation } = {
         to,
         subject: 'Kaching trading alert',
         text: fallback,
-        html: `<p>${fallback}</p>`
+        html: `<p>${fallback}</p>`,
+        priority: 'bulk'
       });
     } catch (err) {
+      if (isQuotaError(err)) pauseBulkUntil(msUntilNextUtcMidnight());
       console.warn('[mailer] trade-alert fallback email failed:', err.message);
     }
     return { ok: false, reason: formatted?.reason || 'formatting_failed', sentFallback: true };
@@ -216,13 +314,22 @@ async function sendTradeAlertEmail({ to, displayName, signal, presentation } = {
   }
 
   void displayName;
-  const info = await sendMail({
-    to,
-    subject: formatted.subject,
-    text: formatted.text,
-    html: formatted.html || `<pre>${formatted.text}</pre>`
-  });
-  return { ok: true, ...info, presentation: formatted };
+  try {
+    const info = await sendMailWithRetry({
+      to,
+      subject: formatted.subject,
+      text: formatted.text,
+      html: formatted.html || `<pre>${formatted.text}</pre>`,
+      priority: 'bulk'
+    });
+    if (info?.skipped) {
+      return { ok: false, reason: info.reason, presentation: formatted };
+    }
+    return { ok: true, ...info, presentation: formatted };
+  } catch (err) {
+    if (isQuotaError(err)) pauseBulkUntil(msUntilNextUtcMidnight());
+    throw err;
+  }
 }
 
 async function sendSubscriptionActivatedEmail({
@@ -278,5 +385,9 @@ module.exports = {
   sendTradeAlertEmail,
   sendSubscriptionActivatedEmail,
   isSmtpConfigured,
-  isMailConfigured
+  isMailConfigured,
+  isQuotaError,
+  isPermanentEmailFailure,
+  tradeAlertsEnabled,
+  resetMailerStateForTests
 };

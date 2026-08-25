@@ -2,6 +2,7 @@
 // Extends Entry/SL/TP lines to the live candle and repositions labels/leaders using
 // stored layout metadata. Must NOT wait for bar confirmation (avoids half-drawn lines).
 // Canonical TP/SL/expiry lifecycle runs in EVENT_ARM (chronological with signal events).
+// Leftover objects when not tradeIsActive() are deleted (no completed-trade retention).
 // No bgcolor() / barcolor() — never paint full-height vertical signal bands.
 if tradeIsActive()
     rightX = bar_index
@@ -29,3 +30,5 @@ if tradeIsActive()
     if array.size(tradeBadgeHold) > 0
         label.set_xy(array.get(tradeBadgeHold, 0), entryX, tradeEntry())
         label.set_yloc(array.get(tradeBadgeHold, 0), yloc.price)
+else if array.size(tradeLevelLines) > 0 or array.size(tradeLeaderLines) > 0 or array.size(tradeLevelLabels) > 0 or array.size(tradeBadgeHold) > 0 or array.size(tradeFvgHold) > 0
+    cleanupActiveTradeDrawings(tradeLevelLines, tradeLeaderLines, tradeLevelLabels, tradeBadgeHold, tradeFvgHold, tradeFloats, tradeLabelYs, tradeStrings, tradeFlags, tradeCanonMeta, tradeLayoutSide, tradeLayoutStep)

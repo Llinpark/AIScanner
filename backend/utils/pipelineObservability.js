@@ -191,6 +191,21 @@ const TIMELINE_STAGES = [
     knownFromBackend: true
   },
   {
+    id: 'accepted',
+    label: 'Accepted',
+    knownFromBackend: true
+  },
+  {
+    id: 'entry_ordered',
+    label: 'Entry Ordered',
+    knownFromBackend: true
+  },
+  {
+    id: 'outcome_ordered',
+    label: 'Outcome Ordered',
+    knownFromBackend: true
+  },
+  {
     id: 'redis_published',
     label: 'Redis Published',
     knownFromBackend: true
@@ -203,6 +218,11 @@ const TIMELINE_STAGES = [
   {
     id: 'telegram',
     label: 'Telegram',
+    knownFromBackend: true
+  },
+  {
+    id: 'email',
+    label: 'Email',
     knownFromBackend: true
   },
   {
@@ -285,6 +305,7 @@ function buildPipelineTimeline(snapshot = {}) {
   const webhookAt = s.lastWebhookAt ? new Date(s.lastWebhookAt).getTime() : null;
   const authAt = s.lastAuthAt ? new Date(s.lastAuthAt).getTime() : null;
   const mongoAt = s.lastMongoSaveAt ? new Date(s.lastMongoSaveAt).getTime() : null;
+  const acceptedAt = s.lastAcceptedAt ? new Date(s.lastAcceptedAt).getTime() : null;
   const publishAt = s.lastPublishedAt ? new Date(s.lastPublishedAt).getTime() : null;
   const socketAt = s.lastSocketAt ? new Date(s.lastSocketAt).getTime() : null;
   const tgAt = s.lastTelegramAt ? new Date(s.lastTelegramAt).getTime() : null;
@@ -316,24 +337,55 @@ function buildPipelineTimeline(snapshot = {}) {
   });
 
   push(TIMELINE_STAGES[9], {
+    status: s.lastAcceptedAt ? 'ok' : 'unknown',
+    at: s.lastAcceptedAt || null,
+    durationMs: webhookAt && acceptedAt ? Math.max(0, acceptedAt - webhookAt) : null,
+    note: s.lastAcceptedAt
+      ? 'Durable accept — HTTP ack after Mongo Signal save (fan-out continues async).'
+      : null
+  });
+
+  push(TIMELINE_STAGES[10], {
+    status: s.lastAcceptedAt ? 'ok' : 'unknown',
+    at: s.lastAcceptedAt || null,
+    note: s.lastAcceptedAt
+      ? 'Entry queued for ordered async delivery (after HTTP 202).'
+      : 'No entry ordered yet.'
+  });
+
+  push(TIMELINE_STAGES[11], {
+    status: s.lastPublishedAt ? 'ok' : 'unknown',
+    at: s.lastPublishedAt || null,
+    note: 'Outcome events are ordered behind ENTRY via Redis lock + dispatcher.'
+  });
+
+  push(TIMELINE_STAGES[12], {
     status: s.lastPublishFail ? 'fail' : s.lastPublishedAt ? 'ok' : 'unknown',
     at: s.lastPublishedAt || null,
     durationMs: mongoAt && publishAt ? Math.max(0, publishAt - mongoAt) : null,
     note: 'Redis publish / signal fan-out (Publish stage).'
   });
 
-  push(TIMELINE_STAGES[10], {
+  push(TIMELINE_STAGES[13], {
     status: s.lastSocketFail ? 'fail' : s.lastSocketAt ? 'ok' : 'unknown',
     at: s.lastSocketAt || null
   });
 
-  push(TIMELINE_STAGES[11], {
+  push(TIMELINE_STAGES[14], {
     status: s.lastTelegramFail ? 'fail' : s.lastTelegramAt ? 'ok' : 'unknown',
     at: s.lastTelegramAt || null,
     durationMs: mongoAt && tgAt ? Math.max(0, tgAt - mongoAt) : null
   });
 
-  push(TIMELINE_STAGES[12], {
+  const emailAt = s.lastEmailAt ? new Date(s.lastEmailAt).getTime() : null;
+  push(TIMELINE_STAGES[15], {
+    status: s.lastEmailFail ? 'fail' : s.lastEmailAt ? 'ok' : 'unknown',
+    at: s.lastEmailAt || null,
+    durationMs: mongoAt && emailAt ? Math.max(0, emailAt - mongoAt) : null,
+    note: s.lastEmailAt ? null : 'No email attempts (shown as — in success %, not 0%).'
+  });
+
+  push(TIMELINE_STAGES[16], {
     status: s.lastMT5Fail ? 'fail' : s.lastMT5At ? 'ok' : 'unknown',
     at: s.lastMT5At || null,
     durationMs: mongoAt && mt5At ? Math.max(0, mt5At - mongoAt) : null

@@ -470,18 +470,23 @@ describe('Option A Pine bridge structure', () => {
     assert.match(ARM, /for li = 0 to nLifeBars/);
     assert.match(ARM, /for ei = 0 to array\.size\(evSignalTime\)/);
     assert.match(ARM, /lifeH >= tradeTp3|lifeL <= tradeTp3/);
-    assert.match(ARM, /tradeCanonBarsAlive/);
-    assert.match(ARM, /new_confirmed_setup/);
+    assert.match(ARM, /emitKachingEvent\(/);
+    assert.match(ARM, /cleanupActiveTradeDrawings\(/);
+    assert.doesNotMatch(ARM, /MAX_COMPLETED_TRADES|doneBadges|doneLevelLines/);
+    assert.doesNotMatch(ARM, /TP3 HIT|STOP LOSS/);
     assert.match(DRAW_DEFS, /tradeCanonMeta/);
+    assert.match(DRAW_DEFS, /cleanupActiveTradeDrawings\(/);
+    assert.doesNotMatch(DRAW_DEFS, /doneLevelLines|MAX_COMPLETED_TRADES/);
     assert.doesNotMatch(DRAW_RT, /hitSlWick/);
   });
 
   it('capability + version stamp', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.2.1');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.0');
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('event_bridge_v1'));
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('canonical_tf_v1'));
     assert.equal(resolveCompatibilityMode('1.0.0').mode, COMPAT_MODE.CURRENT);
-    assert.equal(resolveCompatibilityMode('1.2.1').mode, COMPAT_MODE.CURRENT);
+    assert.equal(resolveCompatibilityMode('1.2.2').mode, COMPAT_MODE.CURRENT);
+    assert.equal(resolveCompatibilityMode('1.3.0').mode, COMPAT_MODE.CURRENT);
     assert.equal(resolveCompatibilityMode('2.0.0').mode, COMPAT_MODE.FUTURE);
     assert.equal(resolveCompatibilityMode(null).mode, COMPAT_MODE.LEGACY);
   });

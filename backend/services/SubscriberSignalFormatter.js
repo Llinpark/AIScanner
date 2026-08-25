@@ -9,7 +9,6 @@ const { formatTvPrice } = require('../utils/priceFormat');
 const { toCompactSymbol, getSymbolAssetClass } = require('../config/symbols');
 const {
   isEntryAlert,
-  isTerminalEntry,
   isOutcomeAlert
 } = require('../utils/signalOutcome');
 const { KACHING_ALERT_NAMES } = require('../utils/kachingSignalLevels');
@@ -177,15 +176,27 @@ function assertSafeSubscriberContent(content, meta = {}) {
 function isStaleFreshEntry(signal = {}, now = new Date()) {
   const alertType = resolveAlertType(signal);
   if (!isEntryAlert(alertType)) return false;
-  if (isTerminalEntry(signal)) return true;
-  if (signal.closedAt) return true;
+  // Accepted Entry jobs must still format even if Mongo later became terminal (same-bar TP3).
+  if (signal.entryAcceptedAt) return false;
+  const { evaluateEntryFreshness } = require('../utils/tradeEventIdentity');
+  const { isTerminalEntry } = require('../utils/signalOutcome');
+  if (isTerminalEntry(signal) || signal.closedAt) return true;
   const stage = String(signal.lifecycleStage || '').toUpperCase();
   if (['TP3', 'SL', 'EXPIRED', 'CANCELLED', 'COMPLETED'].includes(stage)) return true;
   if (signal.expiresAt) {
     const exp = new Date(signal.expiresAt);
-    if (!Number.isNaN(exp.getTime()) && exp.getTime() <= now.getTime()) return true;
+    const nowMs = now instanceof Date ? now.getTime() : Number(now);
+    if (!Number.isNaN(exp.getTime()) && exp.getTime() <= nowMs) return true;
   }
-  return false;
+  const freshness = evaluateEntryFreshness(
+    {
+      ...signal,
+      alertType: 'entry',
+      eventTimestamp: signal.eventTimestamp || signal.signalTime || signal.timestamp
+    },
+    { now: now instanceof Date ? now.getTime() : Number(now) }
+  );
+  return Boolean(freshness.stale);
 }
 
 function appendLevelLines(lines, levels, symbol, { telegram }) {

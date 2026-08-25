@@ -344,7 +344,7 @@ async function runLocalHttpHarnessSelfTest({ inMemorySignals = [] } = {}) {
 
   const express = require('express');
   const { verifyTradingViewWebhook } = require('./webhookSecurity');
-  const MarketScannerService = require('../services/MarketScannerService');
+  const TradingViewAlertService = require('../services/TradingViewAlertService');
   const { logPipeline: plog, extractPipelineMeta, clientIp, payloadSize } = require('./pipelineLog');
 
   const testUserId = process.env.PIPELINE_SELFTEST_USER_ID || '000000000000000000000001';
@@ -407,18 +407,44 @@ async function runLocalHttpHarnessSelfTest({ inMemorySignals = [] } = {}) {
         reason: `mode=${auth.mode}`
       });
 
-      const result = await MarketScannerService.publishTradingViewAlert(
+      const result = await TradingViewAlertService.acceptTradingViewWebhook(
         { emit() {}, to() { return { emit() {} }; } },
         auth.body || req.body,
         inMemorySignals
       );
+      if (result?.rejected) {
+        const status =
+          result.httpStatus || TradingViewAlertService.rejectedWebhookHttpStatus(result.reason);
+        return res.status(status).json({
+          ok: false,
+          accepted: false,
+          rejected: true,
+          reason: result.reason,
+          message: result.message
+        });
+      }
+      if (!result?.duplicate && !result?.skippedFanout) {
+        TradingViewAlertService.scheduleAcceptedTradingViewSignal(
+          { emit() {}, to() { return { emit() {} }; } },
+          result,
+          inMemorySignals
+        );
+      }
       const latencyMs = Date.now() - t0;
-      plog('Publish', result?.rejected ? 'FAIL' : 'PASS', {
+      plog('Accepted', 'PASS', {
         ...extractPipelineMeta(auth.body || req.body),
         signalUuid: result?.signalUuid,
-        reason: `delivered=${result?.delivered ?? 0}; latencyMs=${latencyMs}`
+        reason: `deferredFanout=${!result?.duplicate}; latencyMs=${latencyMs}`
       });
-      return res.status(201).json({ success: true, latencyMs, ...result });
+      return res.status(202).json({
+        ok: true,
+        accepted: true,
+        success: true,
+        latencyMs,
+        requestId: result?.signalData?.pipelineRequestId,
+        signalUuid: result?.signalUuid,
+        duplicate: Boolean(result?.duplicate)
+      });
     } catch (error) {
       plog('Validation', 'FAIL', {
         ...earlyMeta,
@@ -474,7 +500,7 @@ async function runLocalHttpHarnessSelfTest({ inMemorySignals = [] } = {}) {
       mongoConnected: require('mongoose').connection.readyState === 1,
       latencyMs,
       note:
-        'HTTP harness uses production verifyTradingViewWebhook + MarketScannerService.publishTradingViewAlert via real Express POST /api/webhook/tradingview.'
+        'HTTP harness uses production verifyTradingViewWebhook + acceptTradingViewWebhook (fast-ack) via real Express POST /api/webhook/tradingview.'
     };
   } finally {
     delete process.env.PIPELINE_SELF_TEST_ACTIVE;
