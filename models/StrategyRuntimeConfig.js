@@ -1,0 +1,48 @@
+const mongoose = require('mongoose');
+
+/**
+ * Persisted admin overrides for pluggable Strategy Profiles.
+ * Env/defaults remain the baseline; this document wins at runtime after boot load.
+ *
+ * BC fields: scalping, daytrading, activeStrategy (enum live keys).
+ * Additive: profiles (Mixed map for stub/future overrides), version tracking via updatedAt.
+ */
+const StrategyRuntimeConfigSchema = new mongoose.Schema({
+  key: {
+    type: String,
+    required: true,
+    unique: true,
+    default: 'strategies',
+    index: true
+  },
+  scalping: { type: mongoose.Schema.Types.Mixed, default: {} },
+  daytrading: { type: mongoose.Schema.Types.Mixed, default: {} },
+  /** Additive map: strategyKey → independent overrides for stubs / future profiles */
+  profiles: { type: mongoose.Schema.Types.Mixed, default: {} },
+  /** Preferred / active strategy for analysis (live keys). Default scalping. */
+  activeStrategy: {
+    type: String,
+    enum: ['scalping', 'daytrading'],
+    default: 'scalping'
+  },
+  /**
+   * True only after a Super Admin scanner-config save.
+   * Distinguishes intentional prefer from the legacy schema default (daytrading).
+   */
+  activeStrategyExplicit: {
+    type: Boolean,
+    default: false
+  },
+  /** Independent Market Regime Filter settings (pre-scan gate; not strategy-specific) */
+  marketRegime: { type: mongoose.Schema.Types.Mixed, default: {} },
+  /**
+   * Core scanner runtime settings (interval, batch size, auto-scan).
+   * Env/patternScanner defaults are baseline; this object wins after boot load.
+   * Shape: { autoScanEnabled?, autoScanIntervalMs?, scanBatchSize? }
+   */
+  coreScanner: { type: mongoose.Schema.Types.Mixed, default: {} },
+  updatedAt: { type: Date, default: Date.now },
+  updatedBy: { type: String }
+});
+
+module.exports = mongoose.model('StrategyRuntimeConfig', StrategyRuntimeConfigSchema);

@@ -1,0 +1,18 @@
+{
+  "userId": "your_user_id_from_pine_script",
+  "licenseToken": "kls_v1....generated_in_personal_pine_script",
+  "secret": "your_tradingview_webhook_secret_here",
+  "symbol": "EURUSD",
+  "direction": "long",
+  "alertType": "entry",
+  "entry": 1.09250,
+  "stop_loss": 1.08800,
+  "stop_loss_1": 1.08800,
+  "take_profit_1": 1.09750,
+  "take_profit_2": 1.10200,
+  "take_profit_3": 1.10800,
+  "confidence": 0.85,
+  "message": "Kaching Entry",
+  "broadcast": true,
+  "tradingviewUsername": "your_tradingview_username"
+}

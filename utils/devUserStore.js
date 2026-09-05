@@ -1,0 +1,116 @@
+const fs = require('fs');
+const path = require('path');
+const { randomUUID } = require('crypto');
+
+const STORE_PATH = path.join(__dirname, '..', 'dev-users.json');
+
+function readStore() {
+  try {
+    if (!fs.existsSync(STORE_PATH)) return {};
+    return JSON.parse(fs.readFileSync(STORE_PATH, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function writeStore(data) {
+  fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function upsertUser(id, patch) {
+  const store = readStore();
+  const key = String(id || '').trim();
+  if (!key) return null;
+  store[key] = {
+    id: key,
+    email: '',
+    displayName: '',
+    passwordHash: '',
+    subscription: { status: 'inactive', tier: 'basic' },
+    ...store[key],
+    ...patch,
+    updatedAt: new Date().toISOString()
+  };
+  writeStore(store);
+  return store[key];
+}
+
+function findById(id) {
+  const store = readStore();
+  return store[String(id || '').trim()] || null;
+}
+
+function findByEmail(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized) return null;
+  const store = readStore();
+  return Object.values(store).find(u => String(u.email || '').trim().toLowerCase() === normalized) || null;
+}
+
+function findByHashedToken(fieldPrefix, hashedToken) {
+  const normalized = String(hashedToken || '').trim();
+  if (!normalized) return null;
+  const store = readStore();
+  const tokenField = `${fieldPrefix}Token`;
+  return Object.values(store).find(u => String(u[tokenField] || '') === normalized) || null;
+}
+
+function createUser({ email, passwordHash, displayName, phone, subscription, emailVerified, emailVerificationToken, emailVerificationExpiresAt }) {
+  const id = randomUUID();
+  return upsertUser(id, {
+    id,
+    email: String(email).trim().toLowerCase(),
+    passwordHash,
+    displayName: displayName || email.split('@')[0],
+    phone: phone || '',
+    subscription: subscription || { status: 'inactive', tier: 'basic' },
+    emailVerified: emailVerified !== undefined ? emailVerified : false,
+    emailVerificationToken: emailVerificationToken || null,
+    emailVerificationExpiresAt: emailVerificationExpiresAt || null,
+    passwordResetToken: null,
+    passwordResetExpiresAt: null,
+    createdAt: new Date().toISOString()
+  });
+}
+
+function listActiveSubscribers() {
+  const store = readStore();
+  return Object.values(store);
+}
+
+function findByChatId(chatId) {
+  const store = readStore();
+  return Object.values(store).find(u => String(u.telegram?.chatId || '') === String(chatId)) || null;
+}
+
+function findByLinkCode(code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  if (!normalized) return null;
+  const store = readStore();
+  return Object.values(store).find(
+    u => String(u.telegram?.linkCode || '').trim().toUpperCase() === normalized
+  ) || null;
+}
+
+function findByMt5DeviceToken(token, field = 'accessToken') {
+  const normalized = String(token || '').trim();
+  if (!normalized) return null;
+  const store = readStore();
+  return (
+    Object.values(store).find(u =>
+      (u.mt5?.devices || []).some(d => d && !d.revokedAt && String(d[field] || '') === normalized)
+    ) || null
+  );
+}
+
+module.exports = {
+  upsertUser,
+  findById,
+  findByEmail,
+  findByHashedToken,
+  findByChatId,
+  findByLinkCode,
+  findByMt5DeviceToken,
+  createUser,
+  listActiveSubscribers
+};

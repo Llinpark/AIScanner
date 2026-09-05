@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>KachingScanner — AI Trading Intelligence Platform</title>
+    <meta
+      name="description"
+      content="KachingScanner is an AI Trading Intelligence Platform — smart market analysis, premium SMC signals, live charts, TradingView alerts, and optional automated execution."
+    />
+    <meta
+      name="keywords"
+      content="AI trading, forex signals, SMC signals, TradingView alerts, forex scanner, KachingScanner, market analysis, automated trading"
+    />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
+    <meta name="author" content="KachingScanner" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="application-name" content="KachingScanner" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="KachingScanner" />
+    <link rel="canonical" href="https://kachingscanner.com/" />
+    <link rel="manifest" href="/site.webmanifest?v=4" />
+    <!-- Opaque RGB white-canvas install icons only. Never link /logo-1.png (transparent → Windows paints black). -->
+    <link rel="icon" href="/icons/favicon-v3.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32-v3.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16-v3.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/pwa-192-v3.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-v3.png" />
+    <meta name="msapplication-TileColor" content="#ffffff" />
+    <meta name="msapplication-TileImage" content="/icons/pwa-192-v3.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://kachingscanner.com/" />
+    <meta property="og:title" content="KachingScanner — AI Trading Intelligence Platform" />
+    <meta
+      property="og:description"
+      content="AI Trading Intelligence Platform for Forex and multi-market analysis — live signals, charts, and TradingView integration."
+    />
+    <meta property="og:image" content="https://kachingscanner.com/hero-img.png" />
+    <meta property="og:site_name" content="KachingScanner" />
+    <meta property="og:locale" content="en_US" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="KachingScanner — AI Trading Intelligence Platform" />
+    <meta
+      name="twitter:description"
+      content="AI Trading Intelligence Platform for Forex and multi-market analysis — live signals, charts, and TradingView integration."
+    />
+    <meta name="twitter:image" content="https://kachingscanner.com/hero-img.png" />
+
+    <!-- Boot shell CSS first so first paint never waits on Google Fonts / jsDelivr. -->
+    <style>
+      #boot-splash {
+        margin: 0;
+        min-height: 100vh;
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: #f4f8ff;
+        color: #2d3648;
+        text-align: center;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      #boot-splash img {
+        width: 96px;
+        height: 96px;
+        border-radius: 20px;
+      }
+      #boot-splash p {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.4;
+      }
+      #boot-splash button {
+        margin-top: 8px;
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 10px;
+        background: #d4a026;
+        color: #081c3d;
+        font-weight: 600;
+        font-size: 14px;
+      }
+    </style>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Non-blocking stylesheets: blocked CDNs must not freeze the PWA shell. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap"
+        rel="stylesheet"
+      />
+      <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+        rel="stylesheet"
+      />
+    </noscript>
+  </head>
+  <body>
+    <div id="root">
+      <div id="boot-splash" role="status" aria-live="polite">
+        <img src="/icons/pwa-192-v3.png" alt="KachingScanner" width="96" height="96" />
+        <p>Loading KachingScanner…</p>
+      </div>
+    </div>
+    <script>
+      (function () {
+        function showBootFailure(message) {
+          var el = document.getElementById('boot-splash');
+          if (!el || el.dataset.failed === '1') return;
+          el.dataset.failed = '1';
+          el.innerHTML =
+            '<img src="/icons/pwa-192-v3.png" alt="KachingScanner" width="96" height="96" />' +
+            '<p>' +
+            message +
+            '</p>' +
+            '<button type="button" onclick="location.reload()">Retry</button>';
+        }
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var t = event && event.target;
+            // Resource load failures for our own module/script only (not fonts/CDN CSS).
+            if (t && t.tagName === 'SCRIPT' && t.src && /kachingscanner\.com|\/assets\//.test(t.src)) {
+              showBootFailure('App failed to load. Check your connection, then retry.');
+            }
+          },
+          true
+        );
+
+        // If React never mounts (stale asset hash, broken module), escape the splash.
+        window.setTimeout(function () {
+          if (window.__KACHING_APP_READY__) return;
+          if (document.getElementById('boot-splash')) {
+            showBootFailure(
+              'Still loading. Clear site data for kachingscanner.com, or try mobile data, then Retry.'
+            );
+          }
+        }, 12000);
+      })();
+    </script>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

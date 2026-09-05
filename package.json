@@ -1,0 +1,34 @@
+{
+  "name": "kachingscanner-backend",
+  "version": "0.1.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node --report-on-fatalerror --report-uncaught-exception --report-directory=/tmp server.js",
+    "dev": "nodemon server.js",
+    "generate-secrets": "node scripts/generate-secrets.js",
+    "test": "node --test strategies/__tests__/**/*.test.js utils/__tests__/**/*.test.js middleware/__tests__/**/*.test.js services/__tests__/**/*.test.js",
+    "test:strategies": "node --test strategies/__tests__/**/*.test.js",
+    "test:utils": "node --test utils/__tests__/**/*.test.js",
+    "test:services": "node --test services/__tests__/**/*.test.js",
+    "test:regime": "node --test utils/__tests__/marketRegimeService.test.js",
+    "test:patterns": "node scripts/verify-patterns.js",
+    "test:pipeline": "node scripts/pipeline-self-test.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-validator": "^7.2.1",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^7.5.2",
+    "nodemailer": "^9.0.3",
+    "redis": "^4.7.1",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}

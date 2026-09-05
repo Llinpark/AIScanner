@@ -1,0 +1,244 @@
+const mongoose = require('mongoose');
+
+const RiskMetricsSchema = new mongoose.Schema(
+  {
+    pipRisk: Number,
+    pipReward1: Number,
+    pipReward2: Number,
+    pipReward3: Number,
+    riskReward1: Number,
+    riskReward2: Number,
+    riskReward3: Number,
+    riskPercent: Number,
+    riskAmount: Number,
+    suggestedLotSize: Number,
+    direction: String
+  },
+  { _id: false }
+);
+
+const SignalSchema = new mongoose.Schema({
+  symbol: { type: String, required: true },
+  direction: { type: String, required: true },
+  entry: { type: Number, required: true },
+  stop_loss: { type: Number, required: true },
+  stop_loss_1: { type: Number },
+  stop_loss_2: { type: Number },
+  stop_loss_3: { type: Number },
+  take_profit_1: { type: Number, required: true },
+  take_profit_2: { type: Number, required: true },
+  take_profit_3: { type: Number, required: true },
+  confidence: { type: Number, default: 0 },
+  pipelineScore: { type: Number },
+  pipelineScoreBreakdown: { type: mongoose.Schema.Types.Mixed },
+  signalQuality: { type: String },
+  isPremiumSignal: { type: Boolean, default: false },
+  notes: { type: String },
+  alertType: {
+    type: String,
+    enum: [
+      'entry',
+      'stop_loss',
+      'take_profit_1',
+      'take_profit_2',
+      'take_profit_3',
+      'expired',
+      'cancelled',
+      'signal'
+    ],
+    default: 'signal'
+  },
+  userId: { type: String, index: true },
+  isBroadcast: { type: Boolean, default: false },
+  // Legacy field; prefer signalSource. Kept for backward-compatible queries.
+  source: { type: String, default: 'tradingview' },
+  // Distribution metadata (TradingView webhook is the sole production signal source).
+  signalSource: { type: String, default: 'tradingview' },
+  /** Permanent trade id from Pine / webhook — never overwritten after confirm. */
+  signalUuid: { type: String, index: true },
+  /** Option A canonical key (same trade across chart TFs). Not unique — prod may have dupes. */
+  canonicalSignalKey: { type: String },
+  /** Event time from Pine (signalTime / timestamp), not HTTP receipt. */
+  eventTimestamp: { type: Date },
+  /** HTTP webhook correlation id (not a secret). Survives toObject() for async fan-out logs. */
+  pipelineRequestId: { type: String, index: true },
+  /**
+   * Structured correlation — mongoose keeps nested fields (requestId is not stripped).
+   * Does not replace top-level signalUuid / eventId identity.
+   */
+  correlation: {
+    type: new mongoose.Schema(
+      {
+        requestId: { type: String },
+        eventId: { type: String },
+        signalUuid: { type: String },
+        canonicalTradeId: { type: String },
+        signalId: { type: String },
+        fanoutJobId: { type: String },
+        deliveryJobId: { type: String },
+        subscriberId: { type: String },
+        channel: { type: String },
+        symbolRaw: { type: String },
+        symbolNormalized: { type: String }
+      },
+      { _id: false }
+    )
+  },
+  /** Derived rollup from DeliveryJob per-recipient outcomes. legacy_unknown = pre-repair docs. */
+  deliveryAccounting: {
+    type: String,
+    enum: ['per_recipient', 'legacy_unknown'],
+    default: 'legacy_unknown'
+  },
+  deliverySummary: { type: mongoose.Schema.Types.Mixed },
+  /** Pine / webhook event identity — previously stripped by strict schema. */
+  eventId: { type: String, index: true },
+  canonicalTradeId: { type: String, index: true },
+  /**
+   * Per subscriber×channel outcomes. Independent of other channels.
+   * Keyed `${subscriberId}:${channel}`.
+   */
+  channelDeliveries: { type: mongoose.Schema.Types.Mixed, default: {} },
+  /** Same-bar ordering hint from the event bridge. */
+  bridgeEventIndex: { type: Number },
+  /**
+   * Exactly-once delivery keys: `${eventType}:${channel}:${subscriberId}`.
+   * Not a unique index — membership is checked per document.
+   */
+  deliveredKeys: { type: [String], default: [] },
+  entryAcceptedAt: { type: Date },
+  /** Non-secret Pine generation id from the webhook body (diagnostics). */
+  scriptGenerationId: { type: String },
+  /** Alias kept for clients that send signalId. */
+  signalId: { type: String, index: true },
+  strategyName: { type: String },
+  /** Additive Strategy Engine metadata (optional; does not replace pattern/strategyName). */
+  strategyId: { type: String },
+  strategyVersion: { type: Number },
+  timeframe: { type: String },
+  /** DETECTED | CREATED | CONFIRMED | ACTIVE | TP1 | TP2 | TP3 | SL | EXPIRED | CANCELLED | COMPLETED */
+  lifecycleStage: {
+    type: String,
+    enum: [
+      'DETECTED',
+      'CREATED',
+      'CONFIRMED',
+      'ACTIVE',
+      'TP1',
+      'TP2',
+      'TP3',
+      'SL',
+      'EXPIRED',
+      'CANCELLED',
+      'COMPLETED'
+    ],
+    default: 'ACTIVE'
+  },
+  /** Highest TP milestone reached while trade was open (pending|tp1|tp2|tp3). */
+  highestMilestone: {
+    type: String,
+    enum: ['pending', 'tp1', 'tp2', 'tp3'],
+    default: 'pending'
+  },
+  /** After confirm, entry/SL/TPs/direction/confidence must not be rewritten by scans. */
+  levelsFrozen: { type: Boolean, default: false },
+  expiryBars: { type: Number },
+  enableTradeExpiry: { type: Boolean, default: true },
+  expiresAt: { type: Date },
+  closedReason: { type: String },
+  deliveryStatus: {
+    type: String,
+    enum: ['pending', 'delivered', 'partial', 'failed', 'skipped'],
+    default: 'pending'
+  },
+  executionStatus: {
+    type: String,
+    enum: ['pending', 'sent', 'executed', 'skipped', 'failed', 'expired', 'ignored'],
+    default: 'pending'
+  },
+  /**
+   * Pro Manual Confirmation window (Premium auto never sets these).
+   * pending → user must Execute before mt5ConfirmExpiresAt; else Expired (not queued).
+   */
+  mt5ConfirmStatus: {
+    type: String,
+    enum: ['none', 'pending', 'executed', 'ignored', 'expired'],
+    default: 'none'
+  },
+  mt5ConfirmExpiresAt: { type: Date },
+  telegramSent: { type: Boolean, default: false },
+  telegramAttempted: { type: Boolean, default: false },
+  mt5Sent: { type: Boolean, default: false },
+  emailSent: { type: Boolean, default: false },
+  /** Dev/self-test marker — excluded from production Admin signal counts. */
+  selfTest: { type: Boolean, default: false },
+  /**
+   * How this signal was routed for execution (additive analytics / journal).
+   * telegram_alert = Pro Alerts Only (no MT5 queue).
+   */
+  executionChannel: {
+    type: String,
+    enum: ['none', 'mt5_auto', 'mt5_manual', 'telegram_alert'],
+    default: 'none'
+  },
+  /** Telegram Alerts Only analytics — separate from MT5 execution analytics. */
+  telegramAlertSent: { type: Boolean, default: false },
+  telegramAlertSentAt: { type: Date, default: null },
+  telegramAlertDelivered: { type: Boolean, default: false },
+  telegramAlertDeliveredAt: { type: Date, default: null },
+  /** Future-ready if Telegram read receipts become available. */
+  telegramAlertRead: { type: Boolean, default: false },
+  telegramAlertReadAt: { type: Date, default: null },
+  chartSnapshot: { type: String },
+  pattern: { type: String },
+  patternLabel: { type: String },
+  gapTop: { type: Number },
+  gapBottom: { type: Number },
+  fvgTimeStart: { type: Number },
+  fvgTimeEnd: { type: Number },
+  orderBlockTop: { type: Number },
+  orderBlockBottom: { type: Number },
+  orderBlockTimeStart: { type: Number },
+  orderBlockTimeEnd: { type: Number },
+  liquidityZoneTop: { type: Number },
+  liquidityZoneBottom: { type: Number },
+  liquidityTimeStart: { type: Number },
+  liquidityTimeEnd: { type: Number },
+  chartZones: { type: mongoose.Schema.Types.Mixed },
+  signalGroupId: { type: String, index: true },
+  parentSignalId: { type: mongoose.Schema.Types.ObjectId, ref: 'Signal' },
+  tradeStatus: {
+    type: String,
+    enum: ['open', 'won', 'lost', 'partial', 'closed', 'expired', 'cancelled'],
+    default: 'open'
+  },
+  outcome: {
+    type: String,
+    enum: ['pending', 'tp1', 'tp2', 'tp3', 'sl', 'breakeven', 'expired', 'cancelled'],
+    default: 'pending'
+  },
+  outcomeR: { type: Number },
+  closedAt: { type: Date },
+  tradeExplanation: { type: String },
+  aiFactors: { type: mongoose.Schema.Types.Mixed },
+  riskMetrics: RiskMetricsSchema,
+  newsImpact: { type: String },
+  newsFilter: { type: mongoose.Schema.Types.Mixed },
+  tradeManagement: { type: mongoose.Schema.Types.Mixed },
+  partialClose: { type: mongoose.Schema.Types.Mixed },
+  breakEven: { type: mongoose.Schema.Types.Mixed },
+  createdAt: { type: Date, default: Date.now }
+});
+
+SignalSchema.index({ symbol: 1, createdAt: -1 });
+SignalSchema.index({ 'correlation.requestId': 1 }, { sparse: true });
+SignalSchema.index({ alertType: 1, tradeStatus: 1 });
+SignalSchema.index({ symbol: 1, timeframe: 1, strategyName: 1, tradeStatus: 1 });
+SignalSchema.index({ 'correlation.requestId': 1 });
+SignalSchema.index({ 'correlation.symbolNormalized': 1, createdAt: -1 });
+SignalSchema.index(
+  { signalUuid: 1 },
+  { unique: true, sparse: true, partialFilterExpression: { signalUuid: { $type: 'string' } } }
+);
+
+module.exports = mongoose.model('Signal', SignalSchema);

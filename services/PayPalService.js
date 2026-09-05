@@ -1,0 +1,245 @@
+const { PAYMENT_CONFIG, getTierPricing } = require('../config/subscriptions');
+
+function getBaseUrl() {
+  return PAYMENT_CONFIG.paypal.mode === 'live'
+    ? 'https://api-m.paypal.com'
+    : 'https://api-m.sandbox.paypal.com';
+}
+
+function isConfigured() {
+  const { clientId, clientSecret } = PAYMENT_CONFIG.paypal;
+  return Boolean(clientId && clientSecret);
+}
+
+async function getAccessToken() {
+  const { clientId, clientSecret } = PAYMENT_CONFIG.paypal;
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  const response = await fetch(`${getBaseUrl()}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: 'grant_type=client_credentials'
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`PayPal OAuth failed: ${text}`);
+  }
+
+  const data = await response.json();
+  return data.access_token;
+}
+
+async function createOrder({ tier, userId, returnUrl, cancelUrl, billingCycle = 'monthly' }) {
+  if (!isConfigured()) {
+    throw new Error('PayPal is not configured. Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET in .env');
+  }
+
+  const pricing = getTierPricing(tier, billingCycle);
+  const tierConfig = require('../config/subscriptions').TIERS[tier];
+  if (!tierConfig) {
+    throw new Error('Invalid subscription tier');
+  }
+
+  const amount = (pricing.priceCents / 100).toFixed(2);
+  const token = await getAccessToken();
+
+  const payload = {
+    intent: 'CAPTURE',
+    purchase_units: [
+      {
+        reference_id: userId,
+        description: `KachingFx ${tierConfig.name} (${pricing.periodLabel})`,
+        custom_id: `${userId}:${tier}:${pricing.billingCycle}`,
+        amount: {
+          currency_code: pricing.currencyPayPal || 'USD',
+          value: amount
+        }
+      }
+    ],
+    application_context: {
+      brand_name: 'KachingFx',
+      landing_page: 'NO_PREFERENCE',
+      user_action: 'PAY_NOW',
+      return_url: returnUrl,
+      cancel_url: cancelUrl
+    }
+  };
+
+  const response = await fetch(`${getBaseUrl()}/v2/checkout/orders`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const message = data.message || JSON.stringify(data);
+    throw new Error(`PayPal order creation failed: ${message}`);
+  }
+
+  const approveLink = (data.links || []).find(link => link.rel === 'approve');
+
+  return {
+    orderId: data.id,
+    status: data.status,
+    approveUrl: approveLink?.href
+  };
+}
+
+async function captureOrder(orderId) {
+  const token = await getAccessToken();
+
+  const response = await fetch(`${getBaseUrl()}/v2/checkout/orders/${orderId}/capture`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    const details = Array.isArray(data.details) ? data.details : [];
+    const alreadyCaptured = details.some(
+      d => String(d.issue || '').toUpperCase() === 'ORDER_ALREADY_CAPTURED'
+    );
+    if (alreadyCaptured) {
+      return getOrder(orderId);
+    }
+    const message = data.message || JSON.stringify(data);
+    throw new Error(`PayPal capture failed: ${message}`);
+  }
+
+  return data;
+}
+
+async function getOrder(orderId) {
+  const token = await getAccessToken();
+
+  const response = await fetch(`${getBaseUrl()}/v2/checkout/orders/${orderId}`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data.message || JSON.stringify(data);
+    throw new Error(`PayPal get order failed: ${message}`);
+  }
+  return data;
+}
+
+function extractCustomId(resource = {}) {
+  return (
+    resource.purchase_units?.[0]?.custom_id ||
+    resource.purchase_units?.[0]?.payments?.captures?.[0]?.custom_id ||
+    resource.custom_id ||
+    null
+  );
+}
+
+function parseWebhookEvent(body) {
+  const eventType = body?.event_type;
+  const resource = body?.resource || {};
+
+  // CHECKOUT.ORDER.APPROVED → resource.id is the order id
+  // PAYMENT.CAPTURE.COMPLETED → resource.id is the capture id; order id is nested
+  if (eventType === 'CHECKOUT.ORDER.APPROVED') {
+    return {
+      eventType,
+      customId: extractCustomId(resource),
+      orderId: resource.id || null,
+      resource
+    };
+  }
+
+  if (eventType === 'PAYMENT.CAPTURE.COMPLETED') {
+    return {
+      eventType,
+      customId: extractCustomId(resource),
+      orderId: resource.supplementary_data?.related_ids?.order_id || null,
+      resource
+    };
+  }
+
+  return { eventType, customId: extractCustomId(resource), orderId: null, resource };
+}
+
+function normalizeHeader(headers, name) {
+  return headers[name] || headers[name.toLowerCase()] || headers[name.toUpperCase()];
+}
+
+async function verifyWebhookSignature(req) {
+  if (!isConfigured()) {
+    return { ok: false, reason: 'paypal_not_configured' };
+  }
+
+  const webhookId = process.env.PAYPAL_WEBHOOK_ID;
+  if (!webhookId) {
+    return { ok: false, reason: 'paypal_webhook_id_missing' };
+  }
+
+  const headers = Object.fromEntries(
+    Object.entries(req.headers || {}).map(([key, value]) => [key.toLowerCase(), value])
+  );
+
+  const transmissionId = headers['paypal-transmission-id'];
+  const transmissionTime = headers['paypal-transmission-time'];
+  const transmissionSig = headers['paypal-transmission-sig'];
+  const certUrl = headers['paypal-cert-url'];
+  const authAlgo = headers['paypal-auth-algo'];
+
+  if (!transmissionId || !transmissionTime || !transmissionSig || !certUrl || !authAlgo) {
+    return { ok: false, reason: 'missing_paypal_headers' };
+  }
+
+  const accessToken = await getAccessToken();
+  const payload = {
+    auth_algo: authAlgo,
+    cert_url: certUrl,
+    transmission_id: transmissionId,
+    transmission_sig: transmissionSig,
+    transmission_time: transmissionTime,
+    webhook_id: webhookId,
+    webhook_event: req.body
+  };
+
+  const response = await fetch(`${getBaseUrl()}/v1/notifications/verify-webhook-signature`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    return { ok: false, reason: 'paypal_verify_request_failed', detail: data };
+  }
+
+  const verified = String(data.verification_status || '').toUpperCase() === 'SUCCESS';
+  return verified ? { ok: true } : { ok: false, reason: 'paypal_signature_invalid', detail: data };
+}
+
+module.exports = {
+  isConfigured,
+  createOrder,
+  captureOrder,
+  getOrder,
+  extractCustomId,
+  parseWebhookEvent,
+  verifyWebhookSignature
+};

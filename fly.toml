@@ -1,0 +1,54 @@
+# fly.toml app configuration file generated for kaching-api on 2026-07-18T19:18:42+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'kaching-api'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  HOST = '0.0.0.0'
+  NODE_ENV = 'production'
+  PORT = '8080'
+  # Auto-scan timer ON by default (internal/admin). Production signals still come from TradingView webhooks.
+  SCALPING_STRATEGY_ENABLED = 'true'
+  DAYTRADING_SWEEP_FVG_ENABLED = 'true'
+  # Trade-alert emails for entitled Pro/Premium subscribers. The mailer 429
+  # circuit-breaker still pauses bulk sends if Resend quota is hit again.
+  EMAIL_TRADE_ALERTS_ENABLED = 'true'
+  # Durable delivery crash-recovery (not the live TradingView webhook path).
+  # Old 2000ms + Redis index walk caused ~1.38M GET/day. Do not set REDIS_SCAN=1.
+  DELIVERY_RECOVERY_INTERVAL_MS = '15000'
+  DELIVERY_RECOVERY_MIN_INTERVAL_MS = '5000'
+  DELIVERY_RECOVERY_REDIS_SCAN = '0'
+  DELIVERY_RECOVERY_PROCESS_BUDGET = '8'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # TradingView webhooks must never cold-start — keep at least one warm machine.
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'connections'
+    hard_limit = 1000
+    soft_limit = 500
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '15s'
+    method = 'GET'
+    path = '/api/health'
+
+[[vm]]
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 512
