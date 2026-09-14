@@ -16,6 +16,7 @@ const {
   emptyChannel,
   resolveHealth,
   computeDeliveryStatistics,
+  isSequenceWaitUnhealthy,
   OPERATIONAL_WINDOW_HOURS,
   WEBHOOK_INTAKE_TTL_DAYS
 } = require('../../services/PipelineDeliveryStatsService');
@@ -350,5 +351,103 @@ describe('frontend card contracts', () => {
   it('documents webhook intake TTL vs 30d delivery window', () => {
     assert.equal(WEBHOOK_INTAKE_TTL_DAYS, 7);
     assert.match(src, /intake TTL/);
+  });
+});
+
+describe('sequence wait unhealthy is age-gated', () => {
+  const prevUnhealthy = process.env.SEQUENCE_WAIT_UNHEALTHY_MS;
+  let restoreMongo;
+
+  beforeEach(() => {
+    DurableDelivery.resetForTests();
+    restoreMongo = mockMongoReady();
+  });
+
+  afterEach(() => {
+    DurableDelivery.resetForTests();
+    if (restoreMongo) restoreMongo();
+    if (prevUnhealthy == null) delete process.env.SEQUENCE_WAIT_UNHEALTHY_MS;
+    else process.env.SEQUENCE_WAIT_UNHEALTHY_MS = prevUnhealthy;
+  });
+
+  it('fresh blocked_waiting_for_entry is not unhealthy; aged wait is', () => {
+    process.env.SEQUENCE_WAIT_UNHEALTHY_MS = '60000';
+    const now = Date.now();
+    assert.equal(
+      isSequenceWaitUnhealthy(
+        { state: 'blocked_waiting_for_entry', createdAt: now - 5_000 },
+        now
+      ),
+      false
+    );
+    assert.equal(
+      isSequenceWaitUnhealthy(
+        { state: 'blocked_waiting_for_entry', createdAt: now - 61_000 },
+        now
+      ),
+      true
+    );
+    assert.equal(
+      isSequenceWaitUnhealthy({ state: 'retry_pending', createdAt: now - 120_000 }, now),
+      false
+    );
+  });
+
+  it('memory stats: young sequence wait is observable but not unhealthy', async () => {
+    process.env.SEQUENCE_WAIT_UNHEALTHY_MS = '60000';
+    await seedChannelJob(
+      {
+        eventId: 'wait-young-1',
+        canonicalTradeId: 'wait-young-t',
+        subscriberId: 'sub-wait-young',
+        channel: 'telegram',
+        eventType: 'take_profit_1'
+      },
+      {
+        outcome: 'pending',
+        createdAt: Date.now() - 8_000,
+        state: 'blocked_waiting_for_entry'
+      }
+    );
+    const job = DurableDelivery.listMemoryJobs().find(j => j.subscriberId === 'sub-wait-young');
+    job.lastError = 'blocked_waiting_for_entry';
+    const stats = await computeDeliveryStatistics();
+    assert.ok(stats.issues.delivery_sequence_wait >= 1);
+    assert.equal(stats.issues.sequence_wait_unhealthy, 0);
+  });
+
+  it('memory stats: wait older than SEQUENCE_WAIT_UNHEALTHY_MS is unhealthy', async () => {
+    process.env.SEQUENCE_WAIT_UNHEALTHY_MS = '50';
+    await seedChannelJob(
+      {
+        eventId: 'wait-old-1',
+        canonicalTradeId: 'wait-old-t',
+        subscriberId: 'sub-wait-old',
+        channel: 'email',
+        eventType: 'take_profit_1'
+      },
+      {
+        outcome: 'pending',
+        createdAt: Date.now() - 5_000,
+        state: 'blocked_waiting_for_entry'
+      }
+    );
+    const stats = await computeDeliveryStatistics();
+    assert.ok(stats.issues.sequence_wait_unhealthy >= 1);
+  });
+
+  it('Mongo aggregation source gates unhealthyWait on SEQUENCE_WAIT_UNHEALTHY_MS', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../services/PipelineDeliveryStatsService.js'),
+      'utf8'
+    );
+    assert.match(src, /unhealthyWait: '\$_unhealthyWait'/);
+    assert.match(src, /const unhealthyMs = getSequenceWaitUnhealthyMs\(\)/);
+    assert.match(src, /if \(row\._id\.unhealthyWait\)/);
+    assert.match(src, /issues\.sequence_wait_unhealthy \+= row\.n/);
+    assert.doesNotMatch(
+      src,
+      /String\(row\._id\.state\) === 'blocked_waiting_for_entry'[\s\S]{0,120}sequence_wait_unhealthy \+= row\.n/
+    );
   });
 });

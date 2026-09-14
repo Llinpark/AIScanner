@@ -148,9 +148,29 @@ export default function AdminPipeline() {
     setStatus(statusData);
     const nextSubs = statusData?.subscribers || statusData?.subscribersPreview || [];
     setSubscribers(nextSubs);
-    setDelivery(statusData?.delivery || statusData?.deliveryStats || null);
+    const bundled = statusData?.delivery || statusData?.deliveryStats || null;
+    if (bundled) {
+      setDelivery(bundled);
+    } else if (statusData?.signalsToday != null) {
+      setDelivery({
+        ok: true,
+        partial: true,
+        signalsToday: statusData.signalsToday,
+        windowNote:
+          'Full intake aggregates unavailable; ENTRY today uses the same Mongo count as Overview.'
+      });
+    }
     setSelectedId(prev => prev || nextSubs[0]?.userId || prev);
     return statusData;
+  }, []);
+
+  const loadDelivery = useCallback(async () => {
+    const res = await adminApi.getDeliveryStats();
+    const data = res.data;
+    if (data && data.ok !== false && (data.intake || data.signalsToday != null)) {
+      setDelivery(data);
+    }
+    return data;
   }, []);
 
   const loadLive = useCallback(async () => {
@@ -162,9 +182,17 @@ export default function AdminPipeline() {
   const load = useCallback(async () => {
     setError('');
     try {
-      const [statusRes, liveRes] = await Promise.allSettled([loadStatus(), loadLive()]);
+      const [statusRes, liveRes, deliveryRes] = await Promise.allSettled([
+        loadStatus(),
+        loadLive(),
+        loadDelivery()
+      ]);
       const statusData = statusRes.status === 'fulfilled' ? statusRes.value : null;
-      if (statusRes.status === 'rejected' && liveRes.status === 'rejected') {
+      if (
+        statusRes.status === 'rejected' &&
+        liveRes.status === 'rejected' &&
+        deliveryRes.status === 'rejected'
+      ) {
         const err = statusRes.reason;
         setError(err.response?.data?.message || 'Unable to load pipeline diagnostics.');
       } else if (statusData?.status === 'degraded' || statusData?.redis?.status === 'unavailable') {
@@ -175,7 +203,7 @@ export default function AdminPipeline() {
     } finally {
       setLoading(false);
     }
-  }, [loadStatus, loadLive]);
+  }, [loadStatus, loadLive, loadDelivery]);
 
   useEffect(() => {
     load();
@@ -184,12 +212,13 @@ export default function AdminPipeline() {
     }, 15000);
     const statusTimer = setInterval(() => {
       loadStatus().catch(() => {});
+      loadDelivery().catch(() => {});
     }, 60000);
     return () => {
       clearInterval(liveTimer);
       clearInterval(statusTimer);
     };
-  }, [load, loadLive, loadStatus]);
+  }, [load, loadLive, loadStatus, loadDelivery]);
 
   if (loading && !status) {
     return <div className="loading-state">Loading pipeline diagnostics…</div>;
@@ -210,6 +239,13 @@ export default function AdminPipeline() {
   const intake = delivery?.intake || delivery?.webhook || {};
   const channels = delivery?.channels || {};
   const issues = delivery?.issues || {};
+  const deliveryPartial = Boolean(delivery?.partial) || !delivery?.intake;
+  const entryToday =
+    delivery?.signalsToday != null
+      ? delivery.signalsToday
+      : status?.signalsToday != null
+        ? status.signalsToday
+        : null;
   const intakeTone =
     intakeState === 'TELEGRAM_SUCCESS' || intakeState === 'PIPELINE_ACTIVE'
       ? 'status-active'
@@ -297,6 +333,12 @@ export default function AdminPipeline() {
           {delivery.windowNote}
         </p>
       )}
+      {!delivery && (
+        <p className="admin-table-meta" style={{ marginBottom: 12 }}>
+          Delivery/intake counters unavailable (stats timed out or still loading). Overview → Signals
+          today uses a lighter Mongo ENTRY count and may still show a non-zero value.
+        </p>
+      )}
       {Array.isArray(delivery?.health?.reasons) && delivery.health.reasons.length > 0 && (
         <p className="admin-table-meta" style={{ marginBottom: 12 }}>
           Health reasons: {delivery.health.reasons.join(' · ')}
@@ -309,19 +351,23 @@ export default function AdminPipeline() {
         <div className="admin-stat-grid">
           <div className="admin-stat-card tone-accent">
             <span className="admin-stat-label">Received</span>
-            <strong className="admin-stat-value">{intake.received ?? 0}</strong>
-            <small className="admin-stat-hint">Durable webhook_intake (not last-100 ring)</small>
+            <strong className="admin-stat-value">
+              {!deliveryPartial ? intake.received ?? 0 : '—'}
+            </strong>
+            <small className="admin-stat-hint">
+              Durable webhook_intake (auth fails count here; not Overview Signals today)
+            </small>
           </div>
           <div className="admin-stat-card">
             <span className="admin-stat-label">HTTP 2xx / accepted</span>
             <strong className="admin-stat-value">
-              {intake.http2xx ?? 0} / {intake.accepted ?? 0}
+              {!deliveryPartial ? `${intake.http2xx ?? 0} / ${intake.accepted ?? 0}` : '—'}
             </strong>
           </div>
           <div className="admin-stat-card">
             <span className="admin-stat-label">Persisted / fan-out</span>
             <strong className="admin-stat-value">
-              {intake.persisted ?? 0} / {intake.fanoutScheduled ?? 0}
+              {!deliveryPartial ? `${intake.persisted ?? 0} / ${intake.fanoutScheduled ?? 0}` : '—'}
             </strong>
             <small className="admin-stat-hint">
               skipped no fan-out {intake.skippedNoFanout ?? 0} · fan-out complete ≠ every channel delivered
@@ -329,7 +375,7 @@ export default function AdminPipeline() {
           </div>
           <div className="admin-stat-card tone-danger">
             <span className="admin-stat-label">Rejected</span>
-            <strong className="admin-stat-value">{intake.rejected ?? 0}</strong>
+            <strong className="admin-stat-value">{!deliveryPartial ? intake.rejected ?? 0 : '—'}</strong>
             <small className="admin-stat-hint">
               {Object.entries(intake.byCategory || {})
                 .map(([k, v]) => `${k} ${v}`)
@@ -338,7 +384,9 @@ export default function AdminPipeline() {
           </div>
           <div className="admin-stat-card">
             <span className="admin-stat-label">Webhook acceptance</span>
-            <strong className="admin-stat-value">{formatPct(delivery?.webhookSuccessPct)}</strong>
+            <strong className="admin-stat-value">
+              {!deliveryPartial ? formatPct(delivery?.webhookSuccessPct) : '—'}
+            </strong>
             <small className="admin-stat-hint">
               accepted / received · not subscriber delivery · intake TTL ~{delivery?.webhookIntakeTtlDays ?? 7}d
             </small>
@@ -351,7 +399,10 @@ export default function AdminPipeline() {
         <div className="admin-stat-grid">
           <div className="admin-stat-card tone-accent">
             <span className="admin-stat-label">ENTRY today</span>
-            <strong className="admin-stat-value">{delivery?.signalsToday ?? 0}</strong>
+            <strong className="admin-stat-value">
+              {entryToday != null ? entryToday : '—'}
+            </strong>
+            <small className="admin-stat-hint">Mongo unique ENTRY signalUuid (UTC) — same as Overview</small>
           </div>
           <div className="admin-stat-card">
             <span className="admin-stat-label">ENTRY week</span>

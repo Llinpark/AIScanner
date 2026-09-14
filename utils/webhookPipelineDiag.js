@@ -172,6 +172,28 @@ function resolveIntakeState(status = {}) {
   const hasTelegramOk = Boolean(status.lastTelegramDelivery?.at || status.lastTelegram?.at);
   const telegramFail = lastFail === 'DeliveryTelegram' || /telegram/i.test(lastFailReason);
 
+  const ts = (v) => {
+    if (!v) return 0;
+    const n = new Date(v).getTime();
+    return Number.isFinite(n) ? n : 0;
+  };
+  const authFailAt = Math.max(
+    ts(status.lastAuthFailed?.at),
+    lastFail === 'Auth' ? ts(status.updatedAt) : 0
+  );
+  const latestOkAt = Math.max(
+    ts(status.lastWebhookReceived?.at || status.lastWebhook?.at),
+    ts(status.lastTelegramDelivery?.at || status.lastTelegram?.at),
+    ts(status.lastAuthPassed?.at),
+    ts(status.lastAccepted?.at),
+    ts(status.lastMongoSave?.at)
+  );
+  // Sticky Auth must not mask later successful intake (Overview can show ENTRYs
+  // while Pipeline badge still says AUTH_FAILED from an older 401).
+  const authIsLatestFailure =
+    (lastFail === 'Auth' || (/auth/i.test(lastFail) && !/parse/i.test(lastFailReason))) &&
+    !(latestOkAt > 0 && latestOkAt >= authFailAt);
+
   // Failure stages always win over "no webhook" — a failed attempt is not silence.
   if (
     /WebhookParseError/i.test(lastFail) ||
@@ -179,7 +201,7 @@ function resolveIntakeState(status = {}) {
   ) {
     return PIPELINE_INTAKE_STATE.WEBHOOK_PARSE_FAILED;
   }
-  if (lastFail === 'Auth' || (/auth/i.test(lastFail) && !/parse/i.test(lastFailReason))) {
+  if (authIsLatestFailure) {
     return PIPELINE_INTAKE_STATE.WEBHOOK_RECEIVED_AUTH_FAILED;
   }
   if (lastFail === 'Validation' || /schema|validation|rejected_fields/i.test(lastFailReason)) {

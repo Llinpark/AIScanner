@@ -1,5 +1,5 @@
-/**
- * Pine compatibility gateway — version detection, field normalization, identity,
+﻿/**
+ * Pine compatibility gateway â€” version detection, field normalization, identity,
  * Redis SET NX, realtime unknown, ordering, e2e survival, tokens, 1.3.0 regression.
  */
 'use strict';
@@ -168,7 +168,7 @@ describe('B. field normalization', () => {
 });
 
 describe('C. legacy identity (deterministic, no random UUID)', () => {
-  it('same webhook twice → same eventId; Fly machines agree', () => {
+  it('same webhook twice â†’ same eventId; Fly machines agree', () => {
     const body = legacyUnknownPayload();
     const a = PineCompatibilityService.normalizeIncomingPineEvent(body, { userId: USER, receivedAt: NOW });
     const b = PineCompatibilityService.normalizeIncomingPineEvent(body, { userId: USER, receivedAt: NOW + 50 });
@@ -178,7 +178,7 @@ describe('C. legacy identity (deterministic, no random UUID)', () => {
     assert.doesNotMatch(a.identity.eventId, /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-/);
   });
 
-  it('different later trade → different canonicalTradeId', () => {
+  it('different later trade â†’ different canonicalTradeId', () => {
     const a = PineCompatibilityService.normalizeIncomingPineEvent(
       legacyUnknownPayload({ timestamp: NOW, entry: 1.1 }),
       { userId: USER }
@@ -190,7 +190,7 @@ describe('C. legacy identity (deterministic, no random UUID)', () => {
     assert.notEqual(a.identity.canonicalTradeId, b.identity.canonicalTradeId);
   });
 
-  it('BUY vs SELL same price → different canonicalTradeId', () => {
+  it('BUY vs SELL same price â†’ different canonicalTradeId', () => {
     const buy = PineCompatibilityService.normalizeIncomingPineEvent(
       legacyUnknownPayload({ action: 'buy' }),
       { userId: USER }
@@ -202,7 +202,7 @@ describe('C. legacy identity (deterministic, no random UUID)', () => {
     assert.notEqual(buy.identity.canonicalTradeId, sell.identity.canonicalTradeId);
   });
 
-  it('same trade TP1 twice → same eventId; TP1 vs TP2 differ', () => {
+  it('same trade TP1 twice â†’ same eventId; TP1 vs TP2 differ', () => {
     const uuid = 'EURUSD-scalping-c15-1714000000000-long';
     const tp1a = PineCompatibilityService.normalizeIncomingPineEvent(
       pine12Payload('take_profit_1', uuid),
@@ -243,7 +243,7 @@ describe('D. Redis SET NX + fail closed', () => {
     assert.equal(await TradeEventStore.claimEventId(id), false);
   });
 
-  it('production Redis down → redis_unavailable, not process-local allow', async () => {
+  it('production Redis down â†’ redis_unavailable, not process-local allow', async () => {
     process.env.NODE_ENV = 'production';
     TradeEventStore.setClientForTests(null, { unavailable: true });
     await assert.rejects(
@@ -281,7 +281,7 @@ describe('E. realtime true/false/unknown', () => {
   });
 });
 
-describe('F–H. compatibility e2e + duplicate delivery', () => {
+describe('Fâ€“H. compatibility e2e + duplicate delivery', () => {
   const originalEnv = process.env.NODE_ENV;
   const originalOrphan = process.env.ORPHAN_OUTCOME_WAIT_MS;
   beforeEach(() => {
@@ -411,7 +411,7 @@ describe('F–H. compatibility e2e + duplicate delivery', () => {
 
 describe('J. 1.3.0 regression', () => {
   it('generator stamp remains 1.3.0; stable adapter shares 1.3 normalizer', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
     const a = PineCompatibilityService.normalizeIncomingPineEvent(pine13Payload('entry', 'reg-13'));
     const b = PineCompatibilityService.normalizeIncomingPineEvent(stablePayload('entry', 'reg-13'));
     assert.equal(a.identity.eventId, b.identity.eventId);
@@ -424,7 +424,7 @@ describe('J. 1.3.0 regression', () => {
 
   it('buildSignalData 1.3.0 keeps eventId and levels', () => {
     const data = TradingViewAlertService.buildSignalData(pine13Payload('entry', 'build-13'));
-    assert.equal(data.pineClientVersion, '1.3.0');
+    assert.equal(data.pineClientVersion, '1.3.1');
     assert.ok(data.eventId);
     assert.equal(data.take_profit_1, 1.11);
     assert.equal(data.compatibilityAdapter, ADAPTER_IDS.PINE13);

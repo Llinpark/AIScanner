@@ -293,14 +293,14 @@ for (const [label, g] of [
     !/if\s+retraceShort\s*\n[\s\S]{0,200}buildTradeDrawings/.test(g.script),
     `${label}: must not draw on retraceShort alone`
   );
-  // Canonical webhook authority: only timeframe.period == CANONICAL_SIGNAL_TF may alert().
+  // Canonical chart identity (1.3.0): period == CANONICAL_SIGNAL_TF; alert on realtime.
   assert(
-    /isCanonicalAuthorityChart\s*=\s*timeframe\.period\s*==\s*CANONICAL_SIGNAL_TF/.test(g.script),
-    `${label}: isCanonicalAuthorityChart must compare chart period to CANONICAL_SIGNAL_TF`
+    /isCanonicalChart\s*=\s*timeframe\.period\s*==\s*CANONICAL_SIGNAL_TF/.test(g.script),
+    `${label}: isCanonicalChart must compare chart period to CANONICAL_SIGNAL_TF`
   );
   assert(
-    /isCanonicalChart\s*=\s*isCanonicalAuthorityChart/.test(g.script),
-    `${label}: isCanonicalChart must alias isCanonicalAuthorityChart`
+    !/isCanonicalAuthorityChart/.test(g.script),
+    `${label}: must not use isCanonicalAuthorityChart (1.6.0 authority gate removed)`
   );
   assert(g.script.includes('max_labels_count=500'), `${label}: max_labels_count should be 500`);
   assert(g.script.includes('width=1'), `${label}: trade lines must be width=1 (thinnest)`);
@@ -314,17 +314,19 @@ for (const [label, g] of [
   assert(!g.script.includes('"REPLACED"'), `${label}: must not leave REPLACED markers on chart`);
   assert(g.script.includes('"isRealtime":'), `${label}: payload must include isRealtime`);
   assert(
-    /if barstate\.isrealtime and isCanonicalAuthorityChart[\s\S]{0,400}alert\(livePayload, alert\.freq_all\)/.test(
+    /if barstate\.isrealtime[\s\S]{0,200}alert\(payload, alert\.freq_all\)/.test(
       g.script
     ),
-    `${label}: emitKachingEvent must gate alert() on realtime + canonical authority`
+    `${label}: emitKachingEvent must gate alert() on realtime`
   );
   assert(g.script.includes('"eventId":'), `${label}: payload must include eventId`);
   assert(g.script.includes('"canonicalTradeId":'), `${label}: payload must include canonicalTradeId`);
   assert(g.script.includes('"eventType":'), `${label}: payload must include eventType`);
   assert(g.script.includes('"eventSequence":'), `${label}: payload must include eventSequence`);
   assert(g.script.includes('"alertFiredAt":'), `${label}: payload must include alertFiredAt placeholder`);
-  assert(g.script.includes('alertFiredAt = timenow'), `${label}: must stamp alertFiredAt immediately before alert()`);
+  // v155 / 1.3.0: alert(payload) directly (no livePayload / timenow stamp rewrite).
+  assert(!g.script.includes('alertFiredAt = timenow'), `${label}: 1.3.0 must not stamp alertFiredAt = timenow`);
+  assert(!g.script.includes('alert(livePayload'), `${label}: 1.3.0 must alert(payload) not livePayload`);
   {
     const code = g.script
       .split(/\r?\n/)
@@ -354,22 +356,22 @@ for (const [label, g] of [
   assert(g.script.includes('"generatedAt":"'), `${label}: missing generatedAt in buildPayload`);
   assert(
     g.script.includes(
-      '"capabilities":["v1_payload","sl_risk_v1","replace_active_v1","json_esc_v1","canonical_tf_v1","event_bridge_v1","canonical_emit_independent_v1","canonical_webhook_authority_v1"]'
+      '"capabilities":["v1_payload","sl_risk_v1","replace_active_v1","json_esc_v1","canonical_tf_v1","event_bridge_v1"]'
     ),
-    `${label}: capabilities must stamp current 1.6.0 set`
+    `${label}: capabilities must stamp current 1.3.0 set`
   );
-  assert(g.pineClientVersion === '1.6.0', `${label}: generator pineClientVersion must be 1.6.0`);
+  assert(g.pineClientVersion === '1.3.1', `${label}: generator pineClientVersion must be 1.3.1`);
   assert(
     Array.isArray(g.capabilities) &&
-      g.capabilities.length === 8 &&
+      g.capabilities.length === 6 &&
       g.capabilities[0] === 'v1_payload' &&
       g.capabilities.includes('sl_risk_v1') &&
       g.capabilities.includes('replace_active_v1') &&
       g.capabilities.includes('json_esc_v1') &&
       g.capabilities.includes('canonical_tf_v1') &&
       g.capabilities.includes('event_bridge_v1') &&
-      g.capabilities.includes('canonical_emit_independent_v1') &&
-      g.capabilities.includes('canonical_webhook_authority_v1'),
+      !g.capabilities.includes('canonical_emit_independent_v1') &&
+      !g.capabilities.includes('canonical_webhook_authority_v1'),
     `${label}: capabilities list`
   );
   assert(g.scriptGenerationId && g.scriptGenerationId.length >= 8, `${label}: missing scriptGenerationId`);

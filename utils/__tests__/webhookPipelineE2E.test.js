@@ -552,6 +552,19 @@ describe('TradingView → Telegram pipeline E2E (F–Q)', () => {
     );
   });
 
+  it('intake state: later successful webhook clears sticky AUTH_FAILED badge', () => {
+    assert.equal(
+      resolveIntakeState({
+        lastFailureStage: 'Auth',
+        lastFailureReason: 'invalid_license_token',
+        lastAuthFailed: { at: '2026-09-14T08:00:00.000Z' },
+        lastWebhookReceived: { at: '2026-09-14T09:00:00.000Z' },
+        lastTelegramDelivery: { at: '2026-09-14T09:00:05.000Z' }
+      }),
+      PIPELINE_INTAKE_STATE.TELEGRAM_SUCCESS
+    );
+  });
+
   it('Pro Manual Confirmation HTML does not nest bold inside italic', () => {
     const text = TelegramService.formatSignalMessage(
       validEntryPayload({ signalUuid: 'html-1' }),

@@ -1,5 +1,5 @@
-/**
- * Option A event-safe bridge + canonical lifecycle — behavioural contracts.
+﻿/**
+ * Option A event-safe bridge + canonical lifecycle â€” behavioural contracts.
  */
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -96,7 +96,7 @@ describe('Option A event-safe projection (behavioural)', () => {
       tp2: 1.8,
       tp3: 1.7
     };
-    // 5m bar 10:05–10:10 contains completed 3m opens 10:06 and 10:09.
+    // 5m bar 10:05â€“10:10 contains completed 3m opens 10:06 and 10:09.
     const barOpen = T0 + 5 * 60_000;
     const { collapsed, eventSafe } = projectToHigherDisplay([a, b], barOpen, tfToMs('5m'));
     assert.equal(eventSafe.length, 2, 'event-safe bridge must keep both events');
@@ -163,7 +163,7 @@ describe('Option A event-safe projection (behavioural)', () => {
       newCanonLong: true,
       newCanonShort: false
     });
-    // Empty / mismatched companions → no arm edge (and must not imply array.get(-1)).
+    // Empty / mismatched companions â†’ no arm edge (and must not imply array.get(-1)).
     assert.deepEqual(safeEdge([1], [], [1.2]), {
       bridgeEventCount: 1,
       newCanonLong: false,
@@ -229,7 +229,7 @@ describe('Option A event-safe projection (behavioural)', () => {
     assert.notEqual(ua, ub);
   });
 
-  it('same signalTime opposite direction → distinct UUIDs', () => {
+  it('same signalTime opposite direction â†’ distinct UUIDs', () => {
     const t = T0 + 3 * 60_000;
     const longId = makeCanonicalSignalId('EURUSD', 'scalping', '3', t, 'long');
     const shortId = makeCanonicalSignalId('EURUSD', 'scalping', '3', t, 'short');
@@ -309,6 +309,23 @@ describe('Option A canonical lifecycle (behavioural)', () => {
     assert.equal(slWins.terminal, 'stop_loss');
     const tpWins = evaluateCanonBarOutcome('long', { high: 130, low: 100, close: 131 }, levels);
     assert.equal(tpWins.terminal, 'take_profit_3');
+  });
+
+  it('ENTRY confirmation bar does not close the trade (no same-bar ENTRY+TP3)', () => {
+    const levels = { sl: 100, tp1: 110, tp2: 120, tp3: 130 };
+    const r = runCanonicalLifecycle({
+      direction: 'long',
+      levels,
+      canonBars: [
+        { time: 1, high: 140, low: 90, close: 105 },
+        { time: 2, high: 131, low: 120, close: 125 }
+      ],
+      entrySignalTime: 1,
+      expiryBars: 60
+    });
+    assert.equal(r.reason, 'take_profit_3');
+    assert.equal(r.outcomeBarTime, 2);
+    assert.equal(r.canonBarsAlive, 2);
   });
 
   it('1m/3m/5m agree on canonical outcome for same OHLC path', () => {
@@ -481,7 +498,7 @@ describe('Option A Pine bridge structure', () => {
   });
 
   it('capability + version stamp', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('event_bridge_v1'));
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('canonical_tf_v1'));
     assert.equal(resolveCompatibilityMode('1.0.0').mode, COMPAT_MODE.CURRENT);
@@ -497,7 +514,7 @@ describe('Option A multi-chart webhook idempotency', () => {
     ActiveSignalRegistry.resetForTests?.();
   });
 
-  it('same UUID from 1m/3m/5m chartTf → one active trade', async () => {
+  it('same UUID from 1m/3m/5m chartTf â†’ one active trade', async () => {
     const uuid = 'JUMP-scalping-c3-555-long';
     await ActiveSignalRegistry.registerActive({
       symbol: 'JUMP_75_INDEX',

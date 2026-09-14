@@ -1,24 +1,40 @@
-const nodemailer = require('nodemailer');
+'use strict';
+
+/**
+ * Transactional + trade-alert email via SMTP2GO REST API.
+ * Single provider path — no Resend / Nodemailer / Postmark.
+ *
+ * Success requires HTTP 2xx AND data.succeeded >= 1 AND data.failed === 0
+ * with empty data.failures. HTTP 200 alone is not acceptance.
+ */
+
 const { FRONTEND_URL } = require('../config/appUrls');
 const SubscriberSignalFormatter = require('../services/SubscriberSignalFormatter');
 
 const APP_NAME = process.env.EMAIL_APP_NAME || 'KachingScanner';
-const EMAIL_FROM = process.env.EMAIL_FROM || `${APP_NAME} <noreply@kachingscanner.com>`;
+const SMTP2GO_SEND_URL = 'https://api.smtp2go.com/v3/email/send';
+const DEFAULT_TIMEOUT_MS = 15_000;
 
-function getResendApiKey() {
-  return (
-    process.env.RESEND_API_KEY ||
-    (String(process.env.SMTP_HOST || '').includes('resend.com') ? process.env.SMTP_PASS : null) ||
-    null
-  );
+function getEmailFrom() {
+  return String(process.env.EMAIL_FROM || `${APP_NAME} <noreply@kachingscanner.com>`).trim();
 }
 
-function isSmtpConfigured() {
-  return Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+function getSmtp2goApiKey() {
+  return String(process.env.SMTP2GO_API_KEY || '').trim() || null;
+}
+
+function getSmtp2goTimeoutMs() {
+  const n = parseInt(process.env.SMTP2GO_TIMEOUT_MS || String(DEFAULT_TIMEOUT_MS), 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_TIMEOUT_MS;
 }
 
 function isMailConfigured() {
-  return Boolean(getResendApiKey() || isSmtpConfigured());
+  return Boolean(getSmtp2goApiKey() && getEmailFrom());
+}
+
+/** @deprecated Nodemailer SMTP removed; always false. Kept for caller compatibility. */
+function isSmtpConfigured() {
+  return false;
 }
 
 /** Trade-alert fan-out. Production sets EMAIL_TRADE_ALERTS_ENABLED in fly.toml. */
@@ -29,12 +45,25 @@ function tradeAlertsEnabled() {
 
 let bulkPausedUntilMs = 0;
 
+const EMAIL_PROVIDER_ERROR = Object.freeze({
+  RATE_LIMIT: 'rate_limit',
+  UNKNOWN_429: 'unknown_429',
+  UNAUTHORIZED: 'unauthorized',
+  FORBIDDEN: 'forbidden',
+  INVALID: 'invalid',
+  TIMEOUT: 'timeout',
+  NOT_CONFIGURED: 'not_configured',
+  PROVIDER_REJECTED: 'provider_rejected',
+  OTHER: 'other'
+});
+
+/** @deprecated Use EMAIL_PROVIDER_ERROR. Alias for older tests/callers. */
 const RESEND_ERROR = Object.freeze({
   DAILY_QUOTA: 'daily_quota',
   MONTHLY_QUOTA: 'monthly_quota',
-  RATE_LIMIT: 'rate_limit',
-  UNKNOWN_429: 'unknown_429',
-  OTHER: 'other'
+  RATE_LIMIT: EMAIL_PROVIDER_ERROR.RATE_LIMIT,
+  UNKNOWN_429: EMAIL_PROVIDER_ERROR.UNKNOWN_429,
+  OTHER: EMAIL_PROVIDER_ERROR.OTHER
 });
 
 function msUntilNextUtcMidnight() {
@@ -53,92 +82,122 @@ function retryAfterMsFrom(response, body) {
     const sec = parseInt(header, 10);
     if (Number.isFinite(sec) && sec > 0) return sec * 1000;
   }
-  const retryAfter = body?.retryAfter || body?.retry_after;
+  const retryAfter = body?.retryAfter || body?.retry_after || body?.data?.retry_after;
   if (Number.isFinite(Number(retryAfter)) && Number(retryAfter) > 0) {
     return Number(retryAfter) * 1000;
   }
   return null;
 }
 
-function resendErrorName(body, err) {
-  const candidates = [
-    body?.name,
-    body?.error && typeof body.error === 'object' ? body.error.name : null,
-    err?.body?.name,
-    err?.classification?.name
-  ];
-  for (const value of candidates) {
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return '';
+function safeProviderErrorMessage(err, body) {
+  const raw =
+    body?.data?.error ||
+    body?.error ||
+    body?.message ||
+    err?.message ||
+    'email_provider_error';
+  return String(raw).replace(/smtp2go[^\s]*/gi, '[redacted]').slice(0, 240);
 }
 
 /**
- * Classify a Resend/HTTP email error.
- * Global bulk pause is ONLY for confirmed daily/monthly quota names.
- * Message text is never enough to open the circuit (generic "quota" / "rate limit").
+ * Classify SMTP2GO / HTTP email errors for retry + bulk pause decisions.
  */
-function classifyResendError(err, extras = {}) {
+function classifyEmailProviderError(err, extras = {}) {
   if (err?.classification && extras.reuse !== false && !extras.body && !extras.response) {
     return err.classification;
   }
   const body = extras.body != null ? extras.body : err?.body || {};
   const status = Number(
-    extras.status ||
-      err?.status ||
-      err?.httpStatus ||
-      body?.statusCode ||
-      0
+    extras.status || err?.status || err?.httpStatus || body?.statusCode || 0
   );
-  const name = resendErrorName(body, err);
   const parsedRetry =
-    extras.retryAfterMs != null
-      ? extras.retryAfterMs
-      : retryAfterMsFrom(extras.response, body);
+    extras.retryAfterMs != null ? extras.retryAfterMs : retryAfterMsFrom(extras.response, body);
+  const requestId = body?.request_id || err?.requestId || null;
+  const errorCode = body?.data?.error_code || body?.error_code || err?.errorCode || null;
 
-  if (name === 'daily_quota_exceeded') {
+  if (err?.code === 'EMAIL_PROVIDER_TIMEOUT' || /timeout/i.test(String(err?.message || ''))) {
     return {
-      type: RESEND_ERROR.DAILY_QUOTA,
-      isGlobalQuota: true,
-      retryAfterMs: parsedRetry || msUntilNextUtcMidnight(),
-      name,
-      status
-    };
-  }
-  if (name === 'monthly_quota_exceeded') {
-    return {
-      type: RESEND_ERROR.MONTHLY_QUOTA,
-      isGlobalQuota: true,
-      retryAfterMs: parsedRetry || msUntilNextUtcMidnight(),
-      name,
-      status
-    };
-  }
-  if (name === 'rate_limit_exceeded') {
-    return {
-      type: RESEND_ERROR.RATE_LIMIT,
+      type: EMAIL_PROVIDER_ERROR.TIMEOUT,
       isGlobalQuota: false,
-      retryAfterMs: parsedRetry,
-      name,
-      status
+      retryAfterMs: null,
+      status: status || 0,
+      requestId,
+      errorCode
+    };
+  }
+  if (err?.code === 'SMTP2GO_NOT_CONFIGURED' || status === 0 && !getSmtp2goApiKey()) {
+    return {
+      type: EMAIL_PROVIDER_ERROR.NOT_CONFIGURED,
+      isGlobalQuota: false,
+      retryAfterMs: null,
+      status: 0,
+      requestId,
+      errorCode
+    };
+  }
+  if (status === 401) {
+    return {
+      type: EMAIL_PROVIDER_ERROR.UNAUTHORIZED,
+      isGlobalQuota: false,
+      retryAfterMs: null,
+      status,
+      requestId,
+      errorCode
+    };
+  }
+  if (status === 403) {
+    return {
+      type: EMAIL_PROVIDER_ERROR.FORBIDDEN,
+      isGlobalQuota: false,
+      retryAfterMs: null,
+      status,
+      requestId,
+      errorCode
+    };
+  }
+  if (status === 400 || status === 422) {
+    return {
+      type: EMAIL_PROVIDER_ERROR.INVALID,
+      isGlobalQuota: false,
+      retryAfterMs: null,
+      status,
+      requestId,
+      errorCode
     };
   }
   if (status === 429) {
     return {
-      type: RESEND_ERROR.UNKNOWN_429,
+      type: EMAIL_PROVIDER_ERROR.RATE_LIMIT,
+      isGlobalQuota: true,
+      retryAfterMs: parsedRetry || 60_000,
+      status,
+      requestId,
+      errorCode
+    };
+  }
+  if (err?.code === 'SMTP2GO_SEND_REJECTED') {
+    return {
+      type: EMAIL_PROVIDER_ERROR.PROVIDER_REJECTED,
       isGlobalQuota: false,
-      retryAfterMs: parsedRetry,
-      name: name || null,
-      status
+      retryAfterMs: null,
+      status: status || 200,
+      requestId,
+      errorCode
     };
   }
   return {
-    type: RESEND_ERROR.OTHER,
+    type: EMAIL_PROVIDER_ERROR.OTHER,
     isGlobalQuota: false,
     retryAfterMs: null,
-    name: name || null,
-    status
+    status,
+    requestId,
+    errorCode
   };
+}
+
+/** @deprecated Alias — SMTP2GO classification. */
+function classifyResendError(err, extras = {}) {
+  return classifyEmailProviderError(err, extras);
 }
 
 function pauseBulkUntil(ms) {
@@ -151,7 +210,7 @@ function pauseBulkUntil(ms) {
 
 function maybePauseBulkForGlobalQuota(classification) {
   if (!classification?.isGlobalQuota) return;
-  pauseBulkUntil(classification.retryAfterMs || msUntilNextUtcMidnight());
+  pauseBulkUntil(classification.retryAfterMs || 60_000);
 }
 
 function isBulkPaused() {
@@ -162,95 +221,236 @@ function getBulkPausedUntilMsForTests() {
   return bulkPausedUntilMs;
 }
 
-/** True only for confirmed Resend daily/monthly account quota. Not generic 429. */
 function isQuotaError(err) {
   if (!err) return false;
-  return Boolean(classifyResendError(err).isGlobalQuota);
+  return Boolean(classifyEmailProviderError(err).isGlobalQuota);
+}
+
+function isPermanentEmailFailure(err) {
+  const status = Number(err?.status || err?.httpStatus || 0);
+  if (status === 400 || status === 401 || status === 403 || status === 404 || status === 422) {
+    return true;
+  }
+  const type = classifyEmailProviderError(err).type;
+  if (
+    type === EMAIL_PROVIDER_ERROR.INVALID ||
+    type === EMAIL_PROVIDER_ERROR.UNAUTHORIZED ||
+    type === EMAIL_PROVIDER_ERROR.FORBIDDEN ||
+    type === EMAIL_PROVIDER_ERROR.NOT_CONFIGURED ||
+    type === EMAIL_PROVIDER_ERROR.PROVIDER_REJECTED
+  ) {
+    return true;
+  }
+  return /invalid.+email|not a valid|suppressed|bounce|blocked|unsubscribed/i.test(
+    String(err?.message || err?.reason || '')
+  );
 }
 
 function isImmediateRetryDisabled(err) {
   if (!err) return false;
   if (isQuotaError(err) || isPermanentEmailFailure(err)) return true;
-  const classified = classifyResendError(err);
+  const classified = classifyEmailProviderError(err);
   return (
-    classified.type === RESEND_ERROR.RATE_LIMIT ||
-    classified.type === RESEND_ERROR.UNKNOWN_429 ||
+    classified.type === EMAIL_PROVIDER_ERROR.RATE_LIMIT ||
+    classified.type === EMAIL_PROVIDER_ERROR.UNKNOWN_429 ||
     Number(err.status || classified.status || 0) === 429
   );
 }
 
 function resetMailerStateForTests() {
   bulkPausedUntilMs = 0;
-  transportPromise = null;
 }
 
-function createTransport() {
-  if (!isSmtpConfigured()) return null;
-
-  const port = parseInt(process.env.SMTP_PORT, 10) || 587;
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port,
-    secure: process.env.SMTP_SECURE === 'true' || port === 465,
-    requireTLS: port === 587,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS
-    }
-  });
-}
-
-let transportPromise = null;
-
-async function getTransport() {
-  if (!isSmtpConfigured()) return null;
-  if (!transportPromise) {
-    transportPromise = Promise.resolve(createTransport());
+function requireSmtp2goConfigured() {
+  if (!getSmtp2goApiKey()) {
+    const err = new Error('SMTP2GO_API_KEY is required — SMTP2GO is the email provider');
+    err.code = 'SMTP2GO_NOT_CONFIGURED';
+    err.status = 0;
+    err.classification = classifyEmailProviderError(err);
+    throw err;
   }
-  return transportPromise;
+  if (!getEmailFrom()) {
+    const err = new Error('EMAIL_FROM is required');
+    err.code = 'EMAIL_FROM_MISSING';
+    err.status = 0;
+    throw err;
+  }
 }
 
-async function sendViaResendApi({ to, subject, text, html }) {
-  const apiKey = getResendApiKey();
-  if (!apiKey) return null;
+function toRecipientList(to) {
+  if (Array.isArray(to)) {
+    return to.map(v => String(v || '').trim()).filter(Boolean);
+  }
+  const single = String(to || '').trim();
+  return single ? [single] : [];
+}
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      from: EMAIL_FROM,
-      to: [to],
-      subject,
-      text,
-      html
-    })
-  });
+function assertSmtp2goAccepted(body, httpStatus) {
+  const data = body && typeof body === 'object' ? body.data : null;
+  if (!data || typeof data !== 'object') {
+    return {
+      ok: false,
+      reason: 'smtp2go_missing_data',
+      succeeded: 0,
+      failed: 1,
+      failures: ['missing_data']
+    };
+  }
+  const succeeded = Number(data.succeeded || 0);
+  const failed = Number(data.failed || 0);
+  const failures = Array.isArray(data.failures) ? data.failures : [];
+  const httpOk = httpStatus >= 200 && httpStatus < 300;
+  if (!httpOk || !(succeeded >= 1) || failed !== 0 || failures.length > 0) {
+    return {
+      ok: false,
+      reason: 'smtp2go_send_rejected',
+      succeeded,
+      failed,
+      failures
+    };
+  }
+  return {
+    ok: true,
+    emailId: data.email_id != null ? String(data.email_id) : null,
+    succeeded,
+    failed,
+    failures
+  };
+}
 
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = body?.message || body?.error || response.statusText || 'Resend API error';
-    const err = new Error(`Resend API ${response.status}: ${detail}`);
-    err.status = response.status;
-    err.body = body;
-    const classification = classifyResendError(err, { response, body, status: response.status });
-    err.classification = classification;
-    maybePauseBulkForGlobalQuota(classification);
+async function fetchWithTimeout(url, init, timeoutMs) {
+  const ms = timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return fetch(url, { ...init, signal: AbortSignal.timeout(ms) });
+  }
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function sendViaSmtp2goApi({ to, subject, text, html, cc, bcc, replyTo }) {
+  requireSmtp2goConfigured();
+  const recipients = toRecipientList(to);
+  if (!recipients.length) {
+    const err = new Error('email recipient required');
+    err.status = 400;
+    err.code = 'EMAIL_RECIPIENT_MISSING';
     throw err;
   }
 
-  console.log('[mailer] Resend API accepted email', { to, id: body.id, subject });
-  return { provider: 'resend_api', id: body.id };
-}
+  const payload = {
+    sender: getEmailFrom(),
+    to: recipients,
+    subject: String(subject || ''),
+    text_body: text != null ? String(text) : undefined,
+    html_body: html != null ? String(html) : undefined
+  };
+  if (cc) payload.cc = toRecipientList(cc);
+  if (bcc) payload.bcc = toRecipientList(bcc);
+  if (replyTo) {
+    payload.custom_headers = [{ header: 'Reply-To', value: String(replyTo) }];
+  }
 
-function isPermanentEmailFailure(err) {
-  const status = Number(err?.status || err?.httpStatus || 0);
-  if (status === 400 || status === 403 || status === 404 || status === 422) return true;
-  return /invalid.+email|not a valid|suppressed|bounce|blocked|unsubscribed/i.test(
-    String(err?.message || err?.reason || '')
-  );
+  let response;
+  try {
+    response = await fetchWithTimeout(
+      SMTP2GO_SEND_URL,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Smtp2go-Api-Key': getSmtp2goApiKey()
+        },
+        body: JSON.stringify(payload)
+      },
+      getSmtp2goTimeoutMs()
+    );
+  } catch (err) {
+    const aborted = err?.name === 'AbortError' || /aborted|timeout/i.test(String(err?.message || ''));
+    const wrapped = new Error(aborted ? 'smtp2go_timeout' : safeProviderErrorMessage(err));
+    wrapped.code = aborted ? 'EMAIL_PROVIDER_TIMEOUT' : 'EMAIL_PROVIDER_NETWORK';
+    wrapped.status = 0;
+    wrapped.classification = classifyEmailProviderError(wrapped);
+    throw wrapped;
+  }
+
+  let body = {};
+  try {
+    body = await response.json();
+  } catch {
+    const err = new Error('smtp2go_malformed_json');
+    err.status = response.status;
+    err.code = 'SMTP2GO_MALFORMED_JSON';
+    err.classification = classifyEmailProviderError(err, { status: response.status });
+    throw err;
+  }
+
+  if (!response.ok) {
+    const err = new Error(
+      `SMTP2GO API ${response.status}: ${safeProviderErrorMessage(null, body)}`
+    );
+    err.status = response.status;
+    err.body = body;
+    err.requestId = body?.request_id || null;
+    err.errorCode = body?.data?.error_code || body?.error_code || null;
+    const classification = classifyEmailProviderError(err, {
+      response,
+      body,
+      status: response.status
+    });
+    err.classification = classification;
+    maybePauseBulkForGlobalQuota(classification);
+    console.warn('[mailer] SMTP2GO send failed', {
+      provider: 'smtp2go',
+      status: response.status,
+      requestId: err.requestId,
+      errorCode: err.errorCode,
+      message: safeProviderErrorMessage(err, body)
+    });
+    throw err;
+  }
+
+  const accepted = assertSmtp2goAccepted(body, response.status);
+  if (!accepted.ok) {
+    const err = new Error(
+      `SMTP2GO rejected send (succeeded=${accepted.succeeded} failed=${accepted.failed})`
+    );
+    err.status = response.status;
+    err.code = 'SMTP2GO_SEND_REJECTED';
+    err.body = body;
+    err.requestId = body?.request_id || null;
+    err.classification = classifyEmailProviderError(err, {
+      response,
+      body,
+      status: response.status
+    });
+    console.warn('[mailer] SMTP2GO logical failure on HTTP 2xx', {
+      provider: 'smtp2go',
+      status: response.status,
+      requestId: err.requestId,
+      succeeded: accepted.succeeded,
+      failed: accepted.failed,
+      failureCount: Array.isArray(accepted.failures) ? accepted.failures.length : 0
+    });
+    throw err;
+  }
+
+  console.log('[mailer] SMTP2GO accepted email', {
+    to: recipients[0],
+    id: accepted.emailId,
+    subject,
+    requestId: body?.request_id || null
+  });
+  return {
+    provider: 'smtp2go',
+    id: accepted.emailId,
+    requestId: body?.request_id || null
+  };
 }
 
 function backoffMs(attempt) {
@@ -273,8 +473,16 @@ async function sendMailWithRetry(payload, { maxAttempts = 3 } = {}) {
   throw lastErr;
 }
 
-async function sendMail({ to, subject, text, html, priority = 'transactional' }) {
-  const payload = { from: EMAIL_FROM, to, subject, text, html };
+async function sendMail({
+  to,
+  subject,
+  text,
+  html,
+  priority = 'transactional',
+  cc,
+  bcc,
+  replyTo
+} = {}) {
   const isBulk = priority === 'bulk';
 
   if (isBulk && !tradeAlertsEnabled()) {
@@ -285,21 +493,15 @@ async function sendMail({ to, subject, text, html, priority = 'transactional' })
     return { skipped: true, reason: 'quota_circuit_open' };
   }
 
-  // Prefer Resend HTTPS API — Fly.io often blocks outbound SMTP ports.
-  if (getResendApiKey()) {
-    return sendViaResendApi({ to, subject, text, html });
+  if (!isMailConfigured()) {
+    if (isBulk) {
+      return { skipped: true, reason: 'mail_not_configured' };
+    }
+    console.warn('[mailer] SMTP2GO_API_KEY/EMAIL_FROM not configured — email not sent');
+    return { skipped: true, reason: 'mail_not_configured' };
   }
 
-  const transport = await getTransport();
-  if (!transport) {
-    console.warn('[mailer] SMTP/Resend not configured — email logged to console:');
-    console.log(JSON.stringify({ to, subject, text }, null, 2));
-    return { logged: true };
-  }
-
-  const info = await transport.sendMail(payload);
-  console.log('[mailer] SMTP accepted email', { to, messageId: info.messageId, subject });
-  return { provider: 'smtp', id: info.messageId };
+  return sendViaSmtp2goApi({ to, subject, text, html, cc, bcc, replyTo });
 }
 
 function verificationLink(token) {
@@ -487,14 +689,18 @@ module.exports = {
   sendPasswordResetEmail,
   sendTradeAlertEmail,
   sendSubscriptionActivatedEmail,
+  sendMail,
   isSmtpConfigured,
   isMailConfigured,
   isQuotaError,
   isPermanentEmailFailure,
+  classifyEmailProviderError,
   classifyResendError,
   isBulkPaused,
   getBulkPausedUntilMsForTests,
   tradeAlertsEnabled,
   resetMailerStateForTests,
+  assertSmtp2goAccepted,
+  EMAIL_PROVIDER_ERROR,
   RESEND_ERROR
 };

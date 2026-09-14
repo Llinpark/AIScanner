@@ -1,5 +1,5 @@
-/**
- * ENTRY-first + subscriber delivery sequencing (invariants 1–16, tests 1–20).
+﻿/**
+ * ENTRY-first + subscriber delivery sequencing (invariants 1â€“16, tests 1â€“20).
  * Controlled Telegram barriers prove order is not an accident of network completion.
  * Never hits production Telegram / Fly.
  */
@@ -214,7 +214,7 @@ async function acceptAndFanout(io, body, mem) {
   return accept;
 }
 
-describe('entry-first delivery sequencing 1–20', () => {
+describe('entry-first delivery sequencing 1â€“20', () => {
   let mem;
   let io;
   let tg;
@@ -267,7 +267,7 @@ describe('entry-first delivery sequencing 1–20', () => {
     if (global.__seqOrigMailer) mailer.sendTradeAlertEmail = global.__seqOrigMailer;
   });
 
-  it('invariants: skip-milestone ENTRY→TP3; never invent TP1/TP2; never TP3 before ENTRY', () => {
+  it('invariants: skip-milestone ENTRYâ†’TP3; never invent TP1/TP2; never TP3 before ENTRY', () => {
     assert.deepEqual(DeliverySequencer.requiredPredecessors('entry', []), []);
     assert.deepEqual(DeliverySequencer.requiredPredecessors('take_profit_3', ['entry']), ['entry']);
     assert.deepEqual(DeliverySequencer.requiredPredecessors('take_profit_3', ['entry', 'take_profit_3']), [
@@ -282,10 +282,10 @@ describe('entry-first delivery sequencing 1–20', () => {
       'take_profit_1'
     ]);
     assert.deepEqual(DeliverySequencer.requiredPredecessors('stop_loss', ['entry']), ['entry']);
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
   });
 
-  it('1. sequential ENTRY then TP1 → Telegram ENTRY first', async () => {
+  it('1. sequential ENTRY then TP1 â†’ Telegram ENTRY first', async () => {
     await acceptAndFanout(io, payload('entry', 'seq-1'), mem);
     await acceptAndFanout(io, payload('take_profit_1', 'seq-1'), mem);
     assert.ok(tg.calls >= 2);
@@ -325,7 +325,7 @@ describe('entry-first delivery sequencing 1–20', () => {
     assert.ok(tg.texts.findIndex(isTp3Text) > 0);
   });
 
-  it('3. genuine skip-milestone ENTRY→TP3; no synthetic TP1/TP2 messages', async () => {
+  it('3. genuine skip-milestone ENTRYâ†’TP3; no synthetic TP1/TP2 messages', async () => {
     await acceptAndFanout(io, payload('entry', 'seq-3', { symbol: 'SEQ3' }), mem);
     await acceptAndFanout(io, payload('take_profit_3', 'seq-3', { symbol: 'SEQ3' }), mem);
     assert.equal(isEntryText(tg.texts[0]), true);

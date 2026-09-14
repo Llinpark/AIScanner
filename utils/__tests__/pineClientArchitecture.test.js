@@ -61,21 +61,19 @@ const LEGACY_ENTRY = {
 };
 
 describe('PineClientVersion', () => {
-  it('stamps current version and 1.2.x capability set', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+  it('stamps current version and 1.3.0 capability set', () => {
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
     assert.deepEqual(CURRENT_PINE_CAPABILITIES, [
       'v1_payload',
       'sl_risk_v1',
       'replace_active_v1',
       'json_esc_v1',
       'canonical_tf_v1',
-      'event_bridge_v1',
-      'canonical_emit_independent_v1',
-      'canonical_webhook_authority_v1'
+      'event_bridge_v1'
     ]);
     assert.equal(
       capabilitiesJsonLiteral(),
-      '["v1_payload","sl_risk_v1","replace_active_v1","json_esc_v1","canonical_tf_v1","event_bridge_v1","canonical_emit_independent_v1","canonical_webhook_authority_v1"]'
+      '["v1_payload","sl_risk_v1","replace_active_v1","json_esc_v1","canonical_tf_v1","event_bridge_v1"]'
     );
   });
 

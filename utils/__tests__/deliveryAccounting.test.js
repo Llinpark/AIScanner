@@ -230,7 +230,7 @@ describe('RC-E / RC-G preservation', () => {
       'utf8'
     );
     assert.match(src, /Promise\.allSettled/);
-    assert.match(src, /ENTRY: start email \/ telegram \/ MT5 independently/);
+    assert.match(src, /ENTRY: independent durable channels/);
   });
 });
 

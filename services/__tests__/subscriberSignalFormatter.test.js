@@ -172,21 +172,28 @@ describe('3. Raw payload block', () => {
   });
 });
 
-describe('4. Email path uses formatter (mocked Resend, never real users)', () => {
+describe('4. Email path uses formatter (mocked SMTP2GO, never real users)', () => {
   const originalFetch = global.fetch;
   let captured;
 
   beforeEach(() => {
     captured = null;
-    process.env.RESEND_API_KEY = 'test-not-real';
+    process.env.SMTP2GO_API_KEY = 'smtp2go-test-key-not-real';
+    process.env.EMAIL_FROM = 'KachingScanner <noreply@kachingscanner.com>';
+    delete process.env.RESEND_API_KEY;
     delete process.env.SMTP_HOST;
     global.fetch = async (url, init) => {
-      assert.match(String(url), /api\.resend\.com\/emails/);
+      assert.match(String(url), /api\.smtp2go\.com\/v3\/email\/send/);
       captured = JSON.parse(init.body);
       return {
         ok: true,
+        status: 200,
+        headers: { get: () => null },
         async json() {
-          return { id: 'email_test_1' };
+          return {
+            request_id: 'req-fmt',
+            data: { succeeded: 1, failed: 0, failures: [], email_id: 'email_test_1' }
+          };
         }
       };
     };
@@ -194,6 +201,8 @@ describe('4. Email path uses formatter (mocked Resend, never real users)', () =>
 
   afterEach(() => {
     global.fetch = originalFetch;
+    delete process.env.SMTP2GO_API_KEY;
+    delete process.env.EMAIL_FROM;
     delete process.env.RESEND_API_KEY;
   });
 
@@ -204,9 +213,9 @@ describe('4. Email path uses formatter (mocked Resend, never real users)', () =>
     });
     assert.equal(result.ok, true);
     assert.equal(captured.subject, 'Kaching BUY — EURUSD');
-    assert.equal(String(captured.text).trim(), expectedBuyEmail());
-    assert.doesNotMatch(captured.text, /licenseToken|super-secret-license|\{"symbol":/);
-    assert.doesNotMatch(captured.html, /licenseToken|\{"symbol":/);
+    assert.equal(String(captured.text_body).trim(), expectedBuyEmail());
+    assert.doesNotMatch(captured.text_body, /licenseToken|super-secret-license|\{"symbol":/);
+    assert.doesNotMatch(captured.html_body, /licenseToken|\{"symbol":/);
   });
 
   it('blocked raw presentation does not send JSON body', async () => {
@@ -355,7 +364,9 @@ describe('10. Plan delivery regression (mocked channels)', () => {
   beforeEach(() => {
     deliveryIdempotency.resetForTests();
     process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token-not-real';
-    process.env.RESEND_API_KEY = 'test-not-real';
+    process.env.SMTP2GO_API_KEY = 'smtp2go-test-key-not-real';
+    process.env.EMAIL_FROM = 'KachingScanner <noreply@kachingscanner.com>';
+    delete process.env.RESEND_API_KEY;
     delete process.env.SMTP_HOST;
     global.fetch = async url => {
       const href = String(url);
@@ -367,11 +378,16 @@ describe('10. Plan delivery regression (mocked channels)', () => {
           }
         };
       }
-      if (href.includes('api.resend.com')) {
+      if (href.includes('api.smtp2go.com')) {
         return {
           ok: true,
+          status: 200,
+          headers: { get: () => null },
           async json() {
-            return { id: 'mail_7' };
+            return {
+              request_id: 'req7',
+              data: { succeeded: 1, failed: 0, failures: [], email_id: 'mail_7' }
+            };
           }
         };
       }
@@ -382,6 +398,8 @@ describe('10. Plan delivery regression (mocked channels)', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     delete process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.SMTP2GO_API_KEY;
+    delete process.env.EMAIL_FROM;
     delete process.env.RESEND_API_KEY;
   });
 

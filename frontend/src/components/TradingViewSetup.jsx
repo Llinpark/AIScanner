@@ -30,16 +30,12 @@ export default function TradingViewSetup() {
         <li className="setup-step">
           <strong>Create an alert</strong>
           <p>
-            Create ONE authoritative alert on the canonical chart only (Scalp 3m engine/webhook; Day
-            Trading 5m engine/webhook). Visualization-only charts must not have webhook alerts.
-            Condition: Kaching indicator → Any alert() function call. Enable Webhook URL and paste your
-            Kaching webhook URL from the dashboard. Message: type exactly {'{{alert_message}}'} (this
-            expands to the Pine alert() JSON). Never use {'{{strategy.order.alert_message}}'} — that is
-            for strategy() order fills only and will be sent as a literal {'{{…}}'} string, which breaks
-            the webhook. Never type custom JSON. Pine 1.6.0 does not auto-migrate old alerts: regenerate
-            the latest script, remove the old indicator, delete ALL old alerts, then create one new
-            alert. Use the production webhook only after production is approved. One alert covers Entry,
-            stop loss, and take-profit levels.
+            Create an alert on your chart (prefer Scalp 3m or Day Trading 5m). Condition: Kaching
+            indicator → Any alert() function call. Enable Webhook URL and paste your Kaching webhook URL
+            from the dashboard. Message: type exactly {'{{alert_message}}'} (this expands to the Pine
+            alert() JSON). Never use {'{{strategy.order.alert_message}}'} — that is for strategy() order
+            fills only and will be sent as a literal {'{{…}}'} string, which breaks the webhook. Never
+            type custom JSON. One alert covers Entry, stop loss, and take-profit levels.
           </p>
         </li>
         <li className="setup-step">

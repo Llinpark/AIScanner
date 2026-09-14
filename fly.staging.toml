@@ -1,0 +1,62 @@
+# Isolated STAGING Fly app. NOT production.
+#
+# Production remains fly.toml (application kaching-api).
+#
+# This file is the only Fly config that may target kaching-api-staging.
+#
+# Do NOT run:  fly deploy
+# That command uses fly.toml (production).
+#
+# Operator deploy (only after reviewing this file and isolated secrets):
+#   fly apps create kaching-api-staging
+#   fly secrets set -a kaching-api-staging -c fly.staging.toml ...
+#   fly deploy -a kaching-api-staging -c fly.staging.toml
+#
+# Never copy secrets from the production Fly app. Never point Mongo/Redis at production.
+
+app = "kaching-api-staging"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HOST = "0.0.0.0"
+  NODE_ENV = "staging"
+  PORT = "8080"
+  REDIS_ENABLED = "true"
+  EMAIL_TRADE_ALERTS_ENABLED = "true"
+  PAYMENTS_MODE = "mock"
+  TELEGRAM_USE_POLLING = "false"
+  SCALPING_STRATEGY_ENABLED = "true"
+  DAYTRADING_SWEEP_FVG_ENABLED = "true"
+  DELIVERY_RECOVERY_INTERVAL_MS = "15000"
+  DELIVERY_RECOVERY_MIN_INTERVAL_MS = "5000"
+  DELIVERY_RECOVERY_REDIS_SCAN = "0"
+  DELIVERY_RECOVERY_PROCESS_BUDGET = "8"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 500
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/api/health"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512

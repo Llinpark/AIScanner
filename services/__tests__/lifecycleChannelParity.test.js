@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Email/Telegram lifecycle parity matrix.
  * Proves one canonical trade identity, independent channel delivery,
  * overlay-after-rehydrate, duplicate suppression, and reverse recovery.
@@ -63,7 +63,7 @@ function payload(alertType, uuid, overrides = {}) {
     userId: USER_A,
     licenseToken: generateLicenseToken(USER_A, TV_USER),
     isRealtime: true,
-    pineClientVersion: '1.6.0',
+    pineClientVersion: '1.3.0',
     signalTime: Date.now(),
     ...overrides,
     signalUuid: uuid,

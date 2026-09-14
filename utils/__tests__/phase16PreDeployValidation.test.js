@@ -1,5 +1,5 @@
-/**
- * Phase 16 — Pre-deploy validation (local only).
+﻿/**
+ * Phase 16 â€” Pre-deploy validation (local only).
  *
  * Proves Stable Pine Client prep is behaviour-identical to today's production
  * path while all new capabilities remain disabled / pass-through.
@@ -196,7 +196,7 @@ describe('Phase16 Version 1 Client', () => {
 
     const legacyFp = tradingFingerprint(legacy);
     const v1Fp = tradingFingerprint(v1);
-    // signalUuid intentionally differs between fixtures — compare trading math
+    // signalUuid intentionally differs between fixtures â€” compare trading math
     delete legacyFp.signalUuid;
     delete v1Fp.signalUuid;
     assert.deepEqual(v1Fp, legacyFp);
@@ -281,7 +281,7 @@ describe('Phase16 Future / Unknown Version', () => {
   });
 });
 
-describe('Phase16 Feature Flags — individual ON still pass-through', () => {
+describe('Phase16 Feature Flags â€” individual ON still pass-through', () => {
   afterEach(() => {
     resetFeatureFlagsForTests();
   });
@@ -402,7 +402,7 @@ describe('Phase16 Registry Failure Isolation', () => {
   });
 
   it('recordGeneration exception path returns null without throwing', async () => {
-    // Force getMemory path with empty user → null
+    // Force getMemory path with empty user â†’ null
     const r = await PineClientRegistry.recordGeneration('', { pineClientVersion: '1.0.0' });
     assert.equal(r, null);
   });
@@ -452,7 +452,7 @@ describe('Phase16 Decision Framework Trace', () => {
     resetFeatureFlagsForTests();
   });
 
-  it('webhook → framework → buildSignalData never alters trading output', () => {
+  it('webhook â†’ framework â†’ buildSignalData never alters trading output', () => {
     const bodies = [LEGACY_PAYLOAD, v1Payload(), futurePayload()];
     for (const body of bodies) {
       const built = buildSignalData(body);
@@ -466,7 +466,7 @@ describe('Phase16 Decision Framework Trace', () => {
       assert.equal(lifecycleLike.entry, 2650.5);
       assert.equal(lifecycleLike.stop_loss, 2644);
 
-      // Delivery would use these fields — framework did not rewrite them
+      // Delivery would use these fields â€” framework did not rewrite them
       const decision = PineClientDecisionFramework.evaluateEntryDecision(body, built);
       assert.equal(decision.proceed, true);
       assert.equal(decision.signalData.confidence, built.confidence);
@@ -558,7 +558,7 @@ describe('Phase16 Performance Overhead', () => {
     const frameworkNs = ns(t2, t3) / iterations;
     const buildNs = ns(t3, t4) / iterations;
 
-    // Soft budgets — fail only if catastrophically slow (protects CI flakiness)
+    // Soft budgets â€” fail only if catastrophically slow (protects CI flakiness)
     assert.ok(parseNs < 500_000, `extractPineClientMeta too slow: ${parseNs}ns`);
     assert.ok(flagsNs < 200_000, `getFeatureFlags too slow: ${flagsNs}ns`);
     assert.ok(frameworkNs < 500_000, `evaluateEntryDecision too slow: ${frameworkNs}ns`);
@@ -576,7 +576,7 @@ describe('Phase16 Performance Overhead', () => {
       evaluateEntryDecision_us: +(frameworkNs / 1000).toFixed(3),
       buildSignalData_us: +(buildNs / 1000).toFixed(3)
     };
-    // Always truthy — keeps numbers in test output when --test-reporter=spec
+    // Always truthy â€” keeps numbers in test output when --test-reporter=spec
     assert.ok(report.buildSignalData_us >= 0, JSON.stringify(report));
     console.log('[Phase16 PERF]', JSON.stringify(report));
   });
@@ -619,7 +619,7 @@ describe('Phase16 Logging Assessment', () => {
     assert.equal(future.pineCompatMode, COMPAT_MODE.FUTURE);
     // Mode distinction is available on signalData for Mongo/pipeline consumers.
     // Dedicated console lines for Legacy/Versioned/Unknown are intentionally absent
-    // to avoid webhook noise — gap noted in Phase 16 report (no behaviour change).
+    // to avoid webhook noise â€” gap noted in Phase 16 report (no behaviour change).
   });
 });
 
@@ -640,9 +640,9 @@ describe('Phase16 Delivery/Telegram/MT5 Independence (static)', () => {
   });
 
   it('stamped version constant remains current Stable Pine stamp', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
     assert.equal(resolveCompatibilityMode('1.3.0').mode, COMPAT_MODE.CURRENT);
-    // Same major family as stamp — CURRENT, not LEGACY (additive 1.x clients remain supported).
+    // Same major family as stamp â€” CURRENT, not LEGACY (additive 1.x clients remain supported).
     assert.equal(resolveCompatibilityMode('1.1.0').mode, COMPAT_MODE.CURRENT);
     assert.equal(resolveCompatibilityMode('1.0.0').mode, COMPAT_MODE.CURRENT);
     assert.equal(resolveCompatibilityMode('5.0.0').mode, COMPAT_MODE.FUTURE);

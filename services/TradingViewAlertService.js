@@ -19,6 +19,7 @@ const TradeDeliveryService = require('../services/TradeDeliveryService');
 const TradeLifecycleService = require('../services/TradeLifecycleService');
 const { normalizeSymbol } = require('../config/symbols');
 const { logPipeline, extractPipelineMeta } = require('../utils/pipelineLog');
+const { logDeliveryTimeline } = require('../utils/deliveryTimeline');
 const { extractPineClientMeta } = require('../utils/PineClientVersion');
 const { attachOptionalContext } = require('../utils/PineWebhookContext');
 const PineClientDecisionFramework = require('./PineClientDecisionFramework');
@@ -40,6 +41,11 @@ const TradeEventDispatcher = require('../utils/tradeEventDispatcher');
 const TradeEventStore = require('../utils/tradeEventStore');
 const DurableDelivery = require('../utils/durableDelivery');
 const { overlayFanoutAcceptResult } = require('../utils/deliveryJobSignalOverlay');
+const {
+  mergeLiveLifecycleForEntryDelivery,
+  evaluateActionableEntryDelivery,
+  lifecyclePastEntry
+} = require('../utils/entryDeliveryGuard');
 const { attachCorrelation, compactCorrelation, mergeCorrelation } = require('../utils/signalCorrelation');
 const { mergeDeliveryStatusOps } = require('../utils/deliveryOutcomes');
 const { emitTvAccept, emitTvPersist, emitTvFanout } = require('../utils/tvStageLog');
@@ -48,6 +54,17 @@ const { classifyRedisError } = require('../utils/redisClient');
 
 function redisErrorCodeOf(err) {
   return err?.redisErrorCode || classifyRedisError(err);
+}
+
+function logEntryDupClass(dupClass, fields = {}) {
+  console.log(
+    `[ENTRY_DUP_CLASS] class=${dupClass} ` +
+      `canonicalTradeId=${fields.canonicalTradeId || '-'} ` +
+      `eventId=${fields.eventId || '-'} ` +
+      `eventType=${fields.eventType || '-'} ` +
+      `signalUuid=${fields.signalUuid || '-'} ` +
+      `reason=${fields.reason || '-'}`
+  );
 }
 
 function isDbConnected() {
@@ -408,6 +425,14 @@ async function saveSignal(signalData, inMemorySignals) {
       signalUuid: saved.signalUuid || saved.signalId || meta.signalUuid,
       reason: `Success; id=${saved._id}`
     });
+    logDeliveryTimeline('mongo_persisted', {
+      ...meta,
+      signalUuid: saved.signalUuid || saved.signalId || meta.signalUuid,
+      tradeId: saved.canonicalTradeId || saved.signalUuid || saved.signalId,
+      eventType: saved.alertType || signalData.alertType,
+      mongoPersistedAt: Date.now(),
+      reason: 'mongo_save'
+    });
     if (signalData.userId || saved.userId) {
       try {
         const PipelineSubscriberStatsService = require('./PipelineSubscriberStatsService');
@@ -658,6 +683,18 @@ async function fanOutAcceptedSignal(io, saved, signalData, inMemorySignals = [],
       `count=${eligible.length}`
   );
 
+  // Telegram-ready subscribers first so email-only rows cannot starve actionable alerts
+  // (USDCAD 2026-09-09: telegram jobs created ~43–189s after accept while email-bound
+  // slots occupied TV_FANOUT_CONCURRENCY).
+  eligible.sort((a, b) => {
+    const score = (sub) => {
+      const tg = sub?.telegram || {};
+      const chatReady = Boolean(tg.chatId) && tg.enabled !== false;
+      return chatReady ? 1 : 0;
+    };
+    return score(b) - score(a);
+  });
+
   await emitLifecycleSocket(io, saved, signalData.alertType, { waitMode: options.waitMode });
 
   if (eligible.length === 0) {
@@ -773,6 +810,14 @@ async function emitLifecycleSocket(io, signalDoc, alertType, options = {}) {
     waitMode: options.waitMode,
     send: async () => {
       if (TradeLifecycle.isEntryAlert(type)) {
+        const guard = evaluateActionableEntryDelivery(payload);
+        if (guard.skip) {
+          if (lifecyclePastEntry(payload)) {
+            io.emit('signal_closed', payload);
+            io.emit('signal:outcome', payload);
+          }
+          return { skipped: true, reason: guard.reason, ok: false };
+        }
         io.emit('signal_created', payload);
         io.emit('signal:update', payload); // legacy alias
         return { ok: true };
@@ -857,6 +902,14 @@ function buildSignalData(body) {
     emailSent: false,
     chartSnapshot: body.chartSnapshot || body.chart_snapshot || undefined,
     eventTimestamp: parseEventTimestamp(body) || undefined,
+    alertFiredAt: (() => {
+      const raw = body.alertFiredAt ?? body.alert_fired_at;
+      if (raw == null || raw === '') return undefined;
+      const ms = Number(raw);
+      if (Number.isFinite(ms) && ms > 0) return new Date(ms);
+      const parsed = Date.parse(String(raw));
+      return Number.isFinite(parsed) ? new Date(parsed) : undefined;
+    })(),
     bridgeEventIndex: parseBridgeEventIndex(body),
     isRealtime: body.isRealtime ?? body.is_realtime ?? undefined,
     eventId: body.eventId || body.event_id || undefined,
@@ -1371,6 +1424,13 @@ async function acceptAfterValidation(io, baseData, inMemorySignals, options, tim
         barTime: baseData.barTime,
         reason: `duplicate_event_id; eventId=${eventId}; eventType=${eventType}; canonicalTradeId=${canonicalId || '-'}; requestId=${baseData.pipelineRequestId || 'n/a'}; pine=${baseData.pineClientVersion || '-'}`
       });
+      logEntryDupClass('A_same_eventId', {
+        canonicalTradeId: canonicalId,
+        eventId,
+        eventType,
+        signalUuid: canonicalId,
+        reason: 'duplicate_event_id'
+      });
       return ackNoFanout('duplicate_event_id', baseData, timings, {
         duplicate: true,
         idempotent: true,
@@ -1452,6 +1512,13 @@ async function acceptAfterValidation(io, baseData, inMemorySignals, options, tim
       ...extractPipelineMeta(lifecycle.signalData || baseData),
       signalUuid: uuid,
       reason: `idempotent_replay; requestId=${baseData.pipelineRequestId || 'n/a'}`
+    });
+    logEntryDupClass('A_same_eventId', {
+      canonicalTradeId: canonicalId,
+      eventId,
+      eventType,
+      signalUuid: uuid,
+      reason: 'duplicate_webhook_replay'
     });
     if (canonicalId) TradeEventDispatcher.resolveEntryIntent(canonicalId, existing);
     return ackNoFanout('duplicate_webhook_replay', baseData, timings, {
@@ -1539,6 +1606,9 @@ async function acceptAfterValidation(io, baseData, inMemorySignals, options, tim
   signalData.pipelineTimings = timings;
   if (isEntryAlert(signalData.alertType) && !signalData.entryAcceptedAt) {
     signalData.entryAcceptedAt = new Date();
+  }
+  if (timings.webhookReceivedAt != null && signalData.webhookReceivedAt == null) {
+    signalData.webhookReceivedAt = new Date(timings.webhookReceivedAt);
   }
 
   logPipeline('Lifecycle', 'PASS', {
@@ -1667,6 +1737,13 @@ async function acceptAfterValidation(io, baseData, inMemorySignals, options, tim
         signalUuid: uuid,
         reason: `duplicate_lifecycle_event; requestId=${signalData.pipelineRequestId || 'n/a'}`
       });
+      logEntryDupClass('B_same_canonical_diff_eventId', {
+        canonicalTradeId: canonicalId,
+        eventId: signalData.eventId || eventId,
+        eventType: signalData.eventType || signalData.alertType || eventType,
+        signalUuid: uuid,
+        reason: 'duplicate_lifecycle_event'
+      });
       return ackNoFanout('duplicate_lifecycle_event', baseData, timings, {
         duplicate: true,
         idempotent: true,
@@ -1683,6 +1760,13 @@ async function acceptAfterValidation(io, baseData, inMemorySignals, options, tim
         ...extractPipelineMeta(signalData),
         signalUuid: uuid,
         reason: `duplicate_lifecycle_event; requestId=${signalData.pipelineRequestId || 'n/a'}`
+      });
+      logEntryDupClass('B_same_canonical_diff_eventId', {
+        canonicalTradeId: canonicalId,
+        eventId: signalData.eventId || eventId,
+        eventType: signalData.eventType || signalData.alertType || eventType,
+        signalUuid: uuid,
+        reason: 'duplicate_lifecycle_event'
       });
       return ackNoFanout('duplicate_lifecycle_event', baseData, timings, {
         duplicate: true,
@@ -1891,14 +1975,36 @@ async function processAcceptedTradingViewSignal(
     };
   }
 
-  // Live Mongo may already be terminal (same-bar TP3). Do not skip this Entry
-  // job — TradeEventDispatcher still owes subscribers BUY/SELL first.
-  // Warn only; delivery uses the accept snapshot + webhook alertType.
+  // Live Mongo may already be TP1+/terminal. Merge that lifecycle onto the
+  // accept snapshot so channel guards see the real trade, not an OPEN ENTRY.
+  // Same-bar overlap still sends BUY/SELL first; delayed jobs skip actionable ENTRY.
   const latestSaved = await hydrateLatestSaved(saved, signalData, inMemorySignals);
-  if (isEntryAlert(deliveryAlertType) && isTerminalEntry(latestSaved)) {
+  const mergedSaved = isEntryAlert(deliveryAlertType)
+    ? mergeLiveLifecycleForEntryDelivery(saved, latestSaved)
+    : saved;
+  const mergedData = isEntryAlert(deliveryAlertType)
+    ? mergeLiveLifecycleForEntryDelivery(
+        {
+          ...plainSignal(saved),
+          ...signalData,
+          alertType: deliveryAlertType,
+          pipelineRequestId: requestId
+        },
+        latestSaved
+      )
+    : {
+        ...plainSignal(saved),
+        ...signalData,
+        alertType: deliveryAlertType,
+        pipelineRequestId: requestId
+      };
+  if (isEntryAlert(deliveryAlertType) && lifecyclePastEntry(latestSaved)) {
+    const liveGuard = evaluateActionableEntryDelivery(mergedData);
     console.warn(
       `[TV WEBHOOK ASYNC] requestId=${requestId} signalUuid=${uuid || 'n/a'} ` +
-        `note=mongo_already_terminal_entry_job_still_runs stage=${latestSaved.lifecycleStage || latestSaved.tradeStatus || 'n/a'}`
+        `note=${liveGuard.skip ? 'skip_actionable_entry_after_outcome' : 'mongo_already_terminal_entry_job_still_runs'} ` +
+        `stage=${latestSaved.lifecycleStage || latestSaved.tradeStatus || 'n/a'} ` +
+        `guard=${liveGuard.reason || 'none'}`
     );
   }
 
@@ -1906,23 +2012,27 @@ async function processAcceptedTradingViewSignal(
     `[TV WEBHOOK ASYNC START] requestId=${requestId} signalUuid=${uuid || 'n/a'} ` +
       `symbol=${meta.symbol || 'n/a'} alertType=${deliveryAlertType}`
   );
+  logDeliveryTimeline('job_started', {
+    ...meta,
+    tradeId: uuid,
+    signalUuid: uuid,
+    eventType: deliveryAlertType,
+    jobStartedAt: Date.now(),
+    requestId,
+    reason: 'async_fanout_start'
+  });
 
   try {
     const delivery = await fanOutAcceptedSignal(
       io,
-      saved,
-      {
-        ...plainSignal(saved),
-        ...signalData,
-        alertType: deliveryAlertType,
-        pipelineRequestId: requestId
-      },
+      mergedSaved,
+      mergedData,
       inMemorySignals,
       {
         ...options,
         timings,
         broadcastSaved: acceptResult.broadcastSaved,
-        existingSaved: saved
+        existingSaved: mergedSaved
       }
     );
 

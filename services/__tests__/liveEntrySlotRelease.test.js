@@ -12,6 +12,8 @@ const assert = require('node:assert/strict');
 
 const TradeDeliveryService = require('../TradeDeliveryService');
 const TradingViewAlertService = require('../TradingViewAlertService');
+const Mt5TradeCopierService = require('../Mt5TradeCopierService');
+const mailer = require('../../utils/mailer');
 const deliveryIdempotency = require('../../utils/deliveryIdempotency');
 const DurableDelivery = require('../../utils/durableDelivery');
 const DeliverySequencer = require('../../utils/deliverySequencer');
@@ -24,6 +26,8 @@ let originalFanoutConcurrency;
 let originalInflight;
 let originalQueue;
 let originalBot;
+let originalMailerSend;
+let originalMt5Queue;
 
 function entrySignal(overrides = {}) {
   seq += 1;
@@ -122,6 +126,8 @@ describe('P0 live ENTRY slot release A–R', { concurrency: false }, () => {
     originalInflight = process.env.TV_POST_SLOT_SOCKET_INFLIGHT;
     originalQueue = process.env.TV_POST_SLOT_SOCKET_QUEUE;
     originalBot = process.env.TELEGRAM_BOT_TOKEN;
+    originalMailerSend = mailer.sendTradeAlertEmail;
+    originalMt5Queue = Mt5TradeCopierService.queueExecutionForUser;
     process.env.NODE_ENV = 'test';
     process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token-not-real';
     process.env.EMAIL_TRADE_ALERTS_ENABLED = 'false';
@@ -137,6 +143,8 @@ describe('P0 live ENTRY slot release A–R', { concurrency: false }, () => {
     TradeDeliveryService.setTestBeforeSocket(null);
     TradeDeliveryService.resetPostSlotSocketForTests();
     global.fetch = originalFetch;
+    mailer.sendTradeAlertEmail = originalMailerSend;
+    Mt5TradeCopierService.queueExecutionForUser = originalMt5Queue;
     if (originalFanoutConcurrency == null) delete process.env.TV_FANOUT_CONCURRENCY;
     else process.env.TV_FANOUT_CONCURRENCY = originalFanoutConcurrency;
     if (originalInflight == null) delete process.env.TV_POST_SLOT_SOCKET_INFLIGHT;
@@ -210,7 +218,10 @@ describe('P0 live ENTRY slot release A–R', { concurrency: false }, () => {
       assert.equal(returned.deferredSocket, true);
       assert.equal(socketDone, false);
       assert.equal(io.emits.length, 0);
-      assert.ok(tg.calls >= 1);
+      // Telegram is detached from the fan-out slot (same class as Email); wait for
+      // the in-flight provider, not for slot release.
+      await TradeDeliveryService.waitForDetachedProvidersForTests();
+      assert.ok(tg.calls >= 1, 'telegram provider must still run after durable job');
     } finally {
       release();
     }
@@ -582,5 +593,73 @@ describe('P0 live ENTRY slot release A–R', { concurrency: false }, () => {
       DeliverySequencer.withChannelSequence = original;
     }
     assert.ok(modes.includes('check_once'));
+  });
+
+  it('S. MANDATORY: email hang → TG/MT5 proceed + slot released + later subscriber not starved', async () => {
+    process.env.TV_FANOUT_CONCURRENCY = '1';
+    process.env.EMAIL_TRADE_ALERTS_ENABLED = 'true';
+
+    let releaseEmail;
+    const emailHold = new Promise(resolve => {
+      releaseEmail = resolve;
+    });
+    let emailStarted = 0;
+    let emailDone = false;
+    mailer.sendTradeAlertEmail = async () => {
+      emailStarted += 1;
+      await emailHold;
+      emailDone = true;
+      return { ok: true, provider: 'smtp2go', id: 'slot-s-email' };
+    };
+
+    const tg = { calls: 0, starts: [] };
+    mockTelegramOk(tg);
+    let mt5Calls = 0;
+    Mt5TradeCopierService.queueExecutionForUser = async () => {
+      mt5Calls += 1;
+      return { ok: true };
+    };
+
+    const slow = proSubscriber('slot-s-slow', '80101', {
+      subscription: { tier: 'premium', status: 'active' },
+      mt5: {
+        executionMode: 'auto',
+        enabled: true,
+        devices: [{ deviceId: 'd-s1', accessToken: 't', revokedAt: null }],
+        accountBalance: 1000
+      }
+    });
+    const fast = proSubscriber('slot-s-fast', '80102');
+    const saved = entrySignal({ signalUuid: 'slot-s-fanout' });
+
+    const fanoutP = TradingViewAlertService.fanOutAcceptedSignal(ioMock(), saved, saved, [], {
+      subscribers: [slow, fast]
+    });
+
+    try {
+      const bothTg = await waitUntil(() => tg.starts.length >= 2, { timeoutMs: 2000 });
+      assert.equal(bothTg, true, 'later subscriber Telegram must start while email hangs');
+      assert.ok(emailStarted >= 1, 'email provider must start');
+      assert.equal(emailDone, false, 'email must still be hanging when slot has moved on');
+      assert.ok(mt5Calls >= 1, 'MT5 must proceed despite hung email');
+
+      const emailJob = await DurableDelivery.getJobBySpec({
+        eventId: saved.eventId,
+        canonicalTradeId: saved.canonicalTradeId,
+        subscriberId: slow.id,
+        channel: 'email',
+        eventType: 'entry'
+      });
+      assert.ok(emailJob, 'email DeliveryJob must exist before hang resolves (durable handoff)');
+    } finally {
+      releaseEmail();
+    }
+
+    const delivery = await fanoutP;
+    await TradeDeliveryService.waitForDetachedProvidersForTests();
+    await TradeDeliveryService.waitForPostSlotSocketIdle();
+    assert.equal(delivery.delivered, 2);
+    assert.equal(emailDone, true);
+    assert.equal(tg.calls, 2);
   });
 });

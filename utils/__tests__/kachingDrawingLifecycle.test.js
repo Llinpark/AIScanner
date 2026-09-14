@@ -48,7 +48,7 @@ function pineSources() {
 
 describe('Kaching drawing lifecycle 1.3.0 (A–M)', () => {
   it('stamps Pine client 1.3.0 (drawing-lifecycle contract; users must regenerate)', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
   });
 
   it('D. retention arrays and MAX_COMPLETED_TRADES are gone from snippets/templates', () => {
@@ -94,6 +94,21 @@ describe('Kaching drawing lifecycle 1.3.0 (A–M)', () => {
     assert.doesNotMatch(closeBlock.slice(0, 1200), CHART_MARKER_RE);
   });
 
+  it('N. ENTRY arming bar does not score TP/SL (prevents same-second ENTRY+TP3)', () => {
+    assert.match(ARM, /lifeT > entrySt/);
+    assert.match(ARM, /array\.set\(tradeCanonMeta, 2, stEv\)/);
+    assert.match(ARM, /array\.set\(tradeCanonMeta, 1, 1\)/);
+  });
+
+  it('O. historical calc cannot consume webhook ids without alert/flush', () => {
+    assert.match(ARM, /kachingPendingIds/);
+    assert.match(ARM, /flushKachingPendingAlerts/);
+    assert.match(ARM, /kachingSeenIds/);
+    const emitFn = ARM.slice(ARM.indexOf('emitKachingEvent('));
+    assert.match(emitFn, /alreadySeen/);
+    assert.match(emitFn, /alreadyAlerted/);
+  });
+
   it('K. cancel/replacement and invalidation-equivalent leftover cleanup call the same function', () => {
     assert.match(ARM, /alertType=cancelled \| reason=new_confirmed_setup/);
     const cancelIdx = ARM.indexOf('emitKachingEvent("cancelled"');
@@ -110,18 +125,19 @@ describe('Kaching drawing lifecycle 1.3.0 (A–M)', () => {
 
   it('F. emitKachingEvent stays gated on barstate.isrealtime (not drawing retention)', () => {
     assert.match(ARM, /emitKachingEvent\(/);
-    assert.match(ARM, /if barstate\.isrealtime and isCanonicalAuthorityChart/);
-    assert.match(ARM, /alertFiredAt = timenow/);
-    assert.match(ARM, /alert\(livePayload, alert\.freq_all\)/);
+    assert.match(ARM, /if barstate\.isrealtime/);
+    assert.doesNotMatch(ARM, /isCanonicalAuthorityChart/);
+    assert.doesNotMatch(ARM, /alertFiredAt = timenow/);
+    assert.match(ARM, /kachingFireAlert\(payload\)/);
     assert.doesNotMatch(ARM, /if fireLong and barstate\.isrealtime/);
-    assert.match(DRAW, /DRAW an ACTIVE trade/);
+    assert.match(DRAW, /must not consume webhook ids|Historical calc may DRAW/i);
   });
 
   it('9. webhook URL, license token, and alert payload slots are unchanged', () => {
     assert.match(SCALP_TPL, /WEBHOOK_URL = "{{WEBHOOK_URL}}"/);
     assert.match(DAY_TPL, /WEBHOOK_URL = "{{WEBHOOK_URL}}"/);
-    assert.match(SCALP_TPL, /LICENSE_TOKEN = "{{LICENSE_TOKEN}}"/);
-    assert.match(DAY_TPL, /LICENSE_TOKEN = "{{LICENSE_TOKEN}}"/);
+    assert.match(SCALP_TPL, /LICENSE_TOKEN = str\.trim\("{{LICENSE_TOKEN}}"\)/);
+    assert.match(DAY_TPL, /LICENSE_TOKEN = str\.trim\("{{LICENSE_TOKEN}}"\)/);
     assert.doesNotMatch(SCALP_TPL, /WEBHOOK_SIGNING_SECRET/);
     assert.doesNotMatch(DAY_TPL, /WEBHOOK_SIGNING_SECRET/);
   });
@@ -142,7 +158,7 @@ describe('Kaching drawing lifecycle — generated Pine', () => {
     };
     for (const strategy of ['scalping', 'daytrading']) {
       const g = generateForUser(user, { strategy });
-      assert.equal(g.pineClientVersion, '1.6.0', `${strategy} stamp`);
+      assert.equal(g.pineClientVersion, '1.3.1', `${strategy} stamp`);
       assert.doesNotMatch(g.script, RETENTION_RE, `${strategy}: retention leftover`);
       assert.doesNotMatch(g.script, /"TP3 HIT"|"STOP LOSS"|"REPLACED"/, `${strategy}: chart marker leftover`);
       assert.match(g.script, /cleanupActiveTradeDrawings\(/);
@@ -152,9 +168,15 @@ describe('Kaching drawing lifecycle — generated Pine', () => {
       assert.match(g.script, /emitKachingEvent\(/);
       assert.match(
         g.script,
-        /if barstate\.isrealtime and isCanonicalAuthorityChart[\s\S]{0,240}alert\(livePayload, alert\.freq_all\)/
+        /if barstate\.isrealtime[\s\S]{0,400}kachingFireAlert\(payload\)/
       );
-      assert.match(g.script, /alertFiredAt = timenow/);
+      assert.match(g.script, /flushKachingPendingAlerts|kachingPendingIds/);
+      const code = g.script
+        .split(/\r?\n/)
+        .filter((line) => !line.trimStart().startsWith('//'))
+        .join('\n');
+      assert.equal((code.match(/\balert\s*\(/g) || []).length, 1, `${strategy}: one alert() site`);
+      assert.doesNotMatch(g.script, /alertFiredAt = timenow/);
       assert.match(g.script, /WEBHOOK_URL = "/);
       assert.match(g.script, /licenseToken/);
       assert.doesNotMatch(g.script, /WEBHOOK_SIGNING_SECRET/);

@@ -23,6 +23,8 @@ const {
 const { isEntryAlert } = require('./signalOutcome');
 const { logPipeline, extractPipelineMeta } = require('./pipelineLog');
 const { withTimeout } = require('./boundedWait');
+const { isEntrySequenceSkipReason } = require('./entryDeliveryGuard');
+const { logDeliveryTimeline } = require('./deliveryTimeline');
 
 /**
  * Live overlapping ENTRY/TP wait (in-process only). Recovery must use check-once.
@@ -166,10 +168,26 @@ function requiredPredecessors(alertType, acceptedList) {
 function shouldCommitResult(result) {
   if (result == null || result.deferred) return false;
   if (result.ok === true) return true;
-  if (result.skipped === true || result.notEligible === true) return true;
   if (result.reason === 'duplicate_milestone') return true;
+  // Channel never participates (no chatId / wrong tier). Commit so outcomes
+  // on THIS channel are not parked forever — they will also be not-eligible.
+  if (result.notEligible === true) return true;
+  // Accepted ENTRY suppressed at delivery (lifecycle already past ENTRY, or
+  // delivery-age exceeded): do NOT send BUY/SELL, but DO commit so TP/SL can
+  // proceed. TradeDeliveryService only sets this flag when entryAcceptedAt is
+  // present. Never-accepted terminal ENTRY must not reach this path.
+  if (
+    result.commitAcceptedEntrySkip === true &&
+    isEntrySequenceSkipReason(result.reason)
+  ) {
+    return true;
+  }
+  // Unflagged stale/terminal ENTRY skip must not unblock outcomes (never
+  // accepted, or caller did not opt into accepted-skip commit).
+  if (isEntrySequenceSkipReason(result.reason)) return false;
+  if (result.skipped === true) return false;
   if (result.ok === false) return false;
-  return true;
+  return false;
 }
 
 function seqLogMeta(signalDoc, extra = {}) {
@@ -355,7 +373,20 @@ async function withChannelSequence({
   const pollMs = getDeliverySeqPollMs();
 
   if (!canonicalId) {
-    return send();
+    logPipeline('DeliverySequence', 'FAIL', seqLogMeta(signalDoc, {
+      reason: `missing_canonical_id; eventType=${ev}; channel=${ch}`
+    }));
+    logDeliveryTimeline('sequence_missing_identity', {
+      ...seqLogMeta(signalDoc),
+      eventType: ev,
+      channel: ch,
+      subscriberId: sub,
+      reason: 'missing_canonical_id'
+    });
+    // Legacy ENTRY without Pine identity can still send. Outcomes cannot —
+    // there is no trade key to wait on.
+    if (isEntry) return send();
+    return { ok: false, reason: 'missing_canonical_id', deferred: false };
   }
 
   let loggedWait = false;
@@ -363,21 +394,40 @@ async function withChannelSequence({
     const remaining = Math.max(0, deadline - Date.now());
     const acquired = await TradeEventStore.acquireLock(lockId, {
       ttlSec: lockTtlSec,
-      waitMs: isEntry ? Math.min(800, waitMs === 0 ? 0 : remaining || 800) : remaining
+      waitMs: isEntry ? 800 : remaining
     });
 
     if (!acquired.ok) {
       if (acquired.reason === 'redis_unavailable' || acquired.backend === 'none') {
-        if (isEntry) return send();
         logPipeline('DeliverySequence', 'FAIL', seqLogMeta(signalDoc, {
           reason:
             `delivery_sequence_wait; redis_unavailable; eventType=${ev}; ` +
             `deliverySequenceKey=${seqHash}; channel=${ch}`
         }));
+        logDeliveryTimeline('sequence_redis_unavailable', {
+          ...seqLogMeta(signalDoc),
+          tradeId: canonicalId,
+          eventType: ev,
+          channel: ch,
+          subscriberId: sub,
+          reason: 'redis_unavailable'
+        });
         return { ok: false, reason: 'redis_unavailable', deferred: false };
       }
       if (isEntry) {
-        return send();
+        const already = await TradeEventStore.getCommittedDeliveries(canonicalId, sub, ch);
+        if (already.has('entry')) {
+          return { ok: true, skipped: true, reason: 'duplicate_milestone' };
+        }
+        logDeliveryTimeline('sequence_entry_lock_busy', {
+          ...seqLogMeta(signalDoc),
+          tradeId: canonicalId,
+          eventType: ev,
+          channel: ch,
+          subscriberId: sub,
+          reason: 'delivery_sequence_lock_busy'
+        });
+        return { ok: false, reason: 'delivery_sequence_lock_busy', deferred: true };
       }
       if (Date.now() >= deadline || waitMs === 0) {
         return timeoutBuffer({
@@ -422,6 +472,14 @@ async function withChannelSequence({
                 `eventSequence=${eventSequenceRank(ev)}; deliverySequenceKey=${seqHash}; ` +
                 `channel=${ch}; waitMode=${checkOnce || waitMs === 0 ? 'check_once' : 'live'}`
             }));
+            logDeliveryTimeline('blocked_waiting_for_entry', {
+              ...seqLogMeta(signalDoc),
+              tradeId: canonicalId,
+              eventType: ev,
+              channel: ch,
+              subscriberId: sub,
+              reason: `predecessor=${missing.join(',')}`
+            });
             loggedWait = true;
           }
           await withTimeout(
@@ -447,6 +505,14 @@ async function withChannelSequence({
         }
       }
 
+      logDeliveryTimeline('delivery_attempt', {
+        ...seqLogMeta(signalDoc),
+        tradeId: canonicalId,
+        eventType: ev,
+        channel: ch,
+        subscriberId: sub,
+        deliveryAttemptAt: Date.now()
+      });
       const result = await send();
       if (shouldCommitResult(result)) {
         await TradeEventStore.markDeliveryCommitted(canonicalId, sub, ch, ev);
@@ -455,6 +521,15 @@ async function withChannelSequence({
             `delivery_sequence_release; eventType=${ev}; eventSequence=${eventSequenceRank(ev)}; ` +
             `deliverySequenceKey=${seqHash}; channel=${ch}`
         }));
+        logDeliveryTimeline('delivery_committed', {
+          ...seqLogMeta(signalDoc),
+          tradeId: canonicalId,
+          eventType: ev,
+          channel: ch,
+          subscriberId: sub,
+          deliveryCompletedAt: Date.now(),
+          reason: result?.reason || 'committed'
+        });
         if (isEntry) {
           try {
             const DurableDelivery = require('./durableDelivery');

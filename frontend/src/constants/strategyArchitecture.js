@@ -21,7 +21,7 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     entrySummary: '1m, 3m, or 5m',
     htfSummary: '15m',
     chartHint:
-      'Kaching Scalp (Pine 1.6.0): engine 3m, authoritative webhook 3m, 1m/5m visualization-only. Allowed display charts are 1m, 3m, or 5m. Signals evaluate on canonical 3m with an event-safe bridge (same UUID/Entry/SL/TP/lifecycle on every allowed chart). Create the webhook alert ONLY on the canonical 3m chart; 1m/5m are visualization-only. 15m is HTF Confirmation via request.security. Prefer Day Trading for 15m profile settings. Old alerts do not migrate automatically — regenerate 1.6.0, remove the old indicator, delete ALL old alerts, then create ONE new alert on 3m. Use the production webhook only after production is approved.'
+      'Kaching Scalp (Pine 1.3.0): allowed display charts are 1m, 3m, or 5m. Signals evaluate on canonical 3m with an event-safe bridge (same UUID/Entry/SL/TP/lifecycle on every allowed chart). Prefer ONE TradingView alert on canonical 3m (backend UUID-dedupes if you alert on multiple allowed charts). 15m is HTF Confirmation via request.security. Prefer Day Trading for 15m profile settings.'
   }),
   daytrading: Object.freeze({
     key: 'daytrading',
@@ -38,7 +38,7 @@ export const STRATEGY_ARCHITECTURE = Object.freeze({
     entrySummary: '5m or 15m',
     htfSummary: '1H or 4H',
     chartHint:
-      'Kaching Day Trading (Pine 1.6.0): engine 5m, authoritative webhook 5m, 15m visualization-only. Allowed display charts are 5m or 15m. Signals evaluate on canonical 5m with an event-safe bridge (same UUID/Entry/SL/TP/lifecycle on every allowed chart; 15m does not collapse multiple 5m events). Create the webhook alert ONLY on the canonical 5m chart; 15m is visualization-only. HTF Confirmation is 1H or 4H via request.security. Old alerts do not migrate automatically — regenerate 1.6.0, remove the old indicator, delete ALL old alerts, then create ONE new alert on 5m. Use the production webhook only after production is approved.'
+      'Kaching Day Trading (Pine 1.3.0): allowed display charts are 5m or 15m. Signals evaluate on canonical 5m with an event-safe bridge (same UUID/Entry/SL/TP/lifecycle on every allowed chart; 15m does not collapse multiple 5m events). Prefer ONE TradingView alert on canonical 5m (backend UUID-dedupes if you alert on multiple allowed charts). HTF Confirmation is 1H or 4H via request.security.'
   })
 });
 

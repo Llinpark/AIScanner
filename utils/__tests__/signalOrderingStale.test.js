@@ -119,7 +119,9 @@ async function acceptAndFanout(io, body, inMemorySignals) {
     TradingViewAlertService.scheduleAcceptedTradingViewSignal(io, accept, inMemorySignals);
   }
   const uuid = accept.signalUuid || resolveCanonicalTradeId(body);
+  // Dispatcher idle ≠ Telegram/Email complete under releaseAfterCriticalProviders.
   await TradeEventDispatcher.waitForIdle(uuid);
+  await TradeDeliveryService.waitForDetachedProvidersForTests();
   return accept;
 }
 
@@ -582,6 +584,7 @@ describe('signal ordering / staleness / exactly-once (30 scenarios)', () => {
     TradingViewAlertService.scheduleAcceptedTradingViewSignal(io, accept, inMemorySignals);
     assert.equal(telegramDone, false);
     await TradeEventDispatcher.waitForIdle('ord-26-ack');
+    await TradeDeliveryService.waitForDetachedProvidersForTests();
     assert.equal(telegramStarted, true);
     assert.equal(telegramDone, true);
   });

@@ -176,27 +176,9 @@ function assertSafeSubscriberContent(content, meta = {}) {
 function isStaleFreshEntry(signal = {}, now = new Date()) {
   const alertType = resolveAlertType(signal);
   if (!isEntryAlert(alertType)) return false;
-  // Accepted Entry jobs must still format even if Mongo later became terminal (same-bar TP3).
-  if (signal.entryAcceptedAt) return false;
-  const { evaluateEntryFreshness } = require('../utils/tradeEventIdentity');
-  const { isTerminalEntry } = require('../utils/signalOutcome');
-  if (isTerminalEntry(signal) || signal.closedAt) return true;
-  const stage = String(signal.lifecycleStage || '').toUpperCase();
-  if (['TP3', 'SL', 'EXPIRED', 'CANCELLED', 'COMPLETED'].includes(stage)) return true;
-  if (signal.expiresAt) {
-    const exp = new Date(signal.expiresAt);
-    const nowMs = now instanceof Date ? now.getTime() : Number(now);
-    if (!Number.isNaN(exp.getTime()) && exp.getTime() <= nowMs) return true;
-  }
-  const freshness = evaluateEntryFreshness(
-    {
-      ...signal,
-      alertType: 'entry',
-      eventTimestamp: signal.eventTimestamp || signal.signalTime || signal.timestamp
-    },
-    { now: now instanceof Date ? now.getTime() : Number(now) }
-  );
-  return Boolean(freshness.stale);
+  const { evaluateActionableEntryDelivery } = require('../utils/entryDeliveryGuard');
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  return Boolean(evaluateActionableEntryDelivery(signal, { now: nowMs }).skip);
 }
 
 function appendLevelLines(lines, levels, symbol, { telegram }) {

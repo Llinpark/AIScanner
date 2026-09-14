@@ -105,6 +105,86 @@ describe('delivery sequencer bounds + operational latency', () => {
     assert.match(String(job.lastError || job.outcomeReason || ''), /delivery_sequence_wait_expired/);
   });
 
+  it('stale ENTRY skip does not commit sequencing HASH', async () => {
+    assert.equal(
+      DeliverySequencer.shouldCommitResult({
+        ok: false,
+        skipped: true,
+        reason: 'terminal_before_entry_delivery'
+      }),
+      false
+    );
+    assert.equal(
+      DeliverySequencer.shouldCommitResult({
+        ok: false,
+        skipped: true,
+        reason: 'stale_trade_before_delivery'
+      }),
+      false
+    );
+    assert.equal(
+      DeliverySequencer.shouldCommitResult({
+        ok: false,
+        skipped: true,
+        reason: 'stale_entry_delivery_age'
+      }),
+      false
+    );
+    assert.equal(
+      DeliverySequencer.shouldCommitResult({ ok: true }),
+      true
+    );
+    assert.equal(
+      DeliverySequencer.shouldCommitResult({ ok: false, notEligible: true, skipped: true }),
+      true
+    );
+  });
+
+  it('outcome with no canonical identity is not sent', async () => {
+    let sent = false;
+    const result = await DeliverySequencer.withChannelSequence({
+      signalDoc: { alertType: 'take_profit_3' },
+      subscriberId: 'sub-noid',
+      channel: 'telegram',
+      alertType: 'take_profit_3',
+      waitMode: 'check_once',
+      send: async () => {
+        sent = true;
+        return { ok: true };
+      }
+    });
+    assert.equal(sent, false);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'missing_canonical_id');
+  });
+
+  it('ENTRY lock/redis unavailable does not send without committing', async () => {
+    const orig = TradeEventStore.acquireLock;
+    TradeEventStore.acquireLock = async () => ({
+      ok: false,
+      reason: 'redis_unavailable',
+      backend: 'none'
+    });
+    let sent = false;
+    try {
+      const result = await DeliverySequencer.withChannelSequence({
+        signalDoc: { signalUuid: 'seq-lock-1', canonicalTradeId: 'seq-lock-1', alertType: 'entry' },
+        subscriberId: 'sub-lock',
+        channel: 'telegram',
+        alertType: 'entry',
+        send: async () => {
+          sent = true;
+          return { ok: true };
+        }
+      });
+      assert.equal(sent, false);
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'redis_unavailable');
+    } finally {
+      TradeEventStore.acquireLock = orig;
+    }
+  });
+
   it('skipped ENTRY job does not reconstruct sequencing HASH', async () => {
     const DurableDelivery = require('../durableDelivery');
     const skipped = await DurableDelivery.ensureJob({
@@ -152,17 +232,24 @@ describe('delivery sequencer bounds + operational latency', () => {
   });
 
   it('operational pipeline latency uses webhook-to-accepted only (no sequencer mix, no clamp)', () => {
-    PipelineStatusService.record('WebhookReceived', 'PASS', { signalUuid: 'lat-op-1' });
-    PipelineStatusService.record('Accepted', 'PASS', { signalUuid: 'lat-op-1', latencyMs: 42 });
-    PipelineStatusService.record('DeliverySequence', 'PENDING', {
-      signalUuid: 'lat-op-1',
-      latencyMs: 120000,
-      reason: 'delivery_sequence_wait'
-    });
-    const lat = PipelineStatusService.getLatencySummary();
-    assert.equal(lat.webhookToAccepted.avgMs, 42);
-    assert.equal(lat.pipeline.operationalAvgMs, 42);
-    assert.equal(lat.pipeline.avgMs, 42);
-    assert.notEqual(lat.pipeline.operationalAvgMs, 120000);
+    const prevAllow = process.env.ALLOW_PIPELINE_TEST_REDIS;
+    process.env.ALLOW_PIPELINE_TEST_REDIS = 'true';
+    try {
+      PipelineStatusService.record('WebhookReceived', 'PASS', { signalUuid: 'lat-op-1' });
+      PipelineStatusService.record('Accepted', 'PASS', { signalUuid: 'lat-op-1', latencyMs: 42 });
+      PipelineStatusService.record('DeliverySequence', 'PENDING', {
+        signalUuid: 'lat-op-1',
+        latencyMs: 120000,
+        reason: 'delivery_sequence_wait'
+      });
+      const lat = PipelineStatusService.getLatencySummary();
+      assert.equal(lat.webhookToAccepted.avgMs, 42);
+      assert.equal(lat.pipeline.operationalAvgMs, 42);
+      assert.equal(lat.pipeline.avgMs, 42);
+      assert.notEqual(lat.pipeline.operationalAvgMs, 120000);
+    } finally {
+      if (prevAllow == null) delete process.env.ALLOW_PIPELINE_TEST_REDIS;
+      else process.env.ALLOW_PIPELINE_TEST_REDIS = prevAllow;
+    }
   });
 });

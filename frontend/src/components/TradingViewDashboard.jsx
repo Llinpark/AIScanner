@@ -484,15 +484,13 @@ export default function TradingViewDashboard({ subscription, onNavigatePricing, 
               <header className="tv-setup-intro">
                 <h3>Connect TradingView</h3>
                 <p>
-                  Link your TradingView username, copy the latest Pine 1.6.0 script, add the indicator to a chart, then
-                  create ONE authoritative alert on the canonical timeframe (Scalp engine/webhook 3m; Day Trading
-                  engine/webhook 5m). 1m/5m Scalp and 15m Day Trading charts are visualization-only. Condition: Kaching
-                  indicator → Any alert() function call. Paste the dashboard Webhook URL. Message: exactly{' '}
+                  Link your TradingView username, copy your personal Pine script, paste it into TradingView&apos;s Pine
+                  Editor, and add it to a chart. Prefer ONE alert on the canonical timeframe (Scalp 3m; Day Trading 5m)
+                  — backend UUID-dedupes if you also alert on other allowed charts. Condition: Kaching indicator → Any
+                  alert() function call. Paste the dashboard Webhook URL. Message: exactly{' '}
                   {'{{alert_message}}'} so TradingView substitutes the Pine alert() JSON — never{' '}
                   {'{{strategy.order.alert_message}}'} (strategy scripts only; arrives as a literal {'{{…}}'} and fails
-                  JSON parse). Old subscriber alerts do not migrate automatically: remove the old indicator, delete ALL
-                  old alerts, then create one new 1.6.0 alert. Use the production webhook only after production is
-                  approved. Kaching publishes those trades here — charts stay display-only.
+                  JSON parse). Kaching publishes those trades here — charts stay display-only.
                 </p>
               </header>
 

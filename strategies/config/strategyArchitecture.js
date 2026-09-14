@@ -489,10 +489,8 @@ function buildPineTfVariables(key, resolvedConfig = {}) {
     arch.key === 'scalping'
       ? ' Prefer 15m profile settings? Generate Day Trading — Scalping allows 1m/3m/5m display (canonical 3m).'
       : '';
-  const alertTip = ` Create the TradingView webhook alert ONLY on the canonical ${canonicalLabel} chart. Other allowed display charts are visualization-only and must not have webhook alerts.`;
-  const migrateTip =
-    ` Pine 1.6.0 does not auto-migrate old alerts: regenerate the latest script, remove the old indicator, delete ALL old alerts, then create ONE new authoritative alert on ${canonicalLabel} (Any alert() function call, Message exactly {{alert_message}}). Use the production webhook URL only after production is approved.`;
-  const instructionLead = `${arch.shortLabel}: Open TradingView on an allowed display TF (${entryLabel}). Engine ${canonicalLabel}; authoritative webhook ${canonicalLabel}; other allowed charts are visualization-only. Signals evaluate on canonical ${canonicalLabel} (one engine + event-safe bridge); UUID/Entry/SL/TP/lifecycle match across allowed charts. HTF confirmation uses ${htfShort} via request.security.${alertTip}${migrateTip}${scalpFifteenTip}`;
+  const alertTip = ` Prefer ONE TradingView alert on canonical ${canonicalLabel} (backend UUID-dedupes if you alert on multiple allowed charts).`;
+  const instructionLead = `${arch.shortLabel}: Open TradingView on an allowed display TF (${entryLabel}). Signals evaluate on canonical ${canonicalLabel} (one engine + event-safe bridge); UUID/Entry/SL/TP/lifecycle match across allowed charts. HTF confirmation uses ${htfShort} via request.security.${alertTip}${scalpFifteenTip}`;
 
   return {
     STRATEGY_KEY: arch.key,

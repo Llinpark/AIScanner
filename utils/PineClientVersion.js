@@ -16,13 +16,14 @@
 'use strict';
 
 /** Semver stamped into newly generated Pine + webhook payloads.
- *  1.6.0: canonical webhook authority — only the canonical TF chart may call
- *  alert(); other allowed display charts are visualization-only. Additive
- *  caps: canonical_emit_independent_v1, canonical_webhook_authority_v1.
- *  1.3.0 family remains CURRENT (same major): drawings + exactly-once emit.
+ *  1.3.0: (1) terminal trades DELETE all chart objects (no completed-trade
+ *  retention); (2) exactly-once alert() via emitKachingEvent + eventId.
+ *  1.3.1: (1) skip TP/SL/expiry on the ENTRY arming bar; (2) do not consume
+ *  webhook eventIds on historical calc — queue islast → realtime flush so
+ *  ENTRY alerts are not lost/delayed after Pine refresh while drawings show.
  *  Users must regenerate Pine and delete ALL old TradingView alerts.
  */
-const PINE_CLIENT_VERSION = '1.6.0';
+const PINE_CLIENT_VERSION = '1.3.1';
 
 /** Public contract id. 1.3.0 payloads already match; inferred when schemaVersion is absent. */
 const STABLE_PINE_SCHEMA_VERSION = 'stable-v1';
@@ -37,9 +38,7 @@ const CURRENT_PINE_CAPABILITIES = Object.freeze([
   'replace_active_v1',
   'json_esc_v1',
   'canonical_tf_v1',
-  'event_bridge_v1',
-  'canonical_emit_independent_v1',
-  'canonical_webhook_authority_v1'
+  'event_bridge_v1'
 ]);
 
 /** Known capability tokens the backend understands (future negotiation). */
@@ -50,8 +49,6 @@ const KNOWN_CAPABILITIES = Object.freeze([
   'json_esc_v1',
   'canonical_tf_v1',
   'event_bridge_v1',
-  'canonical_emit_independent_v1',
-  'canonical_webhook_authority_v1',
   'factors_v1',
   'adaptive_tf',
   'dynamic_tp',

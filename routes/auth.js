@@ -188,7 +188,7 @@ router.post('/register', authAttemptLimiter, registerValidators, validateRequest
         console.error('[auth] verification email failed:', mailError.message, mailError.body || '');
         return res.status(201).json({
           message: isQuotaError(mailError)
-            ? 'Account created, but verification email is delayed because the mail provider hit its daily sending limit. Try Resend in a few hours, or contact support.'
+            ? 'Account created, but verification email is delayed because the mail provider hit a sending limit. Try again in a few hours, or contact support.'
             : 'Account created, but the verification email could not be sent. Tap Resend verification email, or contact support.',
           requiresVerification: true,
           email,

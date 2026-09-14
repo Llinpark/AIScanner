@@ -48,7 +48,7 @@ export default function AdminDashboard() {
         <StatCard
           label="Signals today"
           value={stats?.signals?.today ?? 0}
-          hint="Unique ENTRY signalUuid today (UTC), same as Pipeline"
+          hint="Unique ENTRY signalUuid today (UTC). Same Mongo count as Pipeline → ENTRY today (not Intake Received)."
         />
         <StatCard
           label="Open trades"

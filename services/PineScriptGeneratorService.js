@@ -193,7 +193,7 @@ function sampleWebhookPayload(strategyKey = 'daytrading', versionMeta = null) {
   return {
     symbol: 'XAUUSD',
     strategyName: DAYTRADING_SWEEP_NAME,
-    timeframe: '5',
+    timeframe: '15',
     pattern: 'liquidity_sweep_fvg_daytrading',
     alertType: 'entry',
     direction: 'long',
@@ -488,7 +488,7 @@ function generateForUser(user, options = {}) {
       'Overlays exist ONLY while a trade is ACTIVE. TP3 / SL / expiry / cancel DELETE every entry/SL/TP drawing — completed trades stay in the dashboard, never on the chart.',
       'Adjust “Initial trade level length” and “Active trade expiry (candles)” under KachingFx Display (scalp default expiry 60, day trading 80; disable with Enable trade candle expiry).',
       // ONE alert only — webhook URL from PUBLIC_BACKEND_URL / WEBHOOK_TRADINGVIEW_URL
-      `3) Create ONE alert on the CANONICAL signal chart only (${pineTfMeta.ARCH_CANONICAL_SIGNAL_TF}). Other allowed display charts are visualization-only and must not have webhook alerts. Condition: Kaching indicator → Any alert() function call. Enable Webhook URL and paste exactly: ${webhookUrl}`,
+      `3) Create ONE alert on this chart for this script. Condition: Kaching indicator → Any alert() function call. Enable Webhook URL and paste exactly: ${webhookUrl}`,
       '4) Message: type exactly {{alert_message}} so TradingView substitutes the Pine alert() JSON. Never {{strategy.order.alert_message}} — that strategy() placeholder arrives as a literal {{…}} string and fails JSON parse.',
       '5) Never type custom JSON into the Message field. Never wrap, edit, or replace the payload from alert().',
       'Leave TradingView Email / SMS / popup-as-email OFF. Kaching already emails and Telegrams a formatted trade alert. Enabling TV Email would send the raw JSON webhook payload to subscribers.',
@@ -496,10 +496,9 @@ function generateForUser(user, options = {}) {
       'Webhook payload is the full JSON from Pine alert() (symbol, levels, licenseToken, tradingviewUsername, signalUuid). TradingView must deliver that JSON body to the webhook URL.',
       '6) After regenerating Pine: remove the old indicator, paste this new script, DELETE ALL old TradingView alerts for this symbol/script (old snapshots will keep firing duplicates), then create ONE new alert. Condition: Kaching indicator → Any alert() function call. Webhook: the URL above. Message: exactly {{alert_message}}. Local/test/smoke scripts will fail production auth — only use Pine generated from this production account.',
       'Optional: enable DEBUG_MODE on the script to see on-chart labels + Pine Logs ([PIPELINE] DEBUG STATE / ALERT NOT FIRED / DRAWING CREATED / ALERT FIRING) for why alert() was skipped (license, wrong entry TF, HTF, confidence, trade active, bar unconfirmed, retrace, FVG). Turn DEBUG_MODE OFF for live trading.',
-      'Entry/SL/TP drawings arm on every allowed display chart. alert() runs only through emitKachingEvent on the canonical authority chart (isCanonicalAuthorityChart + barstate.isrealtime + eventId exactly-once + alertFiredAt). Visualization-only charts never call alert(). Historical calculation may still draw an ACTIVE trade; terminal trades delete drawings.',
+      'Entry/SL/TP drawings arm with the same confirmed fireLong/fireShort event as alert(). DRAWING CREATED always precedes ALERT FIRING in Pine Logs. alert() runs only through emitKachingEvent (barstate.isrealtime + eventId exactly-once). Historical calculation may still draw an ACTIVE trade; terminal trades delete drawings.',
       'Your script is bound to your TradingView username and private license token — do not share it. Pasting it into another TradingView account will not produce valid alerts.',
-      'REQUIRED after this deploy: regenerate latest Pine 1.6.0 in the app, remove the old indicator from the chart, paste the new script, DELETE ALL old alerts, and recreate ONE authoritative alert on the canonical TF so drawings stay synced with webhook alerts. Old subscriber alerts are not migrated automatically.',
-      'Use the production webhook URL only after production is approved. Local/test/smoke scripts fail production auth.',
+      'REQUIRED after this deploy: regenerate Pine in the app, remove the old indicator from the chart, paste the new script, and recreate the ONE alert so drawings stay synced with webhook alerts.',
       'Switch strategies with ?strategy=daytrading | scalping.',
       'After updating your TradingView username in the app, re-save, re-copy this script, and re-add it to the chart so the license token and prefilled Confirm match.',
       `This script was generated for ${subscriberLabel} (${tierLabel} plan) · TV: ${tvUsername}.`

@@ -154,6 +154,10 @@ function enqueue(canonicalId, job) {
     run: job.run
   };
   if (item.kind === 'entry') s.entryQueued = true;
+  // entryAlreadyDurable means Mongo has the parent ENTRY document, NOT that
+  // any subscriber/channel has been sent BUY/SELL. It only unblocks this
+  // process-local pump so an outcome job can reach withChannelSequence.
+  // Cross-machine order is owned by the Redis committed HASH, not this flag.
   if (job.entryAlreadyDurable && !s.entryQueued && item.kind !== 'entry') {
     s.entryDelivered = true;
   }

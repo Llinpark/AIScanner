@@ -44,6 +44,28 @@ function hoursAgo(n) {
   return new Date(Date.now() - Number(n) * 3600 * 1000);
 }
 
+function createdAtMs(createdAt) {
+  if (createdAt instanceof Date) return createdAt.getTime();
+  const n = Number(createdAt);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Sequence-wait unhealthy is age-gated. A fresh blocked_waiting_for_entry job
+ * is still a normal wait; only after SEQUENCE_WAIT_UNHEALTHY_MS is it operator-unhealthy.
+ * Missing createdAt is treated as unhealthy (cannot prove it is still within the grace window).
+ */
+function isSequenceWaitUnhealthy(jobOrRow = {}, now = Date.now()) {
+  const state = String(jobOrRow.state || '').toLowerCase();
+  const err = String(jobOrRow.lastError || jobOrRow.outcomeReason || '');
+  const blocked =
+    state === 'blocked_waiting_for_entry' || /blocked_waiting_for_entry/i.test(err);
+  if (!blocked) return false;
+  const created = createdAtMs(jobOrRow.createdAt);
+  if (!created) return true;
+  return now - created >= getSequenceWaitUnhealthyMs();
+}
+
 async function countUniqueCanonicalSignals(match) {
   const rows = await Signal.aggregate([
     { $match: match },
@@ -192,6 +214,8 @@ async function aggregateChannelJobs(since) {
     missing_channel_payload: 0,
     delivery_sequence_wait: 0,
     stale_trade_before_delivery: 0,
+    terminal_before_entry_delivery: 0,
+    stale_entry: 0,
     redis_unavailable: 0,
     delivery_context_unrecoverable: 0,
     retrying: 0,
@@ -207,11 +231,47 @@ async function aggregateChannelJobs(since) {
     if (!mongoose.connection?.db) {
       throw new Error('mongo_db_handle_missing');
     }
+    const unhealthyMs = getSequenceWaitUnhealthyMs();
+    const nowMs = Date.now();
     const rows = await DeliveryJob.aggregate([
       {
         $match: {
           createdAt: { $gte: since },
           channel: { $in: CHANNELS }
+        }
+      },
+      {
+        $addFields: {
+          _createdMs: { $toLong: { $toDate: '$createdAt' } },
+          _blockedWaiting: {
+            $or: [
+              { $eq: ['$state', 'blocked_waiting_for_entry'] },
+              {
+                $regexMatch: {
+                  input: { $ifNull: ['$lastError', ''] },
+                  regex: 'blocked_waiting_for_entry',
+                  options: 'i'
+                }
+              },
+              {
+                $regexMatch: {
+                  input: { $ifNull: ['$outcomeReason', ''] },
+                  regex: 'blocked_waiting_for_entry',
+                  options: 'i'
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        $addFields: {
+          _unhealthyWait: {
+            $and: [
+              '$_blockedWaiting',
+              { $gte: [{ $subtract: [nowMs, '$_createdMs'] }, unhealthyMs] }
+            ]
+          }
         }
       },
       {
@@ -221,7 +281,8 @@ async function aggregateChannelJobs(since) {
             outcome: { $ifNull: ['$outcomeStatus', '$state'] },
             lastError: { $ifNull: ['$lastError', '$outcomeReason'] },
             state: '$state',
-            sendAttemptsPositive: { $gt: [{ $ifNull: ['$sendAttempts', 0] }, 0] }
+            sendAttemptsPositive: { $gt: [{ $ifNull: ['$sendAttempts', 0] }, 0] },
+            unhealthyWait: '$_unhealthyWait'
           },
           n: { $sum: 1 }
         }
@@ -251,6 +312,8 @@ async function aggregateChannelJobs(since) {
         issues.delivery_sequence_wait += row.n || 0;
       }
       if (/stale_trade_before_delivery/i.test(err)) issues.stale_trade_before_delivery += row.n || 0;
+      if (/terminal_before_entry_delivery/i.test(err)) issues.terminal_before_entry_delivery += row.n || 0;
+      if (/stale_entry/i.test(err)) issues.stale_entry += row.n || 0;
       if (/redis_unavailable/i.test(err)) issues.redis_unavailable += row.n || 0;
       if (/delivery_context_unrecoverable/i.test(err)) {
         issues.delivery_context_unrecoverable += row.n || 0;
@@ -265,10 +328,7 @@ async function aggregateChannelJobs(since) {
       if (/delivery_sequence_wait_expired/i.test(err)) {
         issues.sequence_wait_expired += row.n || 0;
       }
-      if (
-        String(row._id.state) === 'blocked_waiting_for_entry' ||
-        /blocked_waiting_for_entry/i.test(err)
-      ) {
+      if (row._id.unhealthyWait) {
         issues.sequence_wait_unhealthy += row.n || 0;
       }
     }
@@ -299,6 +359,8 @@ async function aggregateChannelJobs(since) {
           issues.delivery_sequence_wait += 1;
         }
         if (/stale_trade_before_delivery/i.test(err)) issues.stale_trade_before_delivery += 1;
+        if (/terminal_before_entry_delivery/i.test(err)) issues.terminal_before_entry_delivery += 1;
+        if (/stale_entry/i.test(err)) issues.stale_entry += 1;
         if (/redis_unavailable/i.test(err)) issues.redis_unavailable += 1;
         if (/delivery_context_unrecoverable/i.test(err)) {
           issues.delivery_context_unrecoverable += 1;
@@ -313,11 +375,8 @@ async function aggregateChannelJobs(since) {
         if (/delivery_sequence_wait_expired/i.test(err)) {
           issues.sequence_wait_expired += 1;
         }
-        if (String(job.state) === 'blocked_waiting_for_entry') {
-          const unhealthyMs = getSequenceWaitUnhealthyMs();
-          if (!created || Date.now() - created >= unhealthyMs) {
-            issues.sequence_wait_unhealthy += 1;
-          }
+        if (isSequenceWaitUnhealthy(job)) {
+          issues.sequence_wait_unhealthy += 1;
         }
       }
     } catch {
@@ -473,6 +532,8 @@ async function computeDeliveryStatistics() {
       missing_channel_payload: 0,
       delivery_sequence_wait: 0,
       stale_trade_before_delivery: 0,
+    terminal_before_entry_delivery: 0,
+    stale_entry: 0,
       redis_unavailable: 0,
       delivery_context_unrecoverable: 0,
       retrying: 0,
@@ -663,6 +724,7 @@ module.exports = {
   startOfDay,
   daysAgo,
   hoursAgo,
+  isSequenceWaitUnhealthy,
   resolveHealth,
   overlayChannelDisplay,
   isProviderAttempted,

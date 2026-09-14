@@ -151,7 +151,10 @@ async function acceptAndFanout(io, body, inMemorySignals) {
     TradingViewAlertService.scheduleAcceptedTradingViewSignal(io, accept, inMemorySignals);
   }
   const uuid = accept.signalUuid || body.signalUuid;
+  // Dispatcher idle ≠ Telegram/Email complete: ENTRY fan-out releases after
+  // critical providers and leaves TG/email as detached in-flight promises.
   await TradeEventDispatcher.waitForIdle(uuid);
+  await TradeDeliveryService.waitForDetachedProvidersForTests();
   return accept;
 }
 
@@ -209,9 +212,10 @@ describe('distributed lifecycle fix A–Z', () => {
       { strategy: 'scalping' }
     );
     assert.match(g.script, /emitKachingEvent\(/);
-    assert.match(g.script, /if barstate\.isrealtime and isCanonicalAuthorityChart/);
-    assert.match(g.script, /alertFiredAt = timenow/);
-    assert.match(g.script, /alert\(livePayload, alert\.freq_all\)/);
+    assert.match(g.script, /if barstate\.isrealtime/);
+    assert.doesNotMatch(g.script, /isCanonicalAuthorityChart/);
+    assert.doesNotMatch(g.script, /alertFiredAt = timenow/);
+    assert.match(g.script, /alert\(payload, alert\.freq_all\)/);
     assert.equal(g.pineClientVersion, PINE_CLIENT_VERSION);
     assert.doesNotMatch(g.script, /fireLong\s*=.*barstate\.isrealtime/);
   });
@@ -387,6 +391,27 @@ describe('distributed lifecycle fix A–Z', () => {
     assert.match(tg.texts[0], /KACHING BUY/i);
   });
 
+  it('O2. accepted ENTRY that aged past overlap after TP3 is not a new BUY', async () => {
+    const aged = new Date(Date.now() - 60 * 1000);
+    const snap = {
+      ...payload('entry', 'az-o2-term', { symbol: 'AZO2' }),
+      _id: 'mem_azo2',
+      alertType: 'entry',
+      entryAcceptedAt: aged,
+      tradeStatus: 'won',
+      outcome: 'tp3',
+      lifecycleStage: 'TP3',
+      closedAt: aged
+    };
+    TradingViewAlertService.setTestFanoutHooks({ subscribers: [proSubscriber()] });
+    const elig = TradeDeliveryService.evaluateTelegramEligibility(proSubscriber(), snap);
+    assert.equal(elig.eligible, false);
+    assert.equal(elig.reason, 'terminal_before_entry_delivery');
+    const sent = await TradeDeliveryService.deliverTelegram(proSubscriber(), snap);
+    assert.equal(sent.ok, false);
+    assert.equal(tg.calls, 0);
+  });
+
   it('P/Q/R. channel failures are isolated', async () => {
     const mailer = require('../mailer');
     const orig = mailer.sendTradeAlertEmail;
@@ -496,7 +521,7 @@ describe('distributed lifecycle fix A–Z', () => {
   it('W. license-token version stamp is current (kls_v2 still generated)', () => {
     const token = generateLicenseToken(USER_ID, TV_USER);
     assert.match(token, /^kls_v2\./);
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
   });
 
   it('Y. subscription entitlement skip is unchanged', async () => {
@@ -537,6 +562,8 @@ describe('distributed lifecycle fix A–Z', () => {
     assert.ok(Date.now() - t0 < 120);
     TradingViewAlertService.scheduleAcceptedTradingViewSignal(io, accept, inMemorySignals);
     await TradeEventDispatcher.waitForIdle('az-z-ack');
+    // Fan-out slot may release while Telegram Bot API is still in flight.
+    await TradeDeliveryService.waitForDetachedProvidersForTests();
     assert.equal(done, true);
   });
 

@@ -105,7 +105,14 @@ function runCanonicalLifecycle({
   const milestones = [];
 
   for (const bar of canonBars) {
-    if (Number(bar.time) < Number(entrySignalTime)) continue;
+    const barT = Number(bar.time);
+    const entryT = Number(entrySignalTime);
+    if (barT < entryT) continue;
+    // Entry/confirmation bar: count toward expiry, never score TP/SL (same-bar dual alert).
+    if (barT === entryT) {
+      canonBarsAlive += 1;
+      continue;
+    }
     canonBarsAlive += 1;
     const ev = evaluateCanonBarOutcome(direction, bar, levels);
     if (ev.hitTp1 && !tp1) {

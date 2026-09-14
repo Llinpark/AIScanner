@@ -60,6 +60,13 @@ const SignalSchema = new mongoose.Schema({
   canonicalSignalKey: { type: String },
   /** Event time from Pine (signalTime / timestamp), not HTTP receipt. */
   eventTimestamp: { type: Date },
+  /**
+   * Pine wall-clock at buildPayload (timenow). Approximate alert fire time on
+   * confirmed realtime bars; not bar-open signalTime. Optional — older payloads omit.
+   */
+  alertFiredAt: { type: Date },
+  /** Node Date.now() when POST /api/webhook/tradingview handler started (HTTP receipt). */
+  webhookReceivedAt: { type: Date },
   /** HTTP webhook correlation id (not a secret). Survives toObject() for async fan-out logs. */
   pipelineRequestId: { type: String, index: true },
   /**

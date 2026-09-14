@@ -1,9 +1,9 @@
-/**
+﻿/**
  * Controlled staging-soak matrix (local in-process webhook + mocked providers).
- * Evidence type: unit/integration — not live TradingView/Email/Telegram/staging
+ * Evidence type: unit/integration â€” not live TradingView/Email/Telegram/staging
  * unless REDIS_URL is actually used by a test below (it is not).
  *
- * Scenarios A–J from the production-readiness soak brief.
+ * Scenarios Aâ€“J from the production-readiness soak brief.
  */
 'use strict';
 
@@ -65,7 +65,7 @@ function payload(alertType, uuid, overrides = {}) {
     userId: USER_A,
     licenseToken: generateLicenseToken(USER_A, TV_USER),
     isRealtime: true,
-    pineClientVersion: '1.6.0',
+    pineClientVersion: '1.3.0',
     signalTime: Date.now(),
     ...overrides,
     signalUuid: uuid,
@@ -192,7 +192,7 @@ const originalSeqWait = process.env.DELIVERY_SEQ_WAIT_MS;
 const originalMax = process.env.DELIVERY_MAX_ATTEMPTS;
 const originalSeqMax = process.env.SEQUENCE_WAIT_MAX_MS;
 
-describe('staging soak validation A–J', () => {
+describe('staging soak validation Aâ€“J', () => {
   let mem;
   let io;
   let tg;
@@ -277,20 +277,21 @@ describe('staging soak validation A–J', () => {
         .split(/\r?\n/)
         .filter(l => !l.trimStart().startsWith('//'))
         .join('\n');
-      assert.equal(g.pineClientVersion, '1.6.0', label);
-      assert.ok(g.capabilities.includes('canonical_webhook_authority_v1'), label);
+      assert.equal(g.pineClientVersion, '1.3.1', label);
+      assert.equal(g.capabilities.includes('canonical_webhook_authority_v1'), false, label);
       assert.match(g.script, new RegExp(`CANONICAL_SIGNAL_TF = "${baked}"`));
       assert.equal((code.match(/\balert\s*\(/g) || []).length, 1, label);
-      assert.match(code, /isCanonicalAuthorityChart\s*=\s*timeframe\.period\s*==\s*CANONICAL_SIGNAL_TF/);
-      assert.match(code, /if barstate\.isrealtime and isCanonicalAuthorityChart/);
-      assert.match(code, /alertFiredAt = timenow/);
+      assert.match(code, /isCanonicalChart\s*=\s*timeframe\.period\s*==\s*CANONICAL_SIGNAL_TF/);
+      assert.match(code, /if barstate\.isrealtime/);
+      assert.doesNotMatch(code, /isCanonicalAuthorityChart/);
+      assert.match(code, /"alertFiredAt":'\s*\+\s*str\.tostring\(timenow\)/);
       assert.match(code, /alert\.freq_all/);
       assert.doesNotMatch(g.script, /\{\{[A-Z0-9_]+\}\}/);
       assert.doesNotMatch(code, /alert\.freq_once_per_bar/);
     }
   });
 
-  it('B: full lifecycle ENTRY→TP1→TP2→TP3 is one Email + one Telegram per event', async () => {
+  it('B: full lifecycle ENTRYâ†’TP1â†’TP2â†’TP3 is one Email + one Telegram per event', async () => {
     const uuid = 'soak-b-full';
     for (const type of ['entry', 'take_profit_1', 'take_profit_2', 'take_profit_3']) {
       const accept = await acceptAndProcess(io, payload(type, uuid), mem);
@@ -315,7 +316,7 @@ describe('staging soak validation A–J', () => {
     assert.ok(tgJobs.every(j => j.canonicalTradeId === uuid));
   });
 
-  it('B2: ENTRY→SL is one Email + one Telegram; no TP notifications', async () => {
+  it('B2: ENTRYâ†’SL is one Email + one Telegram; no TP notifications', async () => {
     const uuid = 'soak-b-sl';
     await acceptAndProcess(io, payload('entry', uuid), mem);
     await acceptAndProcess(io, payload('stop_loss', uuid), mem);
@@ -389,7 +390,7 @@ describe('staging soak validation A–J', () => {
     assert.equal(emailJob.canonicalTradeId, uuid);
   });
 
-  it('F: Redis interruption then recovery — HASH only from delivered, no TP unlock from skipped', async () => {
+  it('F: Redis interruption then recovery â€” HASH only from delivered, no TP unlock from skipped', async () => {
     const uuid = 'soak-f';
     const redisA = createFakeRedis();
     TradeEventStore.setClientForTests(redisA);

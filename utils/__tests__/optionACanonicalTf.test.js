@@ -1,5 +1,5 @@
-/**
- * Option A — one canonical signal across allowed entry/display timeframes.
+﻿/**
+ * Option A â€” one canonical signal across allowed entry/display timeframes.
  */
 const { describe, it, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -153,7 +153,7 @@ describe('Option A backend identity / dedupe', () => {
   });
 
   it('Pine 1.3.0 stamp remains major-family CURRENT with 1.0/1.1/1.2/1.3', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('canonical_tf_v1'));
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('event_bridge_v1'));
     assert.equal(resolveCompatibilityMode('1.0.0').mode, COMPAT_MODE.CURRENT);

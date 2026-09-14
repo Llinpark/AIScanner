@@ -17,7 +17,7 @@ indicator("{{INDICATOR_TITLE}}", shorttitle="{{INDICATOR_SHORTTITLE}}", overlay=
 // License is HMAC-bound to this TradingView username (server-side). Pine cannot read the
 // current TV account at runtime, so CONFIRM is prefilled to the licensed username (override allowed).
 WEBHOOK_URL = "{{WEBHOOK_URL}}"
-LICENSE_TOKEN = "{{LICENSE_TOKEN}}"
+LICENSE_TOKEN = str.trim("{{LICENSE_TOKEN}}")
 LICENSED_TV_USERNAME = "{{TV_USERNAME}}"
 CONFIRM_TV_USERNAME = input.string("{{TV_USERNAME}}", "Confirm your TradingView username", group="KachingFx License", tooltip="Prefilled with the username this script was licensed for. Leave as-is to unlock, or override if needed. Signals and alerts stay locked until it matches.")
 SHOW_TRADE_LINES = true
@@ -63,9 +63,8 @@ licenseOk = str.length(LICENSED_TV_USERNAME) > 0 and normalizeTvUser(CONFIRM_TV_
 STRATEGY_KEY = "{{STRATEGY_KEY}}"
 strategyCfgOk = STRATEGY_KEY == "daytrading"
 CANONICAL_SIGNAL_TF = "{{CANONICAL_SIGNAL_TF}}"
-isCanonicalAuthorityChart = timeframe.period == CANONICAL_SIGNAL_TF
-isCanonicalChart = isCanonicalAuthorityChart
-// Allowed entry/display charts (draw + process). Webhook alert() is canonical-only.
+isCanonicalChart = timeframe.period == CANONICAL_SIGNAL_TF
+// Allowed entry/display charts (hard gate for arm/alert — not for chart==canonical).
 entryChartOk = {{ENTRY_CHART_OK}}
 isAllowedDisplayTf = entryChartOk
 // HTF input diagnostics (non-blocking; nested security still runs with the selected HTF).
@@ -170,14 +169,15 @@ makeKachingEventId(string canonicalTradeId, string evType) =>
     syminfo.ticker + "|" + CANONICAL_SIGNAL_TF + "|" + canonicalTradeId + "|" + evType
 
 // timeframe = CANONICAL_SIGNAL_TF (not chart period). chartTf / canonicalSignalTf / canonicalSignalKey are additive.
-buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf, string signalId, string closedReason) =>
+buildPayload(string alertType, string direction, float entry, float sl, float tp1, float tp2, float tp3, float gapTop, float gapBot, float conf, string signalId, string closedReason, int signalTime) =>
     msgText = jsonEsc(alertType == "entry" ? buildHumanMessage(direction, entry, sl, tp1, tp2, tp3) : kachingAlertLabel(alertType))
     reasonJson = str.length(closedReason) > 0 ? ',"closedReason":"' + jsonEsc(closedReason) + '"' : ""
     evType = kachingEventType(alertType)
     evSeq = kachingEventSequence(alertType)
     eid = makeKachingEventId(signalId, evType)
-    eventMeta = ',"eventId":"' + jsonEsc(eid) + '","canonicalTradeId":"' + jsonEsc(signalId) + '","eventType":"' + jsonEsc(evType) + '","eventSequence":' + str.tostring(evSeq) + ',"barTime":' + str.tostring(time) + ',"alertFiredAt":0'
-    '{"symbol":"' + jsonEsc(syminfo.ticker) + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + jsonEsc(CANONICAL_SIGNAL_TF) + '","chartTf":"' + jsonEsc(timeframe.period) + '","canonicalSignalTf":"' + jsonEsc(CANONICAL_SIGNAL_TF) + '","canonicalSignalKey":"' + jsonEsc(signalId) + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + jsonEsc(alertType) + '","direction":"' + jsonEsc(direction) + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + '","signalId":"' + jsonEsc(signalId) + '","signalUuid":"' + jsonEsc(signalId) + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + jsonEsc(LICENSE_TOKEN) + '","tradingviewUsername":"' + jsonEsc(LICENSED_TV_USERNAME) + '","broadcast":true,"pineClientVersion":"{{PINE_CLIENT_VERSION}}","generatedAt":"{{PINE_GENERATED_AT}}","scriptGenerationId":"{{SCRIPT_GENERATION_ID}}","capabilities":{{PINE_CAPABILITIES_JSON}},"isRealtime":' + (barstate.isrealtime ? "true" : "false") + reasonJson + eventMeta + '}'
+    detectedAt = nz(signalTime, time)
+    eventMeta = ',"eventId":"' + jsonEsc(eid) + '","canonicalTradeId":"' + jsonEsc(signalId) + '","eventType":"' + jsonEsc(evType) + '","eventSequence":' + str.tostring(evSeq) + ',"barTime":' + str.tostring(time) + ',"signalTime":' + str.tostring(detectedAt) + ',"alertFiredAt":' + str.tostring(timenow)
+    '{"symbol":"' + jsonEsc(syminfo.ticker) + '","strategyName":"Liquidity Sweep + Fair Value Gap (Day Trading)","timeframe":"' + jsonEsc(CANONICAL_SIGNAL_TF) + '","chartTf":"' + jsonEsc(timeframe.period) + '","canonicalSignalTf":"' + jsonEsc(CANONICAL_SIGNAL_TF) + '","canonicalSignalKey":"' + jsonEsc(signalId) + '","pattern":"liquidity_sweep_fvg_daytrading","alertType":"' + jsonEsc(alertType) + '","direction":"' + jsonEsc(direction) + '","entry":' + fmtPx(entry) + ',"stop_loss":' + fmtPx(sl) + ',"stop_loss_1":' + fmtPx(sl) + ',"take_profit_1":' + fmtPx(tp1) + ',"take_profit_2":' + fmtPx(tp2) + ',"take_profit_3":' + fmtPx(tp3) + ',"gapTop":' + fmtPx(gapTop) + ',"gapBottom":' + fmtPx(gapBot) + ',"confidence":' + str.tostring(conf, "#.##") + '","signalId":"' + jsonEsc(signalId) + '","signalUuid":"' + jsonEsc(signalId) + '","expiryBars":' + str.tostring(expiryBars) + ',"enableTradeExpiry":' + (enableTradeExpiry ? "true" : "false") + ',"active":true,"message":"' + msgText + '","userId":"{{SUBSCRIBER_ID}}","licenseToken":"' + jsonEsc(str.trim(LICENSE_TOKEN)) + '","tradingviewUsername":"' + jsonEsc(LICENSED_TV_USERNAME) + '","broadcast":true,"pineClientVersion":"{{PINE_CLIENT_VERSION}}","generatedAt":"{{PINE_GENERATED_AT}}","scriptGenerationId":"{{SCRIPT_GENERATION_ID}}","capabilities":{{PINE_CAPABILITIES_JSON}},"isRealtime":' + (barstate.isrealtime ? "true" : "false") + reasonJson + eventMeta + '}'
 
 // Stable UUID across all allowed display TFs (uses canonical bar time, not chart bar_index).
 makeCanonicalSignalId(int signalTime, string direction) =>

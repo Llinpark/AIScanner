@@ -28,17 +28,29 @@ function resolveMachine() {
 function classifyCategory(fields = {}) {
   if (fields.category && CATEGORIES.includes(String(fields.category))) return String(fields.category);
   const status = Number(fields.statusCode || fields.status);
+  const outcome = String(fields.outcome || '').toLowerCase();
   const reason = String(fields.reason || fields.outcome || '');
-  if (status === 201) return 'CANDLE_ACK';
-  if (status === 429) return 'RATE_LIMITED';
-  if (status === 401 || status === 403) return 'AUTH_FAILED';
-  if (status === 400) return 'INVALID_PAYLOAD';
-  if (status === 423 || /lock_timeout|canonical_lock_busy|LOCK_TIMEOUT/i.test(reason)) {
+  // Explicit probe flags win over HTTP status. Production USDCAD 2026-09-09
+  // requestId tvw_mttz2gi1_ea772ac2 recorded statusCode=200 + category=REJECTED
+  // while the canonical Signal was accepted — classifyCategory ignored accepted/
+  // outcome and treated any non-202 2xx as REJECTED.
+  if (fields.accepted === true || outcome === 'accepted') return 'ACCEPTED';
+  if (outcome === 'candle_ack' || status === 201) return 'CANDLE_ACK';
+  if (status === 429 || outcome === 'rate_limited') return 'RATE_LIMITED';
+  if (status === 401 || status === 403 || outcome === 'auth_failed') return 'AUTH_FAILED';
+  if (status === 400 || outcome === 'invalid_payload') return 'INVALID_PAYLOAD';
+  if (
+    status === 423 ||
+    outcome === 'lock_timeout' ||
+    /lock_timeout|canonical_lock_busy|LOCK_TIMEOUT/i.test(reason)
+  ) {
     return 'LOCK_TIMEOUT';
   }
-  if (status >= 500) return 'SERVER_ERROR';
+  if (status >= 500 || outcome === 'error' || outcome === 'server_error') return 'SERVER_ERROR';
   if (status === 202) return 'ACCEPTED';
+  if (status >= 200 && status < 300 && fields.persisted === true) return 'ACCEPTED';
   if (status >= 400) return 'REJECTED';
+  if (outcome === 'rejected') return 'REJECTED';
   return 'REJECTED';
 }
 

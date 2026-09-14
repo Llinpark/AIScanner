@@ -92,7 +92,7 @@ describe('LicenseTokenService canonical contract', () => {
       assert.equal(verified.claims.env, 'production');
       assert.equal(verified.claims.uid, '64b0f0f0f0f0f0f0f0f0aa11');
       assert.equal(verified.claims.scriptGenerationId, generated.scriptGenerationId);
-      assert.match(generated.script, /^LICENSE_TOKEN = "/m);
+      assert.match(generated.script, /^LICENSE_TOKEN = str\.trim\("/m);
       assert.doesNotMatch(generated.script, /localhost|127\.0\.0\.1|smoke-optiona|smoke-test-license/);
       assert.doesNotMatch(generated.script, /kls_v1/);
       assert.match(generated.licenseToken, /^kls_v2\./);

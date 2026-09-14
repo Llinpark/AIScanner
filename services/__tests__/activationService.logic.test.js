@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 
 // Ensure mailer side-effects are inert if ActivationService loads it.
 process.env.SMTP_HOST = '';
-process.env.RESEND_API_KEY = '';
+process.env.SMTP2GO_API_KEY = process.env.SMTP2GO_API_KEY || '';
 
 const {
   normalizeMpesaCode,

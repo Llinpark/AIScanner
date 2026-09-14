@@ -44,7 +44,11 @@ function createAdminRouter({ io } = {}) {
   router.get('/pipeline-status', requireSuperAdmin, async (req, res) => {
     const { withTimeout } = require('../utils/boundedWait');
     const { getRedisDiagnostics } = require('../utils/redisClient');
+    // Delivery aggregates (webhook_intake + Signal + jobs) routinely exceed 4s under
+    // durable-job recovery load; a short timeout made Pipeline show false zeros while
+    // Overview /stats (lighter ENTRY count) still returned the real Signals today.
     const DIAG_MS = 4000;
+    const DELIVERY_STATS_MS = 12000;
     const degraded = (err, extra = {}) => {
       const redis = getRedisDiagnostics();
       return {
@@ -79,7 +83,7 @@ function createAdminRouter({ io } = {}) {
         activeSubscribers: 0,
         waitingSubscribers: 0
       };
-      const [alertStatus, deliveryStats] = await Promise.all([
+      const [alertStatus, deliveryStats, signalsTodayLight] = await Promise.all([
         withTimeout(
           PipelineAlertStatusService.listActiveSubscriberAlertStatus(),
           DIAG_MS,
@@ -87,8 +91,18 @@ function createAdminRouter({ io } = {}) {
         ).catch(() => emptySubs),
         withTimeout(
           PipelineDeliveryStatsService.computeDeliveryStatistics(),
-          DIAG_MS,
+          DELIVERY_STATS_MS,
           'admin_pipeline_delivery'
+        ).catch(() => null),
+        // Same Mongo ENTRY count as Overview /stats — never block on heavy intake aggregates.
+        withTimeout(
+          PipelineDeliveryStatsService.countUniqueCanonicalSignals({
+            alertType: { $in: ['entry', 'signal'] },
+            selfTest: { $ne: true },
+            createdAt: { $gte: PipelineDeliveryStatsService.startOfDay() }
+          }),
+          DIAG_MS,
+          'admin_pipeline_entry_today'
         ).catch(() => null)
       ]);
       const status = await withTimeout(
@@ -104,12 +118,25 @@ function createAdminRouter({ io } = {}) {
         'admin_pipeline_status'
       );
       const redisDown = status?.redis?.status === 'unavailable';
+      let delivery = deliveryStats;
+      if (!delivery && signalsTodayLight != null) {
+        delivery = {
+          ok: true,
+          partial: true,
+          signalsToday: signalsTodayLight,
+          windowNote:
+            'Full intake aggregates timed out or unavailable; ENTRY today uses the same Mongo count as Overview.'
+        };
+      } else if (delivery && signalsTodayLight != null) {
+        delivery = { ...delivery, signalsToday: signalsTodayLight };
+      }
       res.json({
         ok: !redisDown,
         status: redisDown ? 'degraded' : status?.status || 'ok',
         ...status,
-        deliveryStats,
-        delivery: deliveryStats,
+        signalsToday: signalsTodayLight,
+        deliveryStats: delivery,
+        delivery,
         subscribers: alertStatus.subscribers || [],
         subscribersPreview: (alertStatus.subscribers || []).slice(0, 25)
       });
@@ -173,7 +200,7 @@ function createAdminRouter({ io } = {}) {
       const PipelineDeliveryStatsService = require('../services/PipelineDeliveryStatsService');
       const stats = await withTimeout(
         PipelineDeliveryStatsService.computeDeliveryStatistics(),
-        4000,
+        12000,
         'admin_delivery_stats'
       );
       res.json({ ok: true, ...stats });

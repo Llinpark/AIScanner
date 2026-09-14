@@ -52,8 +52,8 @@ describe('Pine license token lifecycle (e–i)', () => {
     const generated = generateForUser(user, { strategy: 'scalping' });
     assert.equal(Boolean(verifyLicenseToken(generated.licenseToken)), true);
     assert.match(generated.licenseToken, /^kls_v2\./);
-    assert.match(generated.script, /^LICENSE_TOKEN = "/m);
-    const embedded = generated.script.match(/^LICENSE_TOKEN = "([^"]+)"/m);
+    assert.match(generated.script, /^LICENSE_TOKEN = str\.trim\("/m);
+    const embedded = generated.script.match(/^LICENSE_TOKEN = str\.trim\("([^"]+)"\)/m);
     assert.ok(embedded);
     assert.equal(embedded[1], generated.licenseToken);
     assert.equal(verifyLicenseToken(embedded[1])?.uid, String(user._id));
@@ -69,7 +69,7 @@ describe('Pine license token lifecycle (e–i)', () => {
     const generated = generateForUser(user, { strategy: 'scalping' });
     assert.match(
       generated.script,
-      /"licenseToken":"'\s*\+\s*jsonEsc\(LICENSE_TOKEN\)\s*\+/
+      /"licenseToken":"'\s*\+\s*jsonEsc\(str\.trim\(LICENSE_TOKEN\)\)\s*\+/
     );
     assert.equal(generated.script.includes(generated.licenseToken), true);
     const payloadLine = generated.script.split(/\r?\n/).find(l => l.includes('"licenseToken":"'));

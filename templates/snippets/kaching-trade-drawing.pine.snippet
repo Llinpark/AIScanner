@@ -4,8 +4,9 @@
 //
 // Confirmation contract (templates): Entry/SL/TP drawings, UUID, alert(), and
 // lifecycle arm ONLY inside `if fireLong` / `if fireShort` (= confirmedSignal).
-// alert() is emitted only when barstate.isrealtime (historical calc may still
-// DRAW an ACTIVE trade). Templates may REPLACE an active trade: emit
+// alert() fires on barstate.isrealtime (or pending flush after hist/refresh).
+// Historical calc may DRAW an active trade but must not consume webhook ids.
+// Templates may REPLACE an active trade: emit
 // alertType=cancelled (reason new_confirmed_setup), DELETE every old drawing,
 // reset state, then arm the new entry.
 // This snippet NEVER arms a new trade from retrace/setup flags — only extends

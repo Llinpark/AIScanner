@@ -33,11 +33,11 @@ function codeOnly(src) {
 
 describe('Kaching exactly-once alerts 1–12', () => {
   it('M. stamps 1.3.0 (drawing cleanup + duplicate-fix; not 1.2.2)', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.6.0');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
     assert.notEqual(PINE_CLIENT_VERSION, '1.2.2');
   });
 
-  it('1/A. every alert() in templates/snippets is inside emitKachingEvent', () => {
+  it('1/A. every alert() in templates/snippets is inside kachingFireAlert', () => {
     const armCode = codeOnly(ARM);
     const drawCode = codeOnly(DRAW);
     const scalpCode = codeOnly(SCALP);
@@ -46,13 +46,15 @@ describe('Kaching exactly-once alerts 1–12', () => {
     assert.equal((drawCode.match(/\balert\s*\(/g) || []).length, 0);
     assert.equal((scalpCode.match(/\balert\s*\(/g) || []).length, 0);
     assert.equal((dayCode.match(/\balert\s*\(/g) || []).length, 0);
-    const alertAt = armCode.indexOf('alert(livePayload, alert.freq_all)');
-    const fnAt = armCode.indexOf('emitKachingEvent(');
+    const alertAt = armCode.indexOf('alert(payload, alert.freq_all)');
+    const fnAt = armCode.indexOf('kachingFireAlert(');
     assert.ok(fnAt >= 0 && alertAt > fnAt);
   });
 
-  it('2/B. emitKachingEvent is the only gateway; no emitLiveAlert leftover', () => {
+  it('2/B. emitKachingEvent + flush use kachingFireAlert; no emitLiveAlert leftover', () => {
     assert.match(ARM, /emitKachingEvent\(/);
+    assert.match(ARM, /kachingFireAlert\(/);
+    assert.match(ARM, /flushKachingPendingAlerts/);
     assert.doesNotMatch(ARM, /emitLiveAlert/);
     assert.doesNotMatch(DRAW, /emitLiveAlert/);
     assert.match(ARM, /varip array<string> kachingEmitIds/);
@@ -71,13 +73,19 @@ describe('Kaching exactly-once alerts 1–12', () => {
     }
   });
 
-  it('4/D. Pine marks eventId then alert(); does not rely on freq_once_per_bar', () => {
-    const fn = ARM.slice(ARM.indexOf('emitKachingEvent('));
-    const pushIdx = fn.indexOf('array.push(ids, eventId)');
-    const alertIdx = fn.indexOf('alert(livePayload, alert.freq_all)');
-    assert.ok(pushIdx >= 0 && alertIdx > pushIdx, 'mark then alert');
+  it('4/D. realtime alert consumes eventId; historical must not; pending flush exists', () => {
+    assert.match(ARM, /kachingSeenIds/);
+    assert.match(ARM, /kachingPendingIds/);
+    assert.match(ARM, /flushKachingPendingAlerts/);
+    assert.match(ARM, /ALERT FLUSH/);
     assert.doesNotMatch(ARM, /alert\.freq_once_per_bar/);
-    assert.match(ARM, /kachingIdEmitted\(/);
+    // Inside emitKachingEvent: push webhook id only after the realtime gate, before alert().
+    const emitStart = ARM.indexOf('// Sole alert() gateway');
+    const emitFn = ARM.slice(emitStart, emitStart + 4500);
+    const realtimeGate = emitFn.indexOf('if barstate.isrealtime');
+    const pushAlerted = emitFn.indexOf('kachingPushId(ids, eventId)', realtimeGate);
+    const alertIdx = emitFn.indexOf('kachingFireAlert(payload)', realtimeGate);
+    assert.ok(realtimeGate >= 0 && pushAlerted > realtimeGate && alertIdx > pushAlerted);
   });
 
   it('5/E. one-way machine; TP3 and SL mutually exclusive; terminal blocks further', () => {
@@ -88,21 +96,28 @@ describe('Kaching exactly-once alerts 1–12', () => {
   });
 
   it('6/H. drawing cleanup does not reset emission flags', () => {
-    assert.doesNotMatch(DRAW, /kachingEmitIds|kachingEmitTrade|kachingEmitMachine/);
+    assert.doesNotMatch(DRAW, /kachingEmitIds|kachingEmitTrade|kachingEmitMachine|kachingSeenIds|kachingPendingIds/);
     assert.match(ARM, /cleanupActiveTradeDrawings\(\) MUST NOT receive or reset these/);
   });
 
-  it('7/F. both ENTRY paths call emitKachingEvent; already-emitted skips re-arm', () => {
+  it('7/F. both ENTRY paths call emitKachingEvent; already-seen/alerted skips re-arm', () => {
     const entryCalls = ARM.match(/emitKachingEvent\("entry"/g) || [];
     assert.equal(entryCalls.length, 2);
-    assert.match(ARM, /kachingIdEmitted\(kachingEmitIds, makeKachingEventId\(sigId, "ENTRY"\)\)/);
-    assert.match(ARM, /kachingIdEmitted\(kachingEmitIds, makeKachingEventId\(sigId2, "ENTRY"\)\)/);
+    assert.match(
+      ARM,
+      /kachingIdEmitted\(kachingEmitIds, makeKachingEventId\(sigId, "ENTRY"\)\) or kachingIdEmitted\(kachingSeenIds/
+    );
+    assert.match(
+      ARM,
+      /kachingIdEmitted\(kachingEmitIds, makeKachingEventId\(sigId2, "ENTRY"\)\) or kachingIdEmitted\(kachingSeenIds/
+    );
   });
 
   it('8/G. barstate.isrealtime still required inside the gateway', () => {
-    assert.match(ARM, /if barstate\.isrealtime and isCanonicalAuthorityChart/);
-    assert.match(ARM, /alert\(livePayload, alert\.freq_all\)/);
-    assert.match(ARM, /alertFiredAt = timenow/);
+    assert.match(ARM, /if barstate\.isrealtime/);
+    assert.doesNotMatch(ARM, /isCanonicalAuthorityChart/);
+    assert.match(ARM, /kachingFireAlert\(payload\)/);
+    assert.doesNotMatch(ARM, /alertFiredAt = timenow/);
   });
 });
 
@@ -121,13 +136,13 @@ describe('Kaching exactly-once — generated Pine + identity', () => {
     };
     for (const strategy of ['scalping', 'daytrading']) {
       const g = generateForUser(user, { strategy });
-      assert.equal(g.pineClientVersion, '1.6.0');
+      assert.equal(g.pineClientVersion, '1.3.1');
       const code = codeOnly(g.script);
       assert.equal((code.match(/\balert\s*\(/g) || []).length, 1, strategy);
       assert.match(g.script, /"eventId":"/);
       assert.match(g.script, /emitKachingEvent\(/);
       assert.doesNotMatch(g.script, /emitLiveAlert/);
-      assert.match(g.instructions.join('\n'), /DELETE ALL old TradingView alerts/i);
+      assert.match(g.instructions.join('\n'), /DELETE ALL old TradingView alerts|recreate the ONE alert|Prefer ONE TradingView alert/i);
     }
   });
 

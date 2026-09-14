@@ -6,6 +6,8 @@ frontend/node_modules/
 .env
 .env.*
 !.env.example
+!.env.staging.example
+!.env.local-canary.example
 *.local
 frontend/.env
 frontend/.env.*

@@ -1,0 +1,22 @@
+# Optional local isolated data plane (NOT kaching-api-staging).
+# Ports 6380 / 27018 avoid colliding with unknown local Redis/Mongo.
+# Does not include Telegram, Email, or a Fly API.
+# Health/canary refuse loopback as real staging. See STAGING_SETUP.md.
+#
+#   docker compose -f docker-compose.staging.yml up -d
+#
+# Then copy .env.staging.example → .env.staging and set confirmation flags.
+# Do not fly deploy. Do not FLUSHALL.
+
+services:
+  kaching-staging-redis:
+    image: redis:7-alpine
+    ports:
+      - '6380:6379'
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+  kaching-staging-mongo:
+    image: mongo:7
+    ports:
+      - '27018:27017'
+    environment:
+      MONGO_INITDB_DATABASE: kaching_staging

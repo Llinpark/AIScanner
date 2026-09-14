@@ -1,0 +1,22 @@
+# Local REAL-INTEGRATION data plane. NOT kaching-api-staging. NOT production.
+# Intended ports match LOCAL_INTEGRATION.md:
+#   Mongo 27017 / kaching_local_canary
+#   Redis 6379
+#
+# If 27017/6379 are already in use, stop those services or use them
+# only with database name kaching_local_canary (never kachingscanner).
+#
+#   docker compose -f docker-compose.local-canary.yml up -d
+
+services:
+  kaching-local-redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+  kaching-local-mongo:
+    image: mongo:7
+    ports:
+      - '27017:27017'
+    environment:
+      MONGO_INITDB_DATABASE: kaching_local_canary
