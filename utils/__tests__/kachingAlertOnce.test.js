@@ -33,7 +33,7 @@ function codeOnly(src) {
 
 describe('Kaching exactly-once alerts 1–12', () => {
   it('M. stamps 1.3.0 (drawing cleanup + duplicate-fix; not 1.2.2)', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
     assert.notEqual(PINE_CLIENT_VERSION, '1.2.2');
   });
 
@@ -86,6 +86,9 @@ describe('Kaching exactly-once alerts 1–12', () => {
     const pushAlerted = emitFn.indexOf('kachingPushId(ids, eventId)', realtimeGate);
     const alertIdx = emitFn.indexOf('kachingFireAlert(payload)', realtimeGate);
     assert.ok(realtimeGate >= 0 && pushAlerted > realtimeGate && alertIdx > pushAlerted);
+    // Hist queues ENTRY/CANCELLED only — never TP/SL (US30 same-second dual alert).
+    assert.match(emitFn, /\(isEntry or isCancel\) and not kachingIdEmitted\(kachingPendingIds/);
+    assert.match(ARM, /kachingEntryFlushBar/);
   });
 
   it('5/E. one-way machine; TP3 and SL mutually exclusive; terminal blocks further', () => {
@@ -136,7 +139,7 @@ describe('Kaching exactly-once — generated Pine + identity', () => {
     };
     for (const strategy of ['scalping', 'daytrading']) {
       const g = generateForUser(user, { strategy });
-      assert.equal(g.pineClientVersion, '1.3.1');
+      assert.equal(g.pineClientVersion, '1.3.2');
       const code = codeOnly(g.script);
       assert.equal((code.match(/\balert\s*\(/g) || []).length, 1, strategy);
       assert.match(g.script, /"eventId":"/);

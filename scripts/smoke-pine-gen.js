@@ -314,7 +314,7 @@ for (const [label, g] of [
   assert(!g.script.includes('"REPLACED"'), `${label}: must not leave REPLACED markers on chart`);
   assert(g.script.includes('"isRealtime":'), `${label}: payload must include isRealtime`);
   assert(
-    /if barstate\.isrealtime[\s\S]{0,200}alert\(payload, alert\.freq_all\)/.test(
+    /if barstate\.isrealtime[\s\S]{0,220}kachingFireAlert\(payload\)/.test(
       g.script
     ),
     `${label}: emitKachingEvent must gate alert() on realtime`
@@ -360,7 +360,7 @@ for (const [label, g] of [
     ),
     `${label}: capabilities must stamp current 1.3.0 set`
   );
-  assert(g.pineClientVersion === '1.3.1', `${label}: generator pineClientVersion must be 1.3.1`);
+  assert(g.pineClientVersion === '1.3.2', `${label}: generator pineClientVersion must be 1.3.2`);
   assert(
     Array.isArray(g.capabilities) &&
       g.capabilities.length === 6 &&

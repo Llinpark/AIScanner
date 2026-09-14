@@ -282,7 +282,7 @@ describe('entry-first delivery sequencing 1â€“20', () => {
       'take_profit_1'
     ]);
     assert.deepEqual(DeliverySequencer.requiredPredecessors('stop_loss', ['entry']), ['entry']);
-    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
   });
 
   it('1. sequential ENTRY then TP1 â†’ Telegram ENTRY first', async () => {

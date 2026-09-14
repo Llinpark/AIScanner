@@ -21,9 +21,13 @@
  *  1.3.1: (1) skip TP/SL/expiry on the ENTRY arming bar; (2) do not consume
  *  webhook eventIds on historical calc — queue islast → realtime flush so
  *  ENTRY alerts are not lost/delayed after Pine refresh while drawings show.
+ *  1.3.2: (1) hist pending queues ENTRY/CANCELLED only (never TP/SL);
+ *  flush never emits outcomes with ENTRY; (2) skip outcome scoring on the
+ *  ENTRY arming display bar and on the hist-ENTRY flush bar (multi-canon /
+ *  delayed-ENTRY same-second dual alerts).
  *  Users must regenerate Pine and delete ALL old TradingView alerts.
  */
-const PINE_CLIENT_VERSION = '1.3.1';
+const PINE_CLIENT_VERSION = '1.3.2';
 
 /** Public contract id. 1.3.0 payloads already match; inferred when schemaVersion is absent. */
 const STABLE_PINE_SCHEMA_VERSION = 'stable-v1';

@@ -521,7 +521,7 @@ describe('distributed lifecycle fix A–Z', () => {
   it('W. license-token version stamp is current (kls_v2 still generated)', () => {
     const token = generateLicenseToken(USER_ID, TV_USER);
     assert.match(token, /^kls_v2\./);
-    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
   });
 
   it('Y. subscription entitlement skip is unchanged', async () => {

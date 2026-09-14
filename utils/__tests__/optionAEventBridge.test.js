@@ -498,7 +498,7 @@ describe('Option A Pine bridge structure', () => {
   });
 
   it('capability + version stamp', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('event_bridge_v1'));
     assert.ok(CURRENT_PINE_CAPABILITIES.includes('canonical_tf_v1'));
     assert.equal(resolveCompatibilityMode('1.0.0').mode, COMPAT_MODE.CURRENT);

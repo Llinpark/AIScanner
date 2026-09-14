@@ -1,7 +1,8 @@
 // ===== OPTION A — CHRONOLOGICAL ARM + CANONICAL LIFECYCLE =====
 // For each canonical bar in this display bar (event-safe order):
 //   1) arm any canonical events with that signalTime
-//   2) evaluate TP/SL/expiry on later canonical OHLC (never the ENTRY arming bar)
+//   2) evaluate TP/SL/expiry on later display bars only (never the ENTRY
+//      arming display bar, and never the bar that hist-flushed ENTRY)
 // Levels/UUID frozen from canonical engine. Display TF never re-detects setups.
 // Alerts allowed on every allowed display TF; backend UUID dedupes Telegram/MT5 entries.
 // Prefer ONE TradingView alert on the canonical TF to reduce webhook noise.
@@ -31,6 +32,8 @@ varip array<string> kachingPendingIds = array.new_string()
 varip array<string> kachingPendingPayloads = array.new_string()
 varip array<string> kachingEmitTrade = array.new_string(1, "")
 varip array<int> kachingEmitMachine = array.new_int(4, -1)
+// Display bar_index where ENTRY webhook was hist-flushed; block outcomes that bar.
+varip int kachingEntryFlushBar = -1
 
 kachingIdEmitted(array<string> ids, string eventId) =>
     found = false
@@ -52,35 +55,40 @@ kachingFireAlert(string payload) =>
     true
 
 // Flush webhooks queued during historical calc (Pine refresh / hist replay).
-// ENTRY first, then active-trade lifecycle — never leave drawings without ENTRY webhook.
+// ENTRY-only: never flush TP/SL with ENTRY (same-second dual alert + chart already
+// past the move). Lifecycle pending is retained for a later realtime bar.
 flushKachingPendingAlerts() =>
     flushed = 0
     if barstate.isrealtime and array.size(kachingPendingIds) > 0
         activeSid = tradeIsActive() ? tradeSignalId() : ""
-        // Pass 1: ENTRY for the still-active trade (drawings without webhook)
+        keepIds = array.new_string()
+        keepPayloads = array.new_string()
         if str.length(activeSid) > 0
             for pi = 0 to array.size(kachingPendingIds) - 1
                 pId = array.get(kachingPendingIds, pi)
                 pPayload = array.size(kachingPendingPayloads) > pi ? array.get(kachingPendingPayloads, pi) : ""
-                if str.length(pId) > 0 and str.length(pPayload) > 0 and not kachingIdEmitted(kachingEmitIds, pId) and str.endswith(pId, "|ENTRY") and str.contains(pId, activeSid)
+                if str.length(pId) == 0 or str.length(pPayload) == 0
+                    continue
+                if not str.contains(pId, activeSid)
+                    // Other trades: drop (inactive / replaced).
+                    continue
+                if str.endswith(pId, "|ENTRY") and not kachingIdEmitted(kachingEmitIds, pId)
                     kachingPushId(kachingEmitIds, pId)
                     kachingFireAlert(pPayload)
+                    kachingEntryFlushBar := bar_index
                     flushed += 1
                     if DEBUG_MODE
                         log.info("[PIPELINE] ALERT FLUSH | eventId=" + pId + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period)
-        // Pass 2: lifecycle for the still-active trade only
-        if str.length(activeSid) > 0
-            for pj = 0 to array.size(kachingPendingIds) - 1
-                pId2 = array.get(kachingPendingIds, pj)
-                pPayload2 = array.size(kachingPendingPayloads) > pj ? array.get(kachingPendingPayloads, pj) : ""
-                if str.length(pId2) > 0 and str.length(pPayload2) > 0 and not kachingIdEmitted(kachingEmitIds, pId2) and not str.endswith(pId2, "|ENTRY") and str.contains(pId2, activeSid)
-                    kachingPushId(kachingEmitIds, pId2)
-                    kachingFireAlert(pPayload2)
-                    flushed += 1
-                    if DEBUG_MODE
-                        log.info("[PIPELINE] ALERT FLUSH | eventId=" + pId2 + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period)
+                else if not str.endswith(pId, "|ENTRY") and not kachingIdEmitted(kachingEmitIds, pId)
+                    // Defer outcomes until a later bar (after ENTRY webhook exists).
+                    array.push(keepIds, pId)
+                    array.push(keepPayloads, pPayload)
         array.clear(kachingPendingIds)
         array.clear(kachingPendingPayloads)
+        if array.size(keepIds) > 0
+            for ki = 0 to array.size(keepIds) - 1
+                array.push(kachingPendingIds, array.get(keepIds, ki))
+                array.push(kachingPendingPayloads, array.get(keepPayloads, ki))
     flushed
 
 // Sole alert() gateway.
@@ -149,9 +157,10 @@ emitKachingEvent(string alertType, string canonicalTradeId, string payload, arra
             kachingFireAlert(payload)
             fired := true
         else
-            // Historical: never consume webhook ids. Queue for realtime flush so
-            // Pine refresh cannot draw ENTRY then skip the webhook (TP-only / late).
-            if not kachingIdEmitted(kachingPendingIds, eventId)
+            // Historical: never consume webhook ids. Queue ENTRY (and CANCELLED)
+            // only — queuing TP/SL caused hist flush to emit ENTRY+TP1 together
+            // while drawings were already cleaned on a later hist life bar.
+            if (isEntry or isCancel) and not kachingIdEmitted(kachingPendingIds, eventId)
                 if array.size(kachingPendingIds) >= 16
                     array.remove(kachingPendingIds, 0)
                     if array.size(kachingPendingPayloads) > 0
@@ -305,7 +314,11 @@ if barstate.isconfirmed
                     emitKachingEvent("entry", sigId, msg, kachingEmitIds, kachingEmitTrade, kachingEmitMachine)
 
             // --- Canonical lifecycle tick for this OHLC bar ---
-            if tradeIsActive()
+            // Outcomes only after the ENTRY arming DISPLAY bar (bar_index), and
+            // never on the bar that hist-flushed ENTRY (US30: ENTRY@09:39 flushed
+            // at 09:42 while TP1 scored on the same confirm → same-second dual alert).
+            // Higher display TFs also walk multiple canon life bars in one confirm.
+            if tradeIsActive() and bar_index > tradeEntryBar() and bar_index != kachingEntryFlushBar
                 longTrade = tradeDirection() == "long"
                 entrySt = tradeEntrySignalTime()
                 lastLife = tradeLastLifeTime()

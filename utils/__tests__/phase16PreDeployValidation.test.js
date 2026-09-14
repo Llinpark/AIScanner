@@ -640,7 +640,7 @@ describe('Phase16 Delivery/Telegram/MT5 Independence (static)', () => {
   });
 
   it('stamped version constant remains current Stable Pine stamp', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.1');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
     assert.equal(resolveCompatibilityMode('1.3.0').mode, COMPAT_MODE.CURRENT);
     // Same major family as stamp â€” CURRENT, not LEGACY (additive 1.x clients remain supported).
     assert.equal(resolveCompatibilityMode('1.1.0').mode, COMPAT_MODE.CURRENT);
