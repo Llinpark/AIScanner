@@ -360,7 +360,7 @@ for (const [label, g] of [
     ),
     `${label}: capabilities must stamp current 1.3.0 set`
   );
-  assert(g.pineClientVersion === '1.3.2', `${label}: generator pineClientVersion must be 1.3.2`);
+  assert(g.pineClientVersion === '1.3.3', `${label}: generator pineClientVersion must be 1.3.3`);
   assert(
     Array.isArray(g.capabilities) &&
       g.capabilities.length === 6 &&

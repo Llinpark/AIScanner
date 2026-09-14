@@ -25,9 +25,12 @@
  *  flush never emits outcomes with ENTRY; (2) skip outcome scoring on the
  *  ENTRY arming display bar and on the hist-ENTRY flush bar (multi-canon /
  *  delayed-ENTRY same-second dual alerts).
+ *  1.3.3: Pine-legal hist ENTRY flush bar — return bar_index from
+ *  flushKachingPendingAlerts() and assign kachingEntryFlushBar at global
+ *  scope (v5 forbids global := inside functions).
  *  Users must regenerate Pine and delete ALL old TradingView alerts.
  */
-const PINE_CLIENT_VERSION = '1.3.2';
+const PINE_CLIENT_VERSION = '1.3.3';
 
 /** Public contract id. 1.3.0 payloads already match; inferred when schemaVersion is absent. */
 const STABLE_PINE_SCHEMA_VERSION = 'stable-v1';

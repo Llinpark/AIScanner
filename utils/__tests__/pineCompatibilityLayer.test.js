@@ -411,7 +411,7 @@ describe('Fâ€“H. compatibility e2e + duplicate delivery', () => {
 
 describe('J. 1.3.0 regression', () => {
   it('generator stamp remains 1.3.0; stable adapter shares 1.3 normalizer', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.3');
     const a = PineCompatibilityService.normalizeIncomingPineEvent(pine13Payload('entry', 'reg-13'));
     const b = PineCompatibilityService.normalizeIncomingPineEvent(stablePayload('entry', 'reg-13'));
     assert.equal(a.identity.eventId, b.identity.eventId);
@@ -424,7 +424,7 @@ describe('J. 1.3.0 regression', () => {
 
   it('buildSignalData 1.3.0 keeps eventId and levels', () => {
     const data = TradingViewAlertService.buildSignalData(pine13Payload('entry', 'build-13'));
-    assert.equal(data.pineClientVersion, '1.3.2');
+    assert.equal(data.pineClientVersion, '1.3.0');
     assert.ok(data.eventId);
     assert.equal(data.take_profit_1, 1.11);
     assert.equal(data.compatibilityAdapter, ADAPTER_IDS.PINE13);

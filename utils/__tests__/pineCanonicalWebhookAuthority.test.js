@@ -34,7 +34,7 @@ function mint(strategy) {
 }
 
 function assertEmitContract(g, { strategy, canonicalPine, canonicalLabel }) {
-  assert.equal(g.pineClientVersion, '1.3.2', `${strategy} version`);
+  assert.equal(g.pineClientVersion, '1.3.3', `${strategy} version`);
   assert.equal(g.capabilities.includes('canonical_webhook_authority_v1'), false);
   assert.equal(g.capabilities.includes('canonical_emit_independent_v1'), false);
   assert.match(g.script, new RegExp(`CANONICAL_SIGNAL_TF = "${canonicalPine}"`));
@@ -58,7 +58,7 @@ function assertEmitContract(g, { strategy, canonicalPine, canonicalLabel }) {
 
 describe('Pine 1.3.0 emit (no webhook-authority gate)', () => {
   it('stamps 1.3.0 without authority capabilities', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.3');
     assert.equal(CURRENT_PINE_CAPABILITIES.includes('canonical_webhook_authority_v1'), false);
     assert.equal(CURRENT_PINE_CAPABILITIES.includes('canonical_emit_independent_v1'), false);
   });

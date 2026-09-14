@@ -33,7 +33,7 @@ function codeOnly(src) {
 
 describe('Kaching exactly-once alerts 1–12', () => {
   it('M. stamps 1.3.0 (drawing cleanup + duplicate-fix; not 1.2.2)', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.3');
     assert.notEqual(PINE_CLIENT_VERSION, '1.2.2');
   });
 
@@ -139,7 +139,7 @@ describe('Kaching exactly-once — generated Pine + identity', () => {
     };
     for (const strategy of ['scalping', 'daytrading']) {
       const g = generateForUser(user, { strategy });
-      assert.equal(g.pineClientVersion, '1.3.2');
+      assert.equal(g.pineClientVersion, '1.3.3');
       const code = codeOnly(g.script);
       assert.equal((code.match(/\balert\s*\(/g) || []).length, 1, strategy);
       assert.match(g.script, /"eventId":"/);

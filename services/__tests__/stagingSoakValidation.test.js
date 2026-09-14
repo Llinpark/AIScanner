@@ -277,7 +277,7 @@ describe('staging soak validation Aâ€“J', () => {
         .split(/\r?\n/)
         .filter(l => !l.trimStart().startsWith('//'))
         .join('\n');
-      assert.equal(g.pineClientVersion, '1.3.2', label);
+      assert.equal(g.pineClientVersion, '1.3.3', label);
       assert.equal(g.capabilities.includes('canonical_webhook_authority_v1'), false, label);
       assert.match(g.script, new RegExp(`CANONICAL_SIGNAL_TF = "${baked}"`));
       assert.equal((code.match(/\balert\s*\(/g) || []).length, 1, label);

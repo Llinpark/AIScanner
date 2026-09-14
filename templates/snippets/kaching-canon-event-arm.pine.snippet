@@ -57,8 +57,11 @@ kachingFireAlert(string payload) =>
 // Flush webhooks queued during historical calc (Pine refresh / hist replay).
 // ENTRY-only: never flush TP/SL with ENTRY (same-second dual alert + chart already
 // past the move). Lifecycle pending is retained for a later realtime bar.
+// Returns display bar_index of flushed ENTRY (-1 if none). Caller assigns
+// kachingEntryFlushBar at global scope (Pine forbids global := inside functions).
 flushKachingPendingAlerts() =>
     flushed = 0
+    entryFlushBar = -1
     if barstate.isrealtime and array.size(kachingPendingIds) > 0
         activeSid = tradeIsActive() ? tradeSignalId() : ""
         keepIds = array.new_string()
@@ -75,7 +78,7 @@ flushKachingPendingAlerts() =>
                 if str.endswith(pId, "|ENTRY") and not kachingIdEmitted(kachingEmitIds, pId)
                     kachingPushId(kachingEmitIds, pId)
                     kachingFireAlert(pPayload)
-                    kachingEntryFlushBar := bar_index
+                    entryFlushBar := bar_index
                     flushed += 1
                     if DEBUG_MODE
                         log.info("[PIPELINE] ALERT FLUSH | eventId=" + pId + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period)
@@ -89,7 +92,7 @@ flushKachingPendingAlerts() =>
             for ki = 0 to array.size(keepIds) - 1
                 array.push(kachingPendingIds, array.get(keepIds, ki))
                 array.push(kachingPendingPayloads, array.get(keepPayloads, ki))
-    flushed
+    entryFlushBar
 
 // Sole alert() gateway.
 // Historical calc may advance drawings/state but must NOT consume the webhook slot:
@@ -186,7 +189,9 @@ emitKachingEvent(string alertType, string canonicalTradeId, string payload, arra
         log.info("[PIPELINE] ALERT DUP SKIP | eventId=" + eventId + " | eventType=" + evType + " | canonicalTradeId=" + canonicalTradeId + " | symbol=" + syminfo.ticker + " | tf=" + timeframe.period)
     fired
 
-flushKachingPendingAlerts()
+_kachingEntryFlushFromPending = flushKachingPendingAlerts()
+if _kachingEntryFlushFromPending >= 0
+    kachingEntryFlushBar := _kachingEntryFlushFromPending
 
 if array.get(kachingEmitMachine, 1) < 0
     array.set(kachingEmitMachine, 1, 0)

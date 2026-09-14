@@ -48,7 +48,7 @@ function pineSources() {
 
 describe('Kaching drawing lifecycle 1.3.0 (A–M)', () => {
   it('stamps Pine client 1.3.0 (drawing-lifecycle contract; users must regenerate)', () => {
-    assert.equal(PINE_CLIENT_VERSION, '1.3.2');
+    assert.equal(PINE_CLIENT_VERSION, '1.3.3');
   });
 
   it('D. retention arrays and MAX_COMPLETED_TRADES are gone from snippets/templates', () => {
@@ -114,9 +114,12 @@ describe('Kaching drawing lifecycle 1.3.0 (A–M)', () => {
   it('P. hist pending queues ENTRY only; flush never emits TP with ENTRY', () => {
     assert.match(ARM, /kachingEntryFlushBar/);
     assert.match(ARM, /\(isEntry or isCancel\) and not kachingIdEmitted\(kachingPendingIds/);
-    assert.match(ARM, /kachingEntryFlushBar := bar_index/);
+    // Global assign must be outside the function (Pine v5).
+    assert.match(ARM, /kachingEntryFlushBar := _kachingEntryFlushFromPending/);
     const flushFn = ARM.slice(ARM.indexOf('flushKachingPendingAlerts() =>'), ARM.indexOf('// Sole alert() gateway'));
     assert.match(flushFn, /str\.endswith\(pId, "\|ENTRY"\)/);
+    assert.match(flushFn, /entryFlushBar := bar_index/);
+    assert.doesNotMatch(flushFn, /kachingEntryFlushBar\s*:=/);
     assert.doesNotMatch(flushFn, /Pass 2: lifecycle/);
   });
 
@@ -169,7 +172,7 @@ describe('Kaching drawing lifecycle — generated Pine', () => {
     };
     for (const strategy of ['scalping', 'daytrading']) {
       const g = generateForUser(user, { strategy });
-      assert.equal(g.pineClientVersion, '1.3.2', `${strategy} stamp`);
+      assert.equal(g.pineClientVersion, '1.3.3', `${strategy} stamp`);
       assert.doesNotMatch(g.script, RETENTION_RE, `${strategy}: retention leftover`);
       assert.doesNotMatch(g.script, /"TP3 HIT"|"STOP LOSS"|"REPLACED"/, `${strategy}: chart marker leftover`);
       assert.match(g.script, /cleanupActiveTradeDrawings\(/);
