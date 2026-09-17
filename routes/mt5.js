@@ -34,6 +34,12 @@ function bridgeAuthHttpStatus(reason) {
   return reason === 'access_expired' || reason === 'invalid_token' ? 401 : 401;
 }
 
+/** Device revoke: missing device stays 404; failed persistence/verification is 5xx. */
+function revokeDeviceHttpStatus(reason) {
+  if (reason === 'persist_failed') return 500;
+  return 404;
+}
+
 /** Pair-complete: coarse IP limiter (failed attempts also tracked in Mt5PairingService). */
 const pairCompleteLimiter = createRateLimiter({
   windowMs: 10 * 60_000,
@@ -219,7 +225,14 @@ function createMt5Router() {
       try {
         const result = await Mt5TradeCopierService.revokeDevice(req.userId, req.params.deviceId);
         if (!result.ok) {
-          return res.status(404).json({ message: 'Device not found', reason: result.reason });
+          const status = revokeDeviceHttpStatus(result.reason);
+          return res.status(status).json({
+            message:
+              status === 500
+                ? 'Unable to revoke MT5 device'
+                : 'Device not found',
+            reason: result.reason
+          });
         }
         const devices = await Mt5TradeCopierService.listAuthorizedDevices(req.userId);
         const status = await Mt5TradeCopierService.getPublicStatus(req.user);
@@ -337,3 +350,4 @@ function createMt5Router() {
 }
 
 module.exports = createMt5Router;
+module.exports.revokeDeviceHttpStatus = revokeDeviceHttpStatus;

@@ -112,6 +112,26 @@ async function persistUserMt5(userId, mt5) {
   return devUserStore.upsertUser(userId, { mt5 });
 }
 
+/**
+ * Convert Mongoose documents/subdocuments to plain objects before mutation + findByIdAndUpdate.
+ * Spreading embedded subdocs copies internals (_doc, $__, …) and findByIdAndUpdate then
+ * persists the stale _doc (revokedAt stays null). Plain objects avoid that failure mode.
+ */
+function toPlainObject(value) {
+  if (value == null || typeof value !== 'object') return value;
+  if (typeof value.toObject === 'function') {
+    return value.toObject({ depopulate: true });
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => toPlainObject(item));
+  }
+  // Defensive: if a prior spread left Mongoose internals, prefer _doc field values.
+  if (value._doc && typeof value._doc === 'object' && !Array.isArray(value._doc)) {
+    return { ...value._doc };
+  }
+  return { ...value };
+}
+
 function defaultMt5Config() {
   return {
     enabled: false,
@@ -355,8 +375,11 @@ async function listAuthorizedDevices(userId) {
 async function revokeDevice(userId, deviceId) {
   const user = await findUserById(userId);
   if (!user) return { ok: false, reason: 'user_not_found' };
-  const current = user.mt5 || defaultMt5Config();
-  const devices = Array.isArray(current.devices) ? [...current.devices] : [];
+
+  const current = toPlainObject(user.mt5 || defaultMt5Config()) || defaultMt5Config();
+  const devices = Array.isArray(current.devices)
+    ? current.devices.map(d => toPlainObject(d)).filter(d => d && d.deviceId != null)
+    : [];
   const idx = devices.findIndex(d => d && String(d.deviceId) === String(deviceId) && !d.revokedAt);
   if (idx < 0) return { ok: false, reason: 'device_not_found' };
 
@@ -368,6 +391,34 @@ async function revokeDevice(userId, deviceId) {
   };
 
   await persistUserMt5(userId, { ...current, devices });
+
+  // Post-write verification — never trust findByIdAndUpdate alone (Mongoose subdoc spread bug).
+  const reread = await findUserById(userId);
+  const stored = (reread?.mt5?.devices || []).find(d => d && String(d.deviceId) === String(deviceId));
+  const revokedOk =
+    Boolean(stored?.revokedAt) &&
+    stored.accessToken == null &&
+    stored.refreshToken == null;
+
+  if (!revokedOk) {
+    console.error('[Mt5TradeCopier] revokeDevice persistence verification failed', {
+      userId: String(userId),
+      deviceId: String(deviceId),
+      hasDevice: Boolean(stored),
+      hasRevokedAt: Boolean(stored?.revokedAt)
+    });
+    return { ok: false, reason: 'persist_failed' };
+  }
+
+  const listed = await listAuthorizedDevices(userId);
+  if (listed.some(d => String(d.deviceId) === String(deviceId))) {
+    console.error('[Mt5TradeCopier] revokeDevice still listed as authorized after revoke', {
+      userId: String(userId),
+      deviceId: String(deviceId)
+    });
+    return { ok: false, reason: 'persist_failed' };
+  }
+
   return { ok: true, deviceId: String(deviceId) };
 }
 
